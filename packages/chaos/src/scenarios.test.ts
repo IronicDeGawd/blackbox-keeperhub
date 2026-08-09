@@ -101,17 +101,25 @@ describe('testnet restriction', () => {
   });
 });
 
-describe('C1 underpriced', () => {
-  it('bids below the current base fee', async () => {
+describe('C1 marginal bid', () => {
+  it('bids exactly the base fee, never below it', async () => {
     const { h, stubs } = harness(CHAIN_IDS.sepolia);
     const result = await h.c1UnderpricedStuck();
 
     const tx = stubs.sent[0]!;
-    expect(tx['maxFeePerGas']).toBe(BASE_FEE / 10n);
-    // Below the base fee is the whole point: the pool accepts it, blocks do not.
-    expect(tx['maxFeePerGas'] as bigint).toBeLessThan(BASE_FEE);
+    // Nodes reject a bid below the base fee outright (-32000, "max fee per gas
+    // less than block base fee"), so it would never reach the pool and there
+    // would be nothing to detect. The lowest acceptable bid is the base fee.
+    expect(tx['maxFeePerGas']).toBe(BASE_FEE);
+    expect(tx['maxFeePerGas'] as bigint).not.toBeLessThan(BASE_FEE);
     expect(result.scenario).toBe('C1');
     expect(result.txHashes).toHaveLength(1);
+  });
+
+  it('offers no priority fee, so there is no incentive to include it', async () => {
+    const { h, stubs } = harness(CHAIN_IDS.sepolia);
+    await h.c1UnderpricedStuck();
+    expect(stubs.sent[0]!['maxPriorityFeePerGas']).toBe(0n);
   });
 
   it('registers the transaction for observation', async () => {

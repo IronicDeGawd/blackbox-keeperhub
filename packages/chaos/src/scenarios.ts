@@ -71,22 +71,38 @@ export class ChaosHarness {
   }
 
   /**
-   * C1 — underpriced submission.
+   * C1 — marginal bid that the market outruns.
    *
-   * Bids a `maxFeePerGas` below the current base fee, so the transaction is
-   * accepted into the pool but cannot be included while the base fee stands.
-   * That is R3 (underpriced) and, once it has sat long enough, R1 (stuck) —
-   * with R3 suppressing R1 as the more specific explanation.
+   * The original design bid a tenth of the base fee. That cannot work: nodes
+   * reject a transaction whose `maxFeePerGas` is below the current base fee
+   * outright, at estimate time, with `-32000 max fee per gas less than block
+   * base fee`. It never enters the pool, so there is nothing to detect. Trying
+   * to induce underpricing by bidding low is not possible from outside.
+   *
+   * What actually happens in production is subtler and is what this reproduces:
+   * a transaction is priced correctly *at submission* and the market moves up
+   * underneath it. Bidding exactly the current base fee with no priority fee
+   * gives a transaction that is accepted — the bid is not below base — but has
+   * no inclusion incentive and falls below the market as soon as the base fee
+   * ticks up. R3 compares against the base fee at *detection* precisely
+   * because of this, so it fires once the market has moved, and R1 follows once
+   * the transaction has sat long enough, with R3 suppressing it as the more
+   * specific explanation.
+   *
+   * This is less deterministic than a nonce gap, since Sepolia may include a
+   * zero-tip transaction on a quiet block. C2 is the reliable way to produce a
+   * durable pending transaction; C1 is the faithful way to produce a genuinely
+   * underpriced one.
    */
   async c1UnderpricedStuck(): Promise<ScenarioResult> {
     assertChaosAllowed(this.options.chainId);
     const block = await this.pub.getBlock({ blockTag: 'latest' });
     const baseFee = block.baseFeePerGas ?? 1_000_000_000n;
 
-    // Deliberately a tenth of the market. High enough that nodes accept it into
-    // the pool, low enough that it will not be mined.
-    const maxFeePerGas = baseFee / 10n;
-    const maxPriorityFeePerGas = maxFeePerGas / 2n;
+    // Exactly the base fee: the lowest bid a node will accept. No tip, so
+    // there is no reason to include it ahead of anything else.
+    const maxFeePerGas = baseFee;
+    const maxPriorityFeePerGas = 0n;
 
     const hash = await this.wallet.sendTransaction({
       account: this.options.account,
@@ -105,6 +121,7 @@ export class ChaosHarness {
         baseFee: baseFee.toString(),
         maxFeePerGas: maxFeePerGas.toString(),
         maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
+        note: 'bid equals base fee at submission; R3 fires once the market moves above it',
       },
     };
   }
