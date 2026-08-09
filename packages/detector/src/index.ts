@@ -4,6 +4,7 @@ import type { IncidentDraft, Rule, RuleContext } from './types.js';
 
 export * from './types.js';
 export * from './rules.js';
+export * from './lifecycle.js';
 
 export type EvaluatedDraft = IncidentDraft & {
   /** Rules that fired but were subsumed by this one. */

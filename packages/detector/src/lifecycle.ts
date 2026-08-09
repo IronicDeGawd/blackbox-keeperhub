@@ -1,0 +1,274 @@
+import type { ExecutionEvent, Incident, IncidentClass } from '@blackbox/core';
+import { isTerminal, type Corroboration, type RuleContext } from './types.js';
+import type { EvaluatedDraft } from './index.js';
+
+/**
+ * Incidents are not emitted per event. A rule firing on three consecutive polls
+ * for the same wedged nonce is one incident with three pieces of evidence, not
+ * three incidents — and it must remain one, because the remediator acts per
+ * incident and spends real gas doing it.
+ */
+
+export type IncidentKey = string;
+
+export const incidentKey = (
+  agentId: string,
+  signer: string,
+  chainId: number,
+  cls: IncidentClass,
+): IncidentKey => `${agentId}|${signer.toLowerCase()}|${chainId}|${cls}`;
+
+/** Who ended the incident. Recorded separately from whether it ended. */
+export type Attribution = 'blackbox' | 'external' | 'unknown';
+
+export type TrackedIncident = Incident & {
+  key: IncidentKey;
+  /** Last time a rule re-confirmed this incident; drives the causal window. */
+  lastSeenAt: Date;
+  resolvedBy?: Attribution;
+};
+
+export type TrackerOptions = {
+  makeId: () => string;
+  /**
+   * How long an open incident keeps absorbing matching drafts. A draft arriving
+   * after this becomes a new incident, because the old problem is presumed to
+   * be a different occurrence rather than the same one still running.
+   */
+  causalWindowMs?: number;
+};
+
+export type IngestResult = {
+  created: TrackedIncident[];
+  updated: TrackedIncident[];
+  resolved: TrackedIncident[];
+};
+
+const DEFAULT_CAUSAL_WINDOW_MS = 15 * 60_000;
+
+export class IncidentTracker {
+  private readonly open = new Map<IncidentKey, TrackedIncident>();
+  private readonly makeId: () => string;
+  private readonly causalWindowMs: number;
+
+  constructor(options: TrackerOptions) {
+    this.makeId = options.makeId;
+    this.causalWindowMs = options.causalWindowMs ?? DEFAULT_CAUSAL_WINDOW_MS;
+  }
+
+  openIncidents(): TrackedIncident[] {
+    return [...this.open.values()];
+  }
+
+  get(key: IncidentKey): TrackedIncident | undefined {
+    return this.open.get(key);
+  }
+
+  /**
+   * Fold this evaluation's drafts into the open set, then test every open
+   * incident for resolution.
+   *
+   * Resolution is checked for all open incidents, not only those whose rule
+   * fired this round — an incident that stopped firing is exactly the one most
+   * likely to have resolved.
+   */
+  ingest(
+    drafts: readonly EvaluatedDraft[],
+    window: readonly ExecutionEvent[],
+    ctx: RuleContext,
+  ): IngestResult {
+    const created: TrackedIncident[] = [];
+    const updated: TrackedIncident[] = [];
+
+    for (const draft of drafts) {
+      const key = incidentKey(ctx.agentId, ctx.signer, ctx.chainId, draft.class);
+      const existing = this.open.get(key);
+      const withinWindow =
+        existing !== undefined &&
+        ctx.now.getTime() - existing.lastSeenAt.getTime() <= this.causalWindowMs;
+
+      if (existing && withinWindow) {
+        updated.push(this.append(existing, draft, ctx));
+        continue;
+      }
+      if (existing && !withinWindow) {
+        // Stale and no longer being re-confirmed: close it as unresolved
+        // observation and start a fresh incident, so the two occurrences stay
+        // distinguishable in the timeline.
+        this.finish(existing, ctx.now, 'unknown', 'resolved');
+      }
+      const incident = this.create(draft, ctx, key);
+      this.open.set(key, incident);
+      created.push(incident);
+    }
+
+    const resolved: TrackedIncident[] = [];
+    for (const incident of [...this.open.values()]) {
+      if (incident.status === 'remediating' || incident.status === 'diagnosing') continue;
+      const attribution = resolutionOf(incident, window, ctx);
+      if (!attribution) continue;
+      this.finish(incident, ctx.now, attribution, 'resolved');
+      resolved.push(incident);
+    }
+
+    return { created, updated, resolved };
+  }
+
+  /** Mark an incident as being worked on, so resolution checks leave it alone. */
+  markStatus(key: IncidentKey, status: Incident['status']): TrackedIncident | undefined {
+    const incident = this.open.get(key);
+    if (!incident) return undefined;
+    incident.status = status;
+    return incident;
+  }
+
+  private create(draft: EvaluatedDraft, ctx: RuleContext, key: IncidentKey): TrackedIncident {
+    return {
+      id: this.makeId(),
+      key,
+      class: draft.class,
+      severity: draft.severity,
+      status: 'open',
+      agentId: ctx.agentId,
+      signer: ctx.signer,
+      chainId: ctx.chainId,
+      detectedAt: ctx.now,
+      firstEventAt: ctx.now,
+      lastSeenAt: ctx.now,
+      evidence: {
+        eventIds: [...draft.eventIds],
+        ruleId: draft.ruleId,
+        facts: draft.facts,
+        ...(ctx.corroboration ? { corroboration: stripCorroboration(ctx.corroboration) } : {}),
+        ...(draft.suppressedRules ? { suppressedRules: draft.suppressedRules } : {}),
+      },
+      confidence: draft.confidence,
+    };
+  }
+
+  private append(
+    incident: TrackedIncident,
+    draft: EvaluatedDraft,
+    ctx: RuleContext,
+  ): TrackedIncident {
+    const merged = new Set([...incident.evidence.eventIds, ...draft.eventIds]);
+    incident.evidence.eventIds = [...merged];
+    // Latest facts win: they describe the situation now, which is what a
+    // remediation would act on. Earlier facts live on in the event timeline.
+    incident.evidence.facts = draft.facts;
+    if (ctx.corroboration) {
+      incident.evidence.corroboration = stripCorroboration(ctx.corroboration);
+    }
+    if (draft.suppressedRules) incident.evidence.suppressedRules = draft.suppressedRules;
+    // Severity and confidence ratchet upward only — a problem that looked
+    // critical once should not be quietly downgraded by a later softer read.
+    if (rank(draft.severity) < rank(incident.severity)) incident.severity = draft.severity;
+    incident.confidence = Math.max(incident.confidence, draft.confidence);
+    incident.lastSeenAt = ctx.now;
+    return incident;
+  }
+
+  private finish(
+    incident: TrackedIncident,
+    at: Date,
+    attribution: Attribution,
+    status: Extract<Incident['status'], 'resolved' | 'failed'>,
+  ): void {
+    incident.status = status;
+    incident.resolvedAt = at;
+    incident.resolvedBy = attribution;
+    this.open.delete(incident.key);
+  }
+}
+
+const rank = (s: Incident['severity']): number =>
+  ({ critical: 0, warning: 1, info: 2 })[s];
+
+/** Corroboration carries detector bookkeeping the incident record should not. */
+function stripCorroboration(c: Corroboration): NonNullable<Incident['evidence']['corroboration']> {
+  return {
+    ...(c.pendingNonce !== undefined ? { pendingNonce: c.pendingNonce } : {}),
+    ...(c.latestNonce !== undefined ? { latestNonce: c.latestNonce } : {}),
+    ...(c.signerBalance !== undefined ? { signerBalance: c.signerBalance } : {}),
+    ...(c.baseFeeAtDetection !== undefined ? { baseFeeAtDetection: c.baseFeeAtDetection } : {}),
+  };
+}
+
+/**
+ * Class-specific resolution predicates.
+ *
+ * Returns the attribution when the incident is over, or null while it stands.
+ * Resolution is deliberately independent of whether Blackbox acted: a stuck
+ * transaction that the operator cleared by hand is just as resolved as one
+ * Blackbox replaced, and pretending otherwise would leave the timeline full of
+ * incidents that ended long ago.
+ */
+export function resolutionOf(
+  incident: TrackedIncident,
+  window: readonly ExecutionEvent[],
+  ctx: RuleContext,
+): Attribution | null {
+  const corr = ctx.corroboration;
+  const attribution: Attribution =
+    incident.remediation?.finalStatus === 'succeeded' ? 'blackbox' : 'external';
+
+  switch (incident.class) {
+    case 'STUCK_TRANSACTION':
+    case 'GAS_UNDERPRICED': {
+      const nonce = incident.evidence.facts['nonce'];
+      if (typeof nonce !== 'number') return null;
+      const settled = window.some((e) => e.submission.nonce === nonce && isTerminal(e));
+      // The nonce moving past it also settles it — a replacement landed.
+      const advanced = corr?.latestNonce !== undefined && corr.latestNonce > nonce;
+      return settled || advanced ? attribution : null;
+    }
+
+    case 'NONCE_GAP': {
+      if (corr?.latestNonce === undefined || corr.pendingNonce === undefined) return null;
+      return corr.pendingNonce - corr.latestNonce <= 0 ? attribution : null;
+    }
+
+    case 'SIGNER_GAS_STARVED': {
+      const threshold = incident.evidence.facts['thresholdBalance'];
+      if (corr?.signerBalance === undefined || typeof threshold !== 'string') return null;
+      return corr.signerBalance >= BigInt(threshold) ? attribution : null;
+    }
+
+    case 'RETRY_STORM': {
+      const logicalActionId = incident.evidence.facts['logicalActionId'];
+      if (typeof logicalActionId !== 'string') return null;
+      // Resolved once the storm stops: no attempt for that action inside the
+      // current retry window. Either something halted it or it ran its course.
+      const cutoff = ctx.now.getTime() - ctx.detection.retryStormWindowMs;
+      const stillStorming = window.some(
+        (e) =>
+          e.logicalActionId === logicalActionId && e.submission.submittedAt.getTime() >= cutoff,
+      );
+      return stillStorming ? null : attribution;
+    }
+
+    case 'SIM_PASS_EXEC_REVERT': {
+      // Resolved when a later attempt at the same action finally lands.
+      const eventId = incident.evidence.eventIds[0];
+      const failed = window.find((e) => e.id === eventId);
+      if (!failed) return null;
+      const laterSuccess = window.some(
+        (e) =>
+          e.logicalActionId === failed.logicalActionId &&
+          e.outcome.status === 'included' &&
+          e.submission.submittedAt.getTime() > failed.submission.submittedAt.getTime(),
+      );
+      return laterSuccess ? attribution : null;
+    }
+
+    case 'ADVERSE_INCLUSION':
+      // A point-in-time observation about a transaction that already landed.
+      // Nothing on chain will retract it, so it stays open until a human
+      // acknowledges it or a reroute records a remediation. Auto-resolving
+      // would erase the only record that it happened.
+      return incident.remediation?.finalStatus === 'succeeded' ? 'blackbox' : null;
+
+    default:
+      return null;
+  }
+}
