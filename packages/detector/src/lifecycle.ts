@@ -1,4 +1,5 @@
 import type { ExecutionEvent, Incident, IncidentClass } from '@blackbox/core';
+import { findNonceGap } from './rules.js';
 import { isTerminal, type Corroboration, type RuleContext } from './types.js';
 import type { EvaluatedDraft } from './index.js';
 
@@ -79,9 +80,12 @@ export class IncidentTracker {
   ): IngestResult {
     const created: TrackedIncident[] = [];
     const updated: TrackedIncident[] = [];
+    /** Keys a rule confirmed this evaluation. */
+    const firedThisRound = new Set<IncidentKey>();
 
     for (const draft of drafts) {
       const key = incidentKey(ctx.agentId, ctx.signer, ctx.chainId, draft.class);
+      firedThisRound.add(key);
       const existing = this.open.get(key);
       const withinWindow =
         existing !== undefined &&
@@ -105,6 +109,11 @@ export class IncidentTracker {
     const resolved: TrackedIncident[] = [];
     for (const incident of [...this.open.values()]) {
       if (incident.status === 'remediating' || incident.status === 'diagnosing') continue;
+      // A rule asserted this condition holds moments ago. Resolving it in the
+      // same breath is self-contradictory, and if a resolution predicate ever
+      // disagrees with its rule the result is a fresh duplicate incident every
+      // poll rather than one visible bug.
+      if (firedThisRound.has(incident.key)) continue;
       const attribution = resolutionOf(incident, window, ctx);
       if (!attribution) continue;
       this.finish(incident, ctx.now, attribution, 'resolved');
@@ -224,8 +233,14 @@ export function resolutionOf(
     }
 
     case 'NONCE_GAP': {
-      if (corr?.latestNonce === undefined || corr.pendingNonce === undefined) return null;
-      return corr.pendingNonce - corr.latestNonce <= 0 ? attribution : null;
+      if (corr?.latestNonce === undefined) return null;
+      // Must use the same derivation as R2. Testing `pendingNonce -
+      // latestNonce <= 0` here resolved the incident on the very tick it was
+      // created, because those counts are equal for as long as the gap exists
+      // — so every poll produced a fresh duplicate incident that closed
+      // immediately. Observed on Sepolia before this was corrected.
+      const { missingNonces } = findNonceGap(window, corr.latestNonce);
+      return missingNonces.length === 0 ? attribution : null;
     }
 
     case 'SIGNER_GAS_STARVED': {

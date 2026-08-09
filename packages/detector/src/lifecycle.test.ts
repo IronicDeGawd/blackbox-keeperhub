@@ -253,3 +253,66 @@ describe('produced incidents are schema-valid', () => {
     }
   });
 });
+
+describe('a rule and its resolution predicate disagreeing', () => {
+  it('never resolves an incident on the tick a rule confirmed it', () => {
+    const t = tracker();
+    // A predicate that always claims resolution, i.e. the worst-case
+    // disagreement with the rule that just fired.
+    const alwaysResolvable: EvaluatedDraft = {
+      class: 'NONCE_GAP',
+      ruleId: 'R2',
+      severity: 'critical',
+      confidence: 0.9,
+      eventIds: ['e0'],
+      facts: { latestNonce: 37 },
+    };
+    const window = [evt({ status: 'pending', nonce: 38 })];
+    const c = ctx({ corroboration: { latestNonce: 38, pendingNonce: 38 } });
+
+    const res = t.ingest([alwaysResolvable], window, c);
+    expect(res.created).toHaveLength(1);
+    // Without this guard each poll produced a new incident that closed
+    // instantly, which is how the bug looked in production.
+    expect(res.resolved).toHaveLength(0);
+    expect(t.openIncidents()).toHaveLength(1);
+  });
+
+  it('keeps a nonce gap open for as long as the hole exists', () => {
+    const t = tracker();
+    const gap: EvaluatedDraft = {
+      class: 'NONCE_GAP',
+      ruleId: 'R2',
+      severity: 'critical',
+      confidence: 0.9,
+      eventIds: ['e0'],
+      facts: { latestNonce: 37 },
+    };
+    const window = [evt({ id: 'e0', status: 'pending', nonce: 38 })];
+
+    t.ingest([gap], window, ctx({ corroboration: { latestNonce: 37, pendingNonce: 37 } }));
+    // A later tick where no rule fires: pending still equals latest, which is
+    // exactly the state that used to resolve it wrongly.
+    const second = t.ingest([], window, ctx({ corroboration: { latestNonce: 37, pendingNonce: 37 } }));
+    expect(second.resolved).toHaveLength(0);
+    expect(t.openIncidents()).toHaveLength(1);
+  });
+
+  it('resolves once the hole is actually filled', () => {
+    const t = tracker();
+    const gap: EvaluatedDraft = {
+      class: 'NONCE_GAP',
+      ruleId: 'R2',
+      severity: 'critical',
+      confidence: 0.9,
+      eventIds: ['e0'],
+      facts: { latestNonce: 37 },
+    };
+    const window = [evt({ id: 'e0', status: 'pending', nonce: 38 })];
+    t.ingest([gap], window, ctx({ corroboration: { latestNonce: 37 } }));
+
+    const settled = [evt({ id: 'e0', status: 'included', nonce: 38 })];
+    const res = t.ingest([], settled, ctx({ corroboration: { latestNonce: 39 } }));
+    expect(res.resolved).toHaveLength(1);
+  });
+});
