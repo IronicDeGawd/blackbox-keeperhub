@@ -1,8 +1,14 @@
-import { and, asc, desc, eq, gte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNull, sql } from 'drizzle-orm';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import type { ExecutionEvent } from '@blackbox/core';
-import { executionEvents, incidents, ingestCursors, signerState } from './schema.js';
+import {
+  executionEvents,
+  incidents,
+  ingestCursors,
+  signerState,
+  watchedExecutions,
+} from './schema.js';
 
 export * from './schema.js';
 
@@ -201,6 +207,61 @@ export async function setCursor(db: Database, source: string, cursor: string): P
       target: ingestCursors.source,
       set: { cursor, updatedAt: new Date() },
     });
+}
+
+export type WatchedExecution = typeof watchedExecutions.$inferSelect;
+
+/** Register an execution to be polled until it settles. Idempotent. */
+export async function watchExecution(
+  db: Database,
+  params: {
+    executionId: string;
+    agentId: string;
+    signer: string;
+    chainId: number;
+    submitted?: Record<string, unknown>;
+    at: Date;
+  },
+): Promise<void> {
+  await db
+    .insert(watchedExecutions)
+    .values({
+      executionId: params.executionId,
+      agentId: params.agentId,
+      signer: params.signer.toLowerCase(),
+      chainId: params.chainId,
+      submitted: params.submitted ?? null,
+      registeredAt: params.at,
+    })
+    .onConflictDoNothing({ target: watchedExecutions.executionId });
+}
+
+/** Unsettled executions, least recently polled first, so none is starved. */
+export async function dueExecutions(
+  db: Database,
+  limit = 50,
+): Promise<WatchedExecution[]> {
+  return db
+    .select()
+    .from(watchedExecutions)
+    .where(isNull(watchedExecutions.settledAt))
+    .orderBy(sql`${watchedExecutions.lastPolledAt} asc nulls first`)
+    .limit(limit);
+}
+
+export async function markPolled(
+  db: Database,
+  executionId: string,
+  params: { at: Date; settled: boolean },
+): Promise<void> {
+  await db
+    .update(watchedExecutions)
+    .set({
+      lastPolledAt: params.at,
+      pollCount: sql`${watchedExecutions.pollCount} + 1`,
+      ...(params.settled ? { settledAt: params.at } : {}),
+    })
+    .where(eq(watchedExecutions.executionId, executionId));
 }
 
 /**

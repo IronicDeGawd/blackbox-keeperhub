@@ -8,6 +8,13 @@
       "when": 1786299355145,
       "tag": "0000_black_the_executioner",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786299685320,
+      "tag": "0001_lovely_lake",
+      "breakpoints": true
     }
   ]
 }

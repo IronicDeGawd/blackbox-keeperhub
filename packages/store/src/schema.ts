@@ -106,6 +106,37 @@ export const ingestCursors = pgTable('ingest_cursors', {
 });
 
 /**
+ * Executions the recorder is watching.
+ *
+ * KeeperHub exposes no "list executions" endpoint — `/api/executions` 404s and
+ * status is retrievable only per execution id. So an execution has to be
+ * registered at submission time, by the wrapper or the chaos harness, and
+ * polled until it reaches a terminal state. This table is that watchlist, and
+ * it is durable because a restart mid-flight would otherwise lose track of
+ * exactly the transactions most likely to be in trouble.
+ */
+export const watchedExecutions = pgTable(
+  'watched_executions',
+  {
+    executionId: text('execution_id').primaryKey(),
+    agentId: text('agent_id').notNull(),
+    signer: text('signer').notNull(),
+    chainId: integer('chain_id').notNull(),
+    /** Fee parameters the audit record does not carry (PRD §3.1 wrapper). */
+    submitted: jsonb('submitted'),
+    registeredAt: timestamp('registered_at', { withTimezone: true }).notNull(),
+    lastPolledAt: timestamp('last_polled_at', { withTimezone: true }),
+    pollCount: integer('poll_count').notNull().default(0),
+    /** Set once the execution reaches a terminal state; stops the polling. */
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+  },
+  (t) => ({
+    due: index('watched_executions_due_idx').on(t.settledAt, t.lastPolledAt),
+    bySigner: index('watched_executions_signer_idx').on(t.signer, t.chainId),
+  }),
+);
+
+/**
  * Per-signer detector state that must persist across polls. R2 will not fire
  * until a nonce gap has been seen for several consecutive evaluations, and a
  * restart must not reset that count to zero or a real gap goes unreported.

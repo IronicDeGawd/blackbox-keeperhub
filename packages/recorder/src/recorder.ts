@@ -1,0 +1,248 @@
+import {
+  detectionFor,
+  normaliseExecution,
+  type BlackboxConfig,
+  type KeeperHubExecution,
+} from '@blackbox/core';
+import { evaluateRules, IncidentTracker, type RuleContext } from '@blackbox/detector';
+import {
+  dueExecutions,
+  insertEvents,
+  loadSignerWindow,
+  markPolled,
+  recordGapObservation,
+  saveIncident,
+  type Database,
+  type WatchedExecution,
+} from '@blackbox/store';
+import type { CorroborationProvider } from './corroboration.js';
+
+/** The one call the recorder makes against KeeperHub. */
+export type ExecutionFetcher = {
+  getExecutionStatus(executionId: string): Promise<KeeperHubExecution>;
+};
+
+export type RecorderOptions = {
+  db: Database;
+  keeperHub: ExecutionFetcher;
+  corroboration: CorroborationProvider;
+  config: BlackboxConfig;
+  tracker: IncidentTracker;
+  makeId: () => string;
+  now?: () => Date;
+  /** How far back the per-signer rule window reaches. */
+  windowMs?: number;
+  batchSize?: number;
+  logger?: { info: (m: string, d?: unknown) => void; error: (m: string, d?: unknown) => void };
+};
+
+export type TickResult = {
+  polled: number;
+  settled: number;
+  eventsInserted: number;
+  signersEvaluated: number;
+  incidentsCreated: number;
+  incidentsUpdated: number;
+  incidentsResolved: number;
+  errors: number;
+};
+
+const DEFAULT_WINDOW_MS = 60 * 60_000;
+
+const TERMINAL_STATUSES = new Set(['completed', 'failed']);
+
+/**
+ * The recorder is a long-lived stateful loop, not a request handler. One `tick`
+ * is: poll watched executions, normalise and persist what came back, then
+ * evaluate rules for every signer that saw activity.
+ *
+ * Nothing here is allowed to throw. A failing RPC or a single malformed
+ * execution must degrade that one item, not stop the loop — the moment the
+ * watchdog dies is the moment the incidents it exists to catch go unreported.
+ */
+export class Recorder {
+  private readonly windowMs: number;
+  private readonly batchSize: number;
+  private readonly now: () => Date;
+
+  constructor(private readonly options: RecorderOptions) {
+    this.windowMs = options.windowMs ?? DEFAULT_WINDOW_MS;
+    this.batchSize = options.batchSize ?? 50;
+    this.now = options.now ?? (() => new Date());
+  }
+
+  async tick(): Promise<TickResult> {
+    const result: TickResult = {
+      polled: 0,
+      settled: 0,
+      eventsInserted: 0,
+      signersEvaluated: 0,
+      incidentsCreated: 0,
+      incidentsUpdated: 0,
+      incidentsResolved: 0,
+      errors: 0,
+    };
+
+    const due = await dueExecutions(this.options.db, this.batchSize);
+    /** Signers touched this tick, so evaluation is scoped to what changed. */
+    const touched = new Map<string, { signer: `0x${string}`; chainId: number; agentId: string }>();
+
+    for (const watched of due) {
+      try {
+        const inserted = await this.pollOne(watched);
+        result.polled += 1;
+        result.eventsInserted += inserted.eventsInserted;
+        if (inserted.settled) result.settled += 1;
+        touched.set(`${watched.signer}|${watched.chainId}`, {
+          signer: watched.signer as `0x${string}`,
+          chainId: watched.chainId,
+          agentId: watched.agentId,
+        });
+      } catch (error) {
+        result.errors += 1;
+        this.options.logger?.error('poll failed', { executionId: watched.executionId, error });
+      }
+    }
+
+    for (const target of touched.values()) {
+      try {
+        const evaluated = await this.evaluateSigner(target);
+        result.signersEvaluated += 1;
+        result.incidentsCreated += evaluated.created;
+        result.incidentsUpdated += evaluated.updated;
+        result.incidentsResolved += evaluated.resolved;
+      } catch (error) {
+        result.errors += 1;
+        this.options.logger?.error('evaluation failed', { signer: target.signer, error });
+      }
+    }
+
+    return result;
+  }
+
+  /** Register an execution for watching. Called by the wrapper and the harness. */
+  private async pollOne(
+    watched: WatchedExecution,
+  ): Promise<{ eventsInserted: number; settled: boolean }> {
+    const execution = await this.options.keeperHub.getExecutionStatus(watched.executionId);
+    const at = this.now();
+
+    const events = normaliseExecution(execution, {
+      agentId: watched.agentId,
+      signer: watched.signer as `0x${string}`,
+      chainId: watched.chainId,
+      now: at,
+      makeId: this.options.makeId,
+      ...(watched.submitted ? { submitted: reviveSubmitted(watched.submitted) } : {}),
+    });
+
+    const eventsInserted = await insertEvents(this.options.db, events);
+    const settled = TERMINAL_STATUSES.has(execution.status);
+    await markPolled(this.options.db, watched.executionId, { at, settled });
+    return { eventsInserted, settled };
+  }
+
+  private async evaluateSigner(target: {
+    signer: `0x${string}`;
+    chainId: number;
+    agentId: string;
+  }): Promise<{ created: number; updated: number; resolved: number }> {
+    const now = this.now();
+
+    let corroboration = {};
+    try {
+      corroboration = await this.options.corroboration.gather(target);
+    } catch (error) {
+      // Degrade rather than fail: rules that need chain facts will decline to
+      // fire, which is preferable to reporting incidents from stale data.
+      this.options.logger?.error('corroboration failed', { signer: target.signer, error });
+    }
+
+    const c = corroboration as {
+      pendingNonce?: number;
+      latestNonce?: number;
+    };
+    // The gap counter is durable, so R2 survives a restart mid-gap.
+    let consecutiveGapPolls: number | undefined;
+    if (c.pendingNonce !== undefined && c.latestNonce !== undefined) {
+      consecutiveGapPolls = await recordGapObservation(this.options.db, {
+        signer: target.signer,
+        chainId: target.chainId,
+        gapPresent: c.pendingNonce - c.latestNonce > 0,
+        at: now,
+      });
+    }
+
+    const window = await loadSignerWindow(this.options.db, {
+      signer: target.signer,
+      chainId: target.chainId,
+      since: new Date(now.getTime() - this.windowMs),
+    });
+
+    const ctx: RuleContext = {
+      now,
+      detection: detectionFor(this.options.config, target.chainId),
+      agentId: target.agentId,
+      signer: target.signer,
+      chainId: target.chainId,
+      corroboration: {
+        ...corroboration,
+        ...(consecutiveGapPolls !== undefined ? { consecutiveGapPolls } : {}),
+      },
+    };
+
+    const drafts = evaluateRules(window, ctx);
+    const { created, updated, resolved } = this.options.tracker.ingest(drafts, window, ctx);
+
+    for (const incident of [...created, ...updated, ...resolved]) {
+      await saveIncident(this.options.db, {
+        id: incident.id,
+        key: incident.key,
+        class: incident.class,
+        severity: incident.severity,
+        status: incident.status,
+        agentId: incident.agentId,
+        signer: incident.signer,
+        chainId: incident.chainId,
+        detectedAt: incident.detectedAt,
+        firstEventAt: incident.firstEventAt,
+        lastSeenAt: incident.lastSeenAt,
+        resolvedAt: incident.resolvedAt ?? null,
+        resolvedBy: incident.resolvedBy ?? null,
+        ruleId: incident.evidence.ruleId,
+        confidence: incident.confidence,
+        evidence: serialiseEvidence(incident.evidence),
+        rca: incident.rca ?? null,
+        remediation: incident.remediation ?? null,
+      });
+    }
+
+    return { created: created.length, updated: updated.length, resolved: resolved.length };
+  }
+}
+
+/** Evidence holds bigints from corroboration; JSONB needs them as strings. */
+function serialiseEvidence(evidence: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(
+    JSON.stringify(evidence, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
+  ) as Record<string, unknown>;
+}
+
+function reviveSubmitted(stored: unknown): {
+  maxFeePerGas?: bigint;
+  maxPriorityFeePerGas?: bigint;
+  nonce?: number;
+  route?: 'public' | 'private';
+} {
+  const s = stored as Record<string, unknown>;
+  return {
+    ...(s['maxFeePerGas'] ? { maxFeePerGas: BigInt(String(s['maxFeePerGas'])) } : {}),
+    ...(s['maxPriorityFeePerGas']
+      ? { maxPriorityFeePerGas: BigInt(String(s['maxPriorityFeePerGas'])) }
+      : {}),
+    ...(s['nonce'] !== undefined && s['nonce'] !== null ? { nonce: Number(s['nonce']) } : {}),
+    ...(s['route'] === 'public' || s['route'] === 'private'
+      ? { route: s['route'] as 'public' | 'private' }
+      : {}),
+  };
+}
