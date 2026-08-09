@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: blackbox-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: blackbox
+      POSTGRES_PASSWORD: blackbox
+      POSTGRES_DB: blackbox
+    ports:
+      - "5433:5432"
+    volumes:
+      - blackbox-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blackbox -d blackbox"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  blackbox-pgdata:

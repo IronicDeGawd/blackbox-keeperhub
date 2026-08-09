@@ -1,0 +1,7 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+
+# esbuild is vitest's bundler; its postinstall fetches the platform binary.
+allowBuilds:
+  esbuild: true
