@@ -1,0 +1,21 @@
+node_modules/
+dist/
+build/
+.next/
+out/
+
+.env
+.env.local
+.env.*.local
+
+context/
+
+*.log
+.DS_Store
+.pnpm-store/
+coverage/
+
+# foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
