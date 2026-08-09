@@ -60,6 +60,15 @@ importers:
         specifier: ^2.21.45
         version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
 
+  packages/remediator:
+    dependencies:
+      '@blackbox/core':
+        specifier: workspace:*
+        version: link:../core
+      '@blackbox/store':
+        specifier: workspace:*
+        version: link:../store
+
   packages/store:
     dependencies:
       '@blackbox/core':

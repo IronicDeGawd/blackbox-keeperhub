@@ -182,3 +182,31 @@ export const signerState = pgTable('signer_state', {
 }, (t) => ({
   pk: uniqueIndex('signer_state_pk').on(t.signer, t.chainId),
 }));
+
+/**
+ * Every remediation attempt, successful or not, for budget enforcement.
+ *
+ * The rolling caps in PRD §6 are on both count and cumulative gas, and they
+ * must survive a restart: a process that forgets what it has already spent
+ * would happily blow through an hourly cap after every bounce. Failed attempts
+ * count too — they cost gas and they are evidence that retrying is not working.
+ */
+export const remediationLedger = pgTable(
+  'remediation_ledger',
+  {
+    id: text('id').primaryKey(),
+    incidentId: text('incident_id').notNull(),
+    playbookId: text('playbook_id').notNull(),
+    signer: text('signer').notNull(),
+    chainId: integer('chain_id').notNull(),
+    attemptedAt: timestamp('attempted_at', { withTimezone: true }).notNull(),
+    /** Wei, as text. Zero when the attempt never reached the chain. */
+    gasSpentWei: text('gas_spent_wei').notNull().default('0'),
+    status: text('status').notNull(),
+    txHash: text('tx_hash'),
+  },
+  (t) => ({
+    budget: index('remediation_ledger_budget_idx').on(t.signer, t.chainId, t.attemptedAt),
+    byIncident: index('remediation_ledger_incident_idx').on(t.incidentId),
+  }),
+);

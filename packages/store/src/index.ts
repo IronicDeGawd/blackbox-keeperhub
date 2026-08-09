@@ -9,6 +9,7 @@ import {
   signerState,
   watchedExecutions,
   watchedTransactions,
+  remediationLedger,
 } from './schema.js';
 
 export * from './schema.js';
@@ -345,4 +346,58 @@ export async function markTransactionPolled(
       ...(params.settled ? { settledAt: params.at } : {}),
     })
     .where(eq(watchedTransactions.txHash, txHash.toLowerCase()));
+}
+
+export type RemediationSpend = { count: number; gasWei: bigint };
+
+/** What this signer has spent on remediation since `since`. */
+export async function remediationSpendSince(
+  db: Database,
+  params: { signer: string; chainId: number; since: Date },
+): Promise<RemediationSpend> {
+  const rows = await db
+    .select()
+    .from(remediationLedger)
+    .where(
+      and(
+        eq(remediationLedger.signer, params.signer.toLowerCase()),
+        eq(remediationLedger.chainId, params.chainId),
+        gte(remediationLedger.attemptedAt, params.since),
+      ),
+    );
+  return {
+    count: rows.length,
+    gasWei: rows.reduce((sum, r) => sum + BigInt(r.gasSpentWei), 0n),
+  };
+}
+
+/** How many attempts this incident has already had. */
+export async function attemptsForIncident(db: Database, incidentId: string): Promise<number> {
+  const rows = await db
+    .select()
+    .from(remediationLedger)
+    .where(eq(remediationLedger.incidentId, incidentId));
+  return rows.length;
+}
+
+export async function recordRemediationAttempt(
+  db: Database,
+  entry: {
+    id: string;
+    incidentId: string;
+    playbookId: string;
+    signer: string;
+    chainId: number;
+    attemptedAt: Date;
+    gasSpentWei?: bigint;
+    status: string;
+    txHash?: string;
+  },
+): Promise<void> {
+  await db.insert(remediationLedger).values({
+    ...entry,
+    signer: entry.signer.toLowerCase(),
+    gasSpentWei: (entry.gasSpentWei ?? 0n).toString(),
+    txHash: entry.txHash ?? null,
+  });
 }
