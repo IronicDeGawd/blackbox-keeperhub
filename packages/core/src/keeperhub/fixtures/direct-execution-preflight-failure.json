@@ -1,0 +1,18 @@
+{
+  "executionId": "p1748x0qxk0dgeryhgzau",
+  "status": "failed",
+  "type": "contract-call",
+  "transactionHash": null,
+  "transactionLink": null,
+  "sponsored": false,
+  "receipts": [],
+  "result": null,
+  "error": "Contract call failed: Error(ERC20: transfer amount exceeds balance)",
+  "gasUsedWei": null,
+  "gasPriceWei": null,
+  "estimatedCostUsd": null,
+  "retryCount": 0,
+  "network": "sepolia",
+  "createdAt": "2026-08-09T17:19:44.308Z",
+  "completedAt": "2026-08-09T17:19:46.000Z"
+}

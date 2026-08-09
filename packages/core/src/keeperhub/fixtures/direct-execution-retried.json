@@ -1,0 +1,38 @@
+{
+  "_note": "SYNTHETIC. Hand-built from the observed success record by adding a second receipt. No real retried execution has been captured yet, so the ordering assumption (earlier receipts are superseded attempts, the last carries the outcome) is unverified against KeeperHub. Replace this file with a real capture as soon as one is produced, and re-check the normaliser against it.",
+  "executionId": "synthetic-retry-0001",
+  "status": "completed",
+  "type": "contract-call",
+  "transactionHash": "0xbbbb000000000000000000000000000000000000000000000000000000000002",
+  "transactionLink": "https://sepolia.etherscan.io/tx/0xbbbb000000000000000000000000000000000000000000000000000000000002",
+  "sponsored": false,
+  "receipts": [
+    {
+      "hash": "0xaaaa000000000000000000000000000000000000000000000000000000000001",
+      "chainId": 11155111,
+      "gasUsed": "21000",
+      "verified": true,
+      "verifiedAt": "2026-08-09T18:00:10.000Z",
+      "blockNumber": 11453700,
+      "receiptStatus": "reverted"
+    },
+    {
+      "hash": "0xbbbb000000000000000000000000000000000000000000000000000000000002",
+      "chainId": 11155111,
+      "gasUsed": "54321",
+      "verified": true,
+      "verifiedAt": "2026-08-09T18:00:40.000Z",
+      "blockNumber": 11453704,
+      "receiptStatus": "success"
+    }
+  ],
+  "result": { "success": true },
+  "error": null,
+  "gasUsedWei": "54321",
+  "gasPriceWei": "2000000000",
+  "estimatedCostUsd": null,
+  "retryCount": 1,
+  "network": "sepolia",
+  "createdAt": "2026-08-09T18:00:00.000Z",
+  "completedAt": "2026-08-09T18:00:40.500Z"
+}

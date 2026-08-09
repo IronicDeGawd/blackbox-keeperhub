@@ -19,12 +19,22 @@ export const hexHash = z
 
 export const triggerKind = z.enum(['schedule', 'condition', 'manual', 'api', 'unknown']);
 
+/**
+ * `rejected` is an addition to the set in PRD §4.1. KeeperHub pre-flights every
+ * call and refuses to submit one it expects to revert, so an action can fail
+ * having never reached the mempool — no hash, no receipt, no gas spent. None of
+ * the original states says that: `dropped` implies it was submitted and then
+ * evicted, and `unknown` would throw away the most certain fact we have.
+ * Detection depends on the distinction, because a call that never ran cannot be
+ * a `SIM_PASS_EXEC_REVERT` and burns nothing for `RETRY_STORM` to count.
+ */
 export const outcomeStatus = z.enum([
   'pending',
   'included',
   'reverted',
   'dropped',
   'replaced',
+  'rejected',
   'unknown',
 ]);
 
