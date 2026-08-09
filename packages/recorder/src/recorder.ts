@@ -7,6 +7,8 @@ import {
 import { evaluateRules, IncidentTracker, type RuleContext } from '@blackbox/detector';
 import {
   dueExecutions,
+  dueTransactions,
+  markTransactionPolled,
   insertEvents,
   loadSignerWindow,
   markPolled,
@@ -14,9 +16,11 @@ import {
   saveIncident,
   type Database,
   type WatchedExecution,
+  type WatchedTransaction,
 } from '@blackbox/store';
 import type { CorroborationProvider } from './corroboration.js';
 import { enrichEvents, type TransactionProvider } from './enrich.js';
+import { buildEventFromChain, type ChainReader } from './chain-source.js';
 
 /** The one call the recorder makes against KeeperHub. */
 export type ExecutionFetcher = {
@@ -29,6 +33,8 @@ export type RecorderOptions = {
   corroboration: CorroborationProvider;
   /** Optional. Supplies submitted fee data the audit record omits. */
   transactions?: TransactionProvider;
+  /** Optional. Observes transactions that have no KeeperHub execution record. */
+  chain?: ChainReader;
   config: BlackboxConfig;
   tracker: IncidentTracker;
   makeId: () => string;
@@ -107,6 +113,29 @@ export class Recorder {
       }
     }
 
+    if (this.options.chain) {
+      const dueTx = await dueTransactions(this.options.db, this.batchSize);
+      for (const watched of dueTx) {
+        try {
+          const outcome = await this.pollTransaction(watched);
+          result.polled += 1;
+          result.eventsInserted += outcome.eventsInserted;
+          if (outcome.settled) result.settled += 1;
+          touched.set(`${watched.signer}|${watched.chainId}`, {
+            signer: watched.signer as `0x${string}`,
+            chainId: watched.chainId,
+            agentId: watched.agentId,
+          });
+        } catch (error) {
+          result.errors += 1;
+          this.options.logger?.error('transaction poll failed', {
+            txHash: watched.txHash,
+            error,
+          });
+        }
+      }
+    }
+
     for (const target of touched.values()) {
       try {
         const evaluated = await this.evaluateSigner(target);
@@ -157,6 +186,27 @@ export class Recorder {
     const settled = TERMINAL_STATUSES.has(execution.status);
     await markPolled(this.options.db, watched.executionId, { at, settled });
     return { eventsInserted, settled };
+  }
+
+  /** Observe a transaction directly on chain; it has no execution record. */
+  private async pollTransaction(
+    watched: WatchedTransaction,
+  ): Promise<{ eventsInserted: number; settled: boolean }> {
+    const at = this.now();
+    const built = await buildEventFromChain(this.options.chain!, {
+      txHash: watched.txHash as `0x${string}`,
+      agentId: watched.agentId,
+      signer: watched.signer as `0x${string}`,
+      chainId: watched.chainId,
+      label: watched.label,
+      registeredAt: watched.registeredAt,
+      now: at,
+      makeId: this.options.makeId,
+    });
+
+    const eventsInserted = built.event ? await insertEvents(this.options.db, [built.event]) : 0;
+    await markTransactionPolled(this.options.db, watched.txHash, { at, settled: built.settled });
+    return { eventsInserted, settled: built.settled };
   }
 
   private async evaluateSigner(target: {

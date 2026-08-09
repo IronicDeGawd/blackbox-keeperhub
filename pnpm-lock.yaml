@@ -18,6 +18,18 @@ importers:
         specifier: ^2.1.5
         version: 2.1.9(@types/node@22.20.1)
 
+  packages/chaos:
+    dependencies:
+      '@blackbox/core':
+        specifier: workspace:*
+        version: link:../core
+      '@blackbox/store':
+        specifier: workspace:*
+        version: link:../store
+      viem:
+        specifier: ^2.21.45
+        version: 2.55.11(typescript@5.9.3)(zod@3.25.76)
+
   packages/core:
     dependencies:
       zod:

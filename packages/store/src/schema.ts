@@ -137,6 +137,39 @@ export const watchedExecutions = pgTable(
 );
 
 /**
+ * Transactions the recorder is watching directly on chain.
+ *
+ * Not everything worth watching goes through KeeperHub. The chaos harness has
+ * to submit deliberately underpriced or nonce-gapped transactions, which
+ * KeeperHub will not do because it picks fees server-side and manages nonces.
+ * Those are still real transactions with real hashes; they simply have no
+ * execution record.
+ *
+ * This is registration, not mempool watching (PRD §2.2): the hash is known
+ * because something told us about it. The same path lets Blackbox observe any
+ * signer whose transaction hashes are reported to it.
+ */
+export const watchedTransactions = pgTable(
+  'watched_transactions',
+  {
+    txHash: text('tx_hash').primaryKey(),
+    agentId: text('agent_id').notNull(),
+    signer: text('signer').notNull(),
+    chainId: integer('chain_id').notNull(),
+    /** Free-form label, e.g. the chaos scenario that produced it. */
+    label: text('label'),
+    registeredAt: timestamp('registered_at', { withTimezone: true }).notNull(),
+    lastPolledAt: timestamp('last_polled_at', { withTimezone: true }),
+    pollCount: integer('poll_count').notNull().default(0),
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+  },
+  (t) => ({
+    due: index('watched_transactions_due_idx').on(t.settledAt, t.lastPolledAt),
+    bySigner: index('watched_transactions_signer_idx').on(t.signer, t.chainId),
+  }),
+);
+
+/**
  * Per-signer detector state that must persist across polls. R2 will not fire
  * until a nonce gap has been seen for several consecutive evaluations, and a
  * restart must not reset that count to zero or a real gap goes unreported.

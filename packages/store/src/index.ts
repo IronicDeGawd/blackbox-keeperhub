@@ -8,6 +8,7 @@ import {
   ingestCursors,
   signerState,
   watchedExecutions,
+  watchedTransactions,
 } from './schema.js';
 
 export * from './schema.js';
@@ -293,4 +294,55 @@ export async function recordGapObservation(
     })
     .returning({ count: signerState.consecutiveGapPolls });
   return row?.count ?? 0;
+}
+
+export type WatchedTransaction = typeof watchedTransactions.$inferSelect;
+
+/** Register a raw transaction hash to observe on chain. Idempotent. */
+export async function watchTransaction(
+  db: Database,
+  params: {
+    txHash: string;
+    agentId: string;
+    signer: string;
+    chainId: number;
+    label?: string;
+    at: Date;
+  },
+): Promise<void> {
+  await db
+    .insert(watchedTransactions)
+    .values({
+      txHash: params.txHash.toLowerCase(),
+      agentId: params.agentId,
+      signer: params.signer.toLowerCase(),
+      chainId: params.chainId,
+      label: params.label ?? null,
+      registeredAt: params.at,
+    })
+    .onConflictDoNothing({ target: watchedTransactions.txHash });
+}
+
+export async function dueTransactions(db: Database, limit = 50): Promise<WatchedTransaction[]> {
+  return db
+    .select()
+    .from(watchedTransactions)
+    .where(isNull(watchedTransactions.settledAt))
+    .orderBy(sql`${watchedTransactions.lastPolledAt} asc nulls first`)
+    .limit(limit);
+}
+
+export async function markTransactionPolled(
+  db: Database,
+  txHash: string,
+  params: { at: Date; settled: boolean },
+): Promise<void> {
+  await db
+    .update(watchedTransactions)
+    .set({
+      lastPolledAt: params.at,
+      pollCount: sql`${watchedTransactions.pollCount} + 1`,
+      ...(params.settled ? { settledAt: params.at } : {}),
+    })
+    .where(eq(watchedTransactions.txHash, txHash.toLowerCase()));
 }

@@ -15,6 +15,13 @@
       "when": 1786299685320,
       "tag": "0001_lovely_lake",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786306311265,
+      "tag": "0002_polite_black_queen",
+      "breakpoints": true
     }
   ]
 }
