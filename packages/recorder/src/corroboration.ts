@@ -56,16 +56,10 @@ export class RpcCorroborator implements CorroborationProvider {
     if (block.status === 'fulfilled' && block.value.baseFeePerGas != null) {
       out.baseFeeAtDetection = block.value.baseFeePerGas;
     }
-    if (out.latestNonce !== undefined && out.pendingNonce !== undefined) {
-      out.missingNonces = range(out.latestNonce, out.pendingNonce);
-    }
+    // Deliberately no `missingNonces` here. It cannot be derived from these
+    // two counts: a gapped transaction is queued rather than pending, so
+    // during a real gap `pending` equals `latest`. The gap is computed from
+    // observed submissions instead — see `findNonceGap` in the detector.
     return out;
   }
-}
-
-/** Nonces submitted but not yet confirmed: [latest, pending). */
-function range(latest: number, pending: number): number[] {
-  const out: number[] = [];
-  for (let n = latest; n < pending; n++) out.push(n);
-  return out;
 }

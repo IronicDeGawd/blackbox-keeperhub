@@ -4,7 +4,12 @@ import {
   type BlackboxConfig,
   type KeeperHubExecution,
 } from '@blackbox/core';
-import { evaluateRules, IncidentTracker, type RuleContext } from '@blackbox/detector';
+import {
+  evaluateRules,
+  findNonceGap,
+  IncidentTracker,
+  type RuleContext,
+} from '@blackbox/detector';
 import {
   dueExecutions,
   dueTransactions,
@@ -225,26 +230,27 @@ export class Recorder {
       this.options.logger?.error('corroboration failed', { signer: target.signer, error });
     }
 
-    const c = corroboration as {
-      pendingNonce?: number;
-      latestNonce?: number;
-    };
-    // The gap counter is durable, so R2 survives a restart mid-gap.
-    let consecutiveGapPolls: number | undefined;
-    if (c.pendingNonce !== undefined && c.latestNonce !== undefined) {
-      consecutiveGapPolls = await recordGapObservation(this.options.db, {
-        signer: target.signer,
-        chainId: target.chainId,
-        gapPresent: c.pendingNonce - c.latestNonce > 0,
-        at: now,
-      });
-    }
-
     const window = await loadSignerWindow(this.options.db, {
       signer: target.signer,
       chainId: target.chainId,
       since: new Date(now.getTime() - this.windowMs),
     });
+
+    const c = corroboration as { latestNonce?: number };
+    // The gap is derived from what we observed being submitted, not from
+    // pending minus latest: a queued transaction does not raise the pending
+    // count, so those two are equal during a real gap. The counter is durable
+    // so R2 survives a restart mid-gap.
+    let consecutiveGapPolls: number | undefined;
+    if (c.latestNonce !== undefined) {
+      const { missingNonces } = findNonceGap(window, c.latestNonce);
+      consecutiveGapPolls = await recordGapObservation(this.options.db, {
+        signer: target.signer,
+        chainId: target.chainId,
+        gapPresent: missingNonces.length > 0,
+        at: now,
+      });
+    }
 
     const ctx: RuleContext = {
       now,

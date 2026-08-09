@@ -61,27 +61,62 @@ export const R1: Rule = {
 
 // ── R2 · NONCE_GAP ──────────────────────────────────────────────────────────
 
+/**
+ * Find nonces this signer has submitted at but which are missing beneath its
+ * highest unconfirmed submission.
+ *
+ * **This cannot be derived from `pendingNonce - latestNonce`.** That was the
+ * original design and it is wrong against real nodes: a transaction whose
+ * nonce is not yet executable sits in the queued set rather than the pending
+ * set, so `eth_getTransactionCount(pending)` does not count it. During a
+ * genuine gap the two counts are *equal*, and the difference only becomes
+ * positive once the hole is filled and the queue drains — the moment the
+ * incident ends. Verified against Sepolia: with nonce 37 missing and 38
+ * submitted, the node reported latest 37, pending 37.
+ *
+ * The gap is therefore derived from what Blackbox knows was submitted, using
+ * the confirmed count only as the floor.
+ */
+export function findNonceGap(
+  window: readonly ExecutionEvent[],
+  latestNonce: number,
+): { missingNonces: number[]; unresolved: ExecutionEvent[]; highestSubmitted: number | null } {
+  const unresolved = window.filter(
+    (e) =>
+      e.submission.nonce !== undefined &&
+      e.submission.nonce >= latestNonce &&
+      !isTerminal(e),
+  );
+  if (unresolved.length === 0) {
+    return { missingNonces: [], unresolved: [], highestSubmitted: null };
+  }
+
+  const submitted = new Set(
+    window
+      .map((e) => e.submission.nonce)
+      .filter((n): n is number => n !== undefined && n >= latestNonce),
+  );
+  const highestSubmitted = Math.max(...submitted);
+
+  const missingNonces: number[] = [];
+  for (let n = latestNonce; n < highestSubmitted; n++) {
+    if (!submitted.has(n)) missingNonces.push(n);
+  }
+  return { missingNonces, unresolved, highestSubmitted };
+}
+
 export const R2: Rule = {
   id: 'R2',
   evaluate(window, ctx) {
     const corr = ctx.corroboration;
-    if (corr?.pendingNonce === undefined || corr.latestNonce === undefined) return null;
+    if (corr?.latestNonce === undefined) return null;
 
-    const gap = corr.pendingNonce - corr.latestNonce;
-    if (gap <= 0) return null;
-    // A gap for one observation is just a transaction in flight. It only means
-    // something once it persists.
+    const { missingNonces, unresolved, highestSubmitted } = findNonceGap(window, corr.latestNonce);
+    if (missingNonces.length === 0) return null;
+
+    // A gap seen once is just a transaction in flight. It means something only
+    // once it persists.
     if ((corr.consecutiveGapPolls ?? 0) < ctx.detection.nonceGapConfirmations) return null;
-
-    // At least one submitted nonce above the confirmed one must have no
-    // terminal event, otherwise the chain has simply not caught up yet.
-    const unresolved = window.filter(
-      (e) =>
-        e.submission.nonce !== undefined &&
-        e.submission.nonce >= corr.latestNonce! &&
-        !nonceResolved(window, e.submission.nonce),
-    );
-    if (unresolved.length === 0) return null;
 
     return {
       class: 'NONCE_GAP',
@@ -92,9 +127,10 @@ export const R2: Rule = {
       eventIds: unresolved.map((e) => e.id),
       facts: {
         latestNonce: corr.latestNonce,
-        pendingNonce: corr.pendingNonce,
-        gap,
-        missingNonces: corr.missingNonces ?? [],
+        pendingNonce: corr.pendingNonce ?? null,
+        highestSubmittedNonce: highestSubmitted,
+        missingNonces,
+        gap: missingNonces.length,
         blockedActionCount: unresolved.length,
         consecutiveGapPolls: corr.consecutiveGapPolls ?? 0,
         nonceGapConfirmations: ctx.detection.nonceGapConfirmations,

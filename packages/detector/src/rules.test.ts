@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { blackboxConfigSchema, detectionFor, CHAIN_IDS } from '@blackbox/core';
-import { R1, R2, R3, R4, R5, R6, R7 } from './rules.js';
+import { findNonceGap, R1, R2, R3, R4, R5, R6, R7 } from './rules.js';
 import { evaluateRules } from './index.js';
 import { at, evt, resetSeq, SIGNER, T0 } from './fixtures.js';
 import type { RuleContext } from './types.js';
@@ -58,46 +58,73 @@ describe('R1 STUCK_TRANSACTION', () => {
 });
 
 describe('R2 NONCE_GAP', () => {
-  const pending = () => evt({ status: 'pending', nonce: 7, submittedAt: T0 });
+  /**
+   * These previously asserted `pendingNonce - latestNonce > 0`, which is how a
+   * gap is usually described and is wrong against real nodes: a transaction at
+   * a non-executable nonce is queued, not pending, so during a genuine gap the
+   * two counts are equal. Confirmed on Sepolia — nonce 37 missing, 38
+   * submitted, node reported latest 37 / pending 37. The gap is now derived
+   * from observed submissions.
+   */
+  const gapped = () => evt({ status: 'pending', nonce: 38, submittedAt: T0 });
 
-  it('fires once the gap has persisted for the configured number of polls', () => {
+  it('fires when a submitted nonce sits above a hole', () => {
     const r = R2.evaluate(
-      [pending()],
-      ctx({ corroboration: { latestNonce: 6, pendingNonce: 8, consecutiveGapPolls: 2 } }),
+      [gapped()],
+      // Exactly what the node reports during a real gap: pending === latest.
+      ctx({ corroboration: { latestNonce: 37, pendingNonce: 37, consecutiveGapPolls: 2 } }),
     );
     expect(r?.class).toBe('NONCE_GAP');
     expect(r?.severity).toBe('critical');
+    expect(r?.facts['missingNonces']).toEqual([37]);
+    expect(r?.facts['highestSubmittedNonce']).toBe(38);
   });
 
-  it('near miss: gap seen only once', () => {
+  it('fires without any pendingNonce at all', () => {
+    // pendingNonce is now corroboration only; the rule must not depend on it.
+    const r = R2.evaluate([gapped()], ctx({ corroboration: { latestNonce: 37, consecutiveGapPolls: 2 } }));
+    expect(r?.class).toBe('NONCE_GAP');
+  });
+
+  it('reports every hole when several nonces are missing', () => {
+    const r = R2.evaluate(
+      [evt({ status: 'pending', nonce: 40, submittedAt: T0 })],
+      ctx({ corroboration: { latestNonce: 37, consecutiveGapPolls: 2 } }),
+    );
+    expect(r?.facts['missingNonces']).toEqual([37, 38, 39]);
+  });
+
+  it('near miss: gap seen fewer times than required', () => {
     expect(
-      R2.evaluate(
-        [pending()],
-        ctx({ corroboration: { latestNonce: 6, pendingNonce: 8, consecutiveGapPolls: 1 } }),
-      ),
+      R2.evaluate([gapped()], ctx({ corroboration: { latestNonce: 37, consecutiveGapPolls: 1 } })),
     ).toBeNull();
   });
 
-  it('does not fire when there is no gap', () => {
+  it('does not fire on a contiguous sequence', () => {
+    const contiguous = [
+      evt({ status: 'pending', nonce: 37, submittedAt: T0 }),
+      evt({ status: 'pending', nonce: 38, submittedAt: T0 }),
+    ];
     expect(
-      R2.evaluate(
-        [pending()],
-        ctx({ corroboration: { latestNonce: 8, pendingNonce: 8, consecutiveGapPolls: 5 } }),
-      ),
+      R2.evaluate(contiguous, ctx({ corroboration: { latestNonce: 37, consecutiveGapPolls: 5 } })),
     ).toBeNull();
   });
 
-  it('does not fire without corroboration, since the gap is an RPC fact', () => {
-    expect(R2.evaluate([pending()], ctx())).toBeNull();
+  it('does not fire without a confirmed nonce to measure from', () => {
+    expect(R2.evaluate([gapped()], ctx())).toBeNull();
   });
 
-  it('does not fire when every nonce above the confirmed one has resolved', () => {
-    const resolved = evt({ status: 'included', nonce: 7, submittedAt: T0 });
+  it('does not fire once the gapped transactions have all settled', () => {
+    const settled = evt({ status: 'included', nonce: 38, submittedAt: T0 });
     expect(
-      R2.evaluate(
-        [resolved],
-        ctx({ corroboration: { latestNonce: 6, pendingNonce: 8, consecutiveGapPolls: 3 } }),
-      ),
+      R2.evaluate([settled], ctx({ corroboration: { latestNonce: 37, consecutiveGapPolls: 5 } })),
+    ).toBeNull();
+  });
+
+  it('ignores nonces already confirmed below the latest count', () => {
+    const old = evt({ status: 'pending', nonce: 10, submittedAt: T0 });
+    expect(
+      R2.evaluate([old], ctx({ corroboration: { latestNonce: 37, consecutiveGapPolls: 5 } })),
     ).toBeNull();
   });
 });
@@ -337,5 +364,21 @@ describe('correlation and suppression', () => {
 
   it('returns nothing for a healthy signer', () => {
     expect(evaluateRules([evt({ status: 'included' })], ctx())).toEqual([]);
+  });
+});
+
+describe('findNonceGap', () => {
+  it('returns nothing when everything is confirmed', () => {
+    expect(findNonceGap([evt({ status: 'included', nonce: 5 })], 6).missingNonces).toEqual([]);
+  });
+
+  it('finds the hole beneath the highest unconfirmed submission', () => {
+    const g = findNonceGap([evt({ status: 'pending', nonce: 9 })], 7);
+    expect(g.missingNonces).toEqual([7, 8]);
+    expect(g.highestSubmitted).toBe(9);
+  });
+
+  it('does not invent a hole for a submission at the next nonce', () => {
+    expect(findNonceGap([evt({ status: 'pending', nonce: 7 })], 7).missingNonces).toEqual([]);
   });
 });
