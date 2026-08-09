@@ -16,6 +16,7 @@ import {
   type WatchedExecution,
 } from '@blackbox/store';
 import type { CorroborationProvider } from './corroboration.js';
+import { enrichEvents, type TransactionProvider } from './enrich.js';
 
 /** The one call the recorder makes against KeeperHub. */
 export type ExecutionFetcher = {
@@ -26,6 +27,8 @@ export type RecorderOptions = {
   db: Database;
   keeperHub: ExecutionFetcher;
   corroboration: CorroborationProvider;
+  /** Optional. Supplies submitted fee data the audit record omits. */
+  transactions?: TransactionProvider;
   config: BlackboxConfig;
   tracker: IncidentTracker;
   makeId: () => string;
@@ -127,7 +130,7 @@ export class Recorder {
     const execution = await this.options.keeperHub.getExecutionStatus(watched.executionId);
     const at = this.now();
 
-    const events = normaliseExecution(execution, {
+    const normalised = normaliseExecution(execution, {
       agentId: watched.agentId,
       signer: watched.signer as `0x${string}`,
       chainId: watched.chainId,
@@ -135,6 +138,20 @@ export class Recorder {
       makeId: this.options.makeId,
       ...(watched.submitted ? { submitted: reviveSubmitted(watched.submitted) } : {}),
     });
+
+    // Fee parameters come from the chain, not from KeeperHub. Failure here
+    // must not lose the event: better a record without fees than no record.
+    let events = normalised;
+    if (this.options.transactions) {
+      try {
+        events = await enrichEvents(normalised, this.options.transactions);
+      } catch (error) {
+        this.options.logger?.error('enrichment failed', {
+          executionId: watched.executionId,
+          error,
+        });
+      }
+    }
 
     const eventsInserted = await insertEvents(this.options.db, events);
     const settled = TERMINAL_STATUSES.has(execution.status);
