@@ -15,7 +15,12 @@ export type RemediationExecutor = {
   submit(params: {
     plan: Extract<PlaybookPlan, { kind: 'submit' }>;
     incident: Incident;
-  }): Promise<{ txHash: `0x${string}`; keeperHubActionId?: string }>;
+  }): Promise<{
+    txHash: `0x${string}`;
+    keeperHubActionId?: string;
+    /** Which path put it on chain, for the ledger and the console. */
+    executor?: 'signer' | 'keeperhub' | 'keeperhub-workflow';
+  }>;
   /** Resolves once the submission is confirmed, or rejects on timeout. */
   verify(params: {
     txHash: `0x${string}`;
@@ -138,7 +143,10 @@ export class Remediator {
     this.inFlight.add(key);
     const startedAt = this.now();
     try {
-      const { txHash, keeperHubActionId } = await this.options.executor.submit({ plan, incident });
+      const { txHash, keeperHubActionId, executor } = await this.options.executor.submit({
+        plan,
+        incident,
+      });
       let included = false;
       let gasUsed: bigint | undefined;
       let failureReason: string | undefined;
@@ -163,6 +171,7 @@ export class Remediator {
         included ? 'succeeded' : 'failed',
         gasUsed,
         txHash,
+        executor,
       );
 
       const completedAt = this.now();
@@ -177,6 +186,7 @@ export class Remediator {
               guardsFailed: [],
               txHash,
               ...(keeperHubActionId ? { keeperHubActionId } : {}),
+              ...(executor ? { executor } : {}),
               status: included ? 'succeeded' : 'failed',
               ...(failureReason ? { failureReason } : {}),
               ...(gasUsed !== undefined ? { gasUsed } : {}),
@@ -227,6 +237,7 @@ export class Remediator {
     status: string,
     gasUsed?: bigint,
     txHash?: string,
+    executor?: string,
   ): Promise<void> {
     // Every attempt is ledgered, including failures and skips: they cost gas or
     // capacity, and the budget guard has to see them.
@@ -240,6 +251,7 @@ export class Remediator {
       ...(gasUsed !== undefined ? { gasSpentWei: gasUsed } : {}),
       status,
       ...(txHash ? { txHash } : {}),
+      ...(executor ? { executor } : {}),
     });
   }
 }

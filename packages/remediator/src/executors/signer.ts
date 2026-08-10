@@ -64,7 +64,7 @@ export class SignerExecutor implements RemediationExecutor {
       maxFeePerGas: plan.maxFeePerGas,
       maxPriorityFeePerGas: plan.maxPriorityFeePerGas,
     });
-    return { txHash };
+    return { txHash, executor: 'signer' };
   }
 
   async verify(params: Parameters<RemediationExecutor['verify']>[0]): ReturnType<

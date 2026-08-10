@@ -126,7 +126,11 @@ export class KeeperHubExecutor implements RemediationExecutor {
           `not be reported as performed`,
       );
     }
-    return { txHash: txHash as `0x${string}`, keeperHubActionId: result.executionId };
+    return {
+      txHash: txHash as `0x${string}`,
+      keeperHubActionId: result.executionId,
+      executor: 'keeperhub',
+    };
   }
 
   async verify(params: Parameters<RemediationExecutor['verify']>[0]): ReturnType<

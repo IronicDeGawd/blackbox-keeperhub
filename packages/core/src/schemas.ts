@@ -153,7 +153,7 @@ export const remediationAttemptSchema = z.object({
    * remediation and a human's wallet signed it — a materially different claim
    * from acting autonomously, and one the UI must not blur.
    */
-  executor: z.enum(['signer', 'keeperhub', 'user-signed']).optional(),
+  executor: z.enum(['signer', 'keeperhub', 'keeperhub-workflow', 'user-signed']).optional(),
   status: z.enum(['succeeded', 'failed', 'skipped']),
   failureReason: z.string().optional(),
   gasUsed: bigintString.optional(),

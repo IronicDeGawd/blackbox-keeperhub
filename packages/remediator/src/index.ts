@@ -6,3 +6,4 @@ export * from './executors/verify.js';
 export * from './executors/keeperhub.js';
 export * from './executors/signer.js';
 export * from './executors/routing.js';
+export * from './executors/workflow.js';

@@ -455,3 +455,62 @@ describe('saving an incident without analysis', () => {
     expect((await getIncident(db, 'inc-preserve'))?.rca).toMatchObject({ summary: 'second' });
   });
 });
+
+describe('re-observing a transaction', () => {
+  const pendingEvent = (over: Record<string, unknown> = {}) =>
+    ({
+      id: 'e-settle',
+      sourceId: 'chain:11155111:0xabc',
+      logicalActionId: 'action-1',
+      attemptIndex: 0,
+      agentId: 'chaos',
+      signer: '0x01cc313321eb09c51f5b649f2bbd578ee32750a5',
+      chainId: 11155111,
+      trigger: { kind: 'manual' },
+      simulation: { performed: false },
+      submission: { txHash: '0xabc', nonce: 1, submittedAt: new Date(), route: 'public' },
+      outcome: { status: 'pending' },
+      raw: null,
+      ingestedAt: new Date(),
+      ...over,
+    }) as never;
+
+  it('replaces a pending observation once the transaction settles', async () => {
+    // A retry storm ingested mid-flight stayed four pending rows forever, and
+    // R5 only fires on failed events, so nothing was ever detected.
+    await insertEvents(db, [pendingEvent()]);
+    await insertEvents(db, [
+      pendingEvent({
+        id: 'e-settle-2',
+        outcome: { status: 'reverted', blockNumber: 10, gasUsed: 21_000n },
+      }),
+    ]);
+
+    const rows = await db.select().from(executionEvents);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.outcomeStatus).toBe('reverted');
+    expect(rows[0]?.blockNumber).toBe(10);
+  });
+
+  it('never walks a terminal outcome back to pending', async () => {
+    await insertEvents(db, [
+      pendingEvent({ outcome: { status: 'included', blockNumber: 10, gasUsed: 21_000n } }),
+    ]);
+    await insertEvents(db, [pendingEvent({ id: 'e-late' })]);
+
+    const rows = await db.select().from(executionEvents);
+    expect(rows[0]?.outcomeStatus).toBe('included');
+  });
+
+  it('keeps a simulation recorded on the settled observation', async () => {
+    await insertEvents(db, [pendingEvent()]);
+    await insertEvents(db, [
+      pendingEvent({
+        outcome: { status: 'reverted', blockNumber: 11 },
+        simulation: { performed: true, success: true, simulatedAtBlock: 10 },
+      }),
+    ]);
+    const rows = await db.select().from(executionEvents);
+    expect(rows[0]?.simulationSuccess).toBe(true);
+  });
+});

@@ -5,6 +5,7 @@ import type { PlaybookPlan } from '../playbooks.js';
 import { KeeperHubExecutor, type KeeperHubSubmitter } from './keeperhub.js';
 import { SignerExecutor } from './signer.js';
 import { RoutingExecutor } from './routing.js';
+import { WorkflowExecutor, type WorkflowClient } from './workflow.js';
 import { ReceiptVerifier } from './verify.js';
 
 const ACCOUNT = privateKeyToAccount(`0x${'1'.repeat(64)}`);
@@ -75,7 +76,7 @@ describe('KeeperHubExecutor', () => {
       recipientAddress: OTHER,
       amount: '1',
     });
-    expect(result).toEqual({ txHash: TX, keeperHubActionId: 'exec-1' });
+    expect(result).toMatchObject({ txHash: TX, keeperHubActionId: 'exec-1', executor: 'keeperhub' });
   });
 
   it('sends an ABI-level call through the contract-call endpoint', async () => {
@@ -126,7 +127,7 @@ describe('KeeperHubExecutor', () => {
       plan: submitPlan({ call: { functionName: 'pause', args: [] } }),
       incident: incident(),
     });
-    expect(result).toEqual({ txHash: TX, keeperHubActionId: 'exec-2' });
+    expect(result).toMatchObject({ txHash: TX, keeperHubActionId: 'exec-2', executor: 'keeperhub' });
     expect(getExecutionStatus).toHaveBeenCalledTimes(2);
   });
 
@@ -143,10 +144,9 @@ describe('KeeperHubExecutor', () => {
       hashLookupAttempts: 3,
       sleep: async () => {},
     });
-    await expect(executor.submit({ plan: submitPlan(), incident: incident() })).resolves.toEqual({
-      txHash: TX,
-      keeperHubActionId: 'exec-3',
-    });
+    await expect(
+      executor.submit({ plan: submitPlan(), incident: incident() }),
+    ).resolves.toMatchObject({ txHash: TX, keeperHubActionId: 'exec-3', executor: 'keeperhub' });
   });
 });
 
@@ -170,7 +170,7 @@ describe('SignerExecutor', () => {
       plan: submitPlan({ nonce: 41, maxFeePerGas: 999n, maxPriorityFeePerGas: 5n }),
       incident: incident(),
     });
-    expect(result).toEqual({ txHash: TX });
+    expect(result).toEqual({ txHash: TX, executor: 'signer' });
     expect(sendTransaction).toHaveBeenCalledWith(
       expect.objectContaining({ nonce: 41, maxFeePerGas: 999n, maxPriorityFeePerGas: 5n }),
     );
@@ -266,5 +266,166 @@ describe('ReceiptVerifier', () => {
   it('refuses to verify on a chain it has no RPC for', () => {
     const verifier = new ReceiptVerifier({});
     expect(() => verifier.client(CHAIN_IDS.base)).toThrow(/No RPC URL configured/i);
+  });
+});
+
+describe('WorkflowExecutor', () => {
+  const stubClient = (over: Partial<WorkflowClient> = {}): WorkflowClient => ({
+    listWorkflows: vi.fn(async () => []),
+    createWorkflow: vi.fn(async () => ({ id: 'wf-1' })),
+    patchWorkflow: vi.fn(async () => {}),
+    executeWorkflow: vi.fn(async () => ({ executionId: 'exec-1' })),
+    getWorkflowExecution: vi.fn(async () => ({
+      status: 'success',
+      error: null,
+      logs: [{ nodeType: 'web3/write-contract', status: 'success', output: { transactionHash: TX } }],
+    })),
+    ...over,
+  });
+
+  const executor = (client: WorkflowClient) =>
+    new WorkflowExecutor(client, verifier(), { sleep: async () => {}, pollAttempts: 3 });
+
+  const pausePlan = submitPlan({
+    call: { functionName: 'pause', args: [] },
+    description: 'pause the circuit breaker',
+  });
+
+  it('provisions a workflow, enables it, runs it and returns the real hash', async () => {
+    const client = stubClient();
+    const result = await executor(client).submit({ plan: pausePlan, incident: incident() });
+
+    expect(client.createWorkflow).toHaveBeenCalled();
+    // Creation leaves a workflow disabled and drops node config; only PATCH
+    // persists both.
+    expect(client.patchWorkflow).toHaveBeenCalledWith('wf-1', expect.objectContaining({ enabled: true }));
+    expect(result).toEqual({
+      txHash: TX,
+      keeperHubActionId: 'exec-1',
+      executor: 'keeperhub-workflow',
+    });
+  });
+
+  it('uses the field names workflow actions want, not the Direct Execution ones', async () => {
+    const client = stubClient();
+    await executor(client).submit({ plan: pausePlan, incident: incident() });
+
+    const nodes = (client.createWorkflow as ReturnType<typeof vi.fn>).mock.calls[0][0].nodes;
+    const config = nodes[1].data.config;
+    expect(config.abiFunction).toBe('pause');
+    expect(config.args).toBe('[]');
+    expect(config.functionName).toBeUndefined();
+    expect(config.functionArgs).toBeUndefined();
+  });
+
+  it('reuses a workflow that already exists rather than piling up duplicates', async () => {
+    const name = WorkflowExecutor.workflowName({
+      playbookId: 'remediation',
+      chainId: CHAIN_IDS.sepolia,
+      to: OTHER,
+      functionName: 'pause',
+    });
+    const client = stubClient({ listWorkflows: vi.fn(async () => [{ id: 'wf-existing', name }]) });
+
+    const result = await executor(client).submit({ plan: pausePlan, incident: incident() });
+    expect(client.createWorkflow).not.toHaveBeenCalled();
+    expect(client.executeWorkflow).toHaveBeenCalledWith('wf-existing', expect.anything());
+    expect(result.keeperHubActionId).toBe('exec-1');
+  });
+
+  it('looks a workflow up once and then remembers it', async () => {
+    const client = stubClient();
+    const e = executor(client);
+    await e.submit({ plan: pausePlan, incident: incident() });
+    await e.submit({ plan: pausePlan, incident: incident() });
+    expect(client.listWorkflows).toHaveBeenCalledTimes(1);
+    expect(client.createWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a plan that needs a specific nonce', async () => {
+    // Workflow actions run through the same sponsored relayer.
+    await expect(
+      executor(stubClient()).submit({ plan: submitPlan({ nonce: 41 }), incident: incident() }),
+    ).rejects.toThrow(/sponsored relayer/i);
+  });
+
+  it('fails fast on a failed run instead of polling to the timeout', async () => {
+    const getWorkflowExecution = vi.fn(async () => ({
+      status: 'error',
+      error: 'Missing `abiFunction` in the step config',
+      logs: [],
+    }));
+    await expect(
+      executor(stubClient({ getWorkflowExecution })).submit({
+        plan: pausePlan,
+        incident: incident(),
+      }),
+    ).rejects.toThrow(/abiFunction/);
+    expect(getWorkflowExecution).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps polling while the run is still going', async () => {
+    const getWorkflowExecution = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 'running', error: null, logs: [] })
+      .mockResolvedValueOnce({
+        status: 'success',
+        error: null,
+        logs: [{ nodeType: 'web3/write-contract', status: 'success', output: { transactionHash: TX } }],
+      });
+    const result = await executor(stubClient({ getWorkflowExecution })).submit({
+      plan: pausePlan,
+      incident: incident(),
+    });
+    expect(result.txHash).toBe(TX);
+  });
+
+  it('refuses to report a remediation when the run yields no hash', async () => {
+    const getWorkflowExecution = vi.fn(async () => ({ status: 'running', error: null, logs: [] }));
+    await expect(
+      executor(stubClient({ getWorkflowExecution })).submit({
+        plan: pausePlan,
+        incident: incident(),
+      }),
+    ).rejects.toThrow(/no transaction hash/i);
+  });
+
+  it('builds a transfer node for a value-only plan', async () => {
+    const client = stubClient();
+    await executor(client).submit({
+      plan: submitPlan({ value: 1_000_000n, description: 'top up the signer' }),
+      incident: incident(),
+    });
+    const nodes = (client.createWorkflow as ReturnType<typeof vi.fn>).mock.calls[0][0].nodes;
+    expect(nodes[1].data.config.actionType).toBe('web3/transfer-funds');
+    expect(nodes[1].data.config.amount).toBe('1000000');
+  });
+
+  it('names a workflow after the work, not the incident', () => {
+    const a = WorkflowExecutor.workflowName({ playbookId: 'P4', chainId: 1, to: '0xAbC', functionName: 'pause' });
+    const b = WorkflowExecutor.workflowName({ playbookId: 'P4', chainId: 1, to: '0xabc', functionName: 'pause' });
+    // Otherwise every incident leaves another workflow in the dashboard.
+    expect(a).toBe(b);
+  });
+});
+
+describe('RoutingExecutor with workflows', () => {
+  const workflow = { submit: vi.fn(), verify: vi.fn() };
+  const kh = { submit: vi.fn(), verify: vi.fn() };
+  const signer = { submit: vi.fn(), verify: vi.fn(), holdsKeyFor: () => true };
+
+  it('prefers a workflow over direct execution when no nonce is needed', () => {
+    const router = new RoutingExecutor({ workflow, keeperHub: kh, signer });
+    expect(router.route(submitPlan(), incident())).toBe(workflow);
+  });
+
+  it('still sends a nonce-precise plan to the key holder', () => {
+    const router = new RoutingExecutor({ workflow, keeperHub: kh, signer });
+    expect(router.route(submitPlan({ nonce: 41 }), incident())).toBe(signer);
+  });
+
+  it('falls back to direct execution when no workflow client exists', () => {
+    const router = new RoutingExecutor({ keeperHub: kh, signer });
+    expect(router.route(submitPlan(), incident())).toBe(kh);
   });
 });

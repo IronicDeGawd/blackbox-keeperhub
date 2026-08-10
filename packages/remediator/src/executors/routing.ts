@@ -20,32 +20,42 @@ type Submit = Extract<PlaybookPlan, { kind: 'submit' }>;
 export class RoutingExecutor implements RemediationExecutor {
   constructor(
     private readonly options: {
+      /**
+       * Preferred for anything that does not need a nonce. A remediation that
+       * runs as a KeeperHub workflow lands in the operator's own dashboard with
+       * per-node logs and their existing spend controls, rather than in a side
+       * channel only Blackbox can see.
+       */
+      workflow?: RemediationExecutor;
       keeperHub?: RemediationExecutor;
       signer?: RemediationExecutor & { holdsKeyFor(signer: string): boolean };
     },
   ) {}
 
   route(plan: Submit, incident: Incident): RemediationExecutor {
-    const { keeperHub, signer } = this.options;
+    const { workflow, keeperHub, signer } = this.options;
     const haveKey = signer?.holdsKeyFor(incident.signer) ?? false;
 
     if (plan.nonce !== undefined) {
       if (!haveKey) {
         throw new Error(
           `Plan "${plan.description}" needs nonce ${plan.nonce} on ${incident.signer}. ` +
-            `KeeperHub submits through a sponsored relayer at the sponsor's nonce, so it cannot ` +
-            `serve this plan, and no key is held for that signer. Register the signer's key with ` +
-            `Blackbox to enable nonce-precise remediation.`,
+            `KeeperHub executes through a sponsored relayer at the sponsor's nonce — as a workflow ` +
+            `action or a direct call alike — so neither can serve this plan, and no key is held ` +
+            `for that signer. Register the signer's key, or have its owner sign the plan.`,
         );
       }
       return signer!;
     }
 
+    // Workflow first: same execution engine, but visible and governable where
+    // the operator already works.
+    if (workflow) return workflow;
     if (keeperHub) return keeperHub;
     if (haveKey) return signer!;
     throw new Error(
-      `No executor available for "${plan.description}": KeeperHub is not configured and no key ` +
-        `is held for ${incident.signer}`,
+      `No executor available for "${plan.description}": no KeeperHub workflow or direct execution ` +
+        `is configured, and no key is held for ${incident.signer}`,
     );
   }
 
@@ -59,7 +69,7 @@ export class RoutingExecutor implements RemediationExecutor {
     RemediationExecutor['verify']
   > {
     // Verification is a receipt lookup, identical whichever path submitted.
-    const executor = this.options.keeperHub ?? this.options.signer;
+    const executor = this.options.workflow ?? this.options.keeperHub ?? this.options.signer;
     if (!executor) throw new Error('No executor configured to verify with');
     return executor.verify(params);
   }

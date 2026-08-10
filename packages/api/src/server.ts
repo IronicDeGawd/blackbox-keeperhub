@@ -9,6 +9,7 @@ import {
   Remediator,
   RoutingExecutor,
   SignerExecutor,
+  WorkflowExecutor,
 } from '@blackbox/remediator';
 import { createDb, getIncident, type Database } from '@blackbox/store';
 import { buildApp, type ChaosScenario } from './app.js';
@@ -123,16 +124,21 @@ const keeperHubExecutor = keeperHub
     )
   : undefined;
 
+// Workflows are the preferred path: the remediation becomes a run in the
+// operator's own KeeperHub dashboard rather than a call only Blackbox can see.
+const workflowExecutor = keeperHub ? new WorkflowExecutor(keeperHub, verifier) : undefined;
+
 const signerExecutor = signerAccount
   ? new SignerExecutor([signerAccount], { [chainId]: rpcUrl }, verifier)
   : undefined;
 
-const canRemediate = Boolean(keeperHubExecutor ?? signerExecutor);
+const canRemediate = Boolean(workflowExecutor ?? keeperHubExecutor ?? signerExecutor);
 const remediator = canRemediate
   ? new Remediator({
       db,
       config,
       executor: new RoutingExecutor({
+        ...(workflowExecutor ? { workflow: workflowExecutor } : {}),
         ...(keeperHubExecutor ? { keeperHub: keeperHubExecutor } : {}),
         ...(signerExecutor ? { signer: signerExecutor } : {}),
       }),

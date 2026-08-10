@@ -280,6 +280,87 @@ export class KeeperHubClient {
     return this.parseExecution(res.body);
   }
 
+  // --- workflows ------------------------------------------------------------
+  // The route surface here is not what the reference implies. `POST /api/
+  // workflows` is 405; creation is `/api/workflows/create`. Updates are PATCH —
+  // `PUT` is 405, and `PUT /go-live` answers 200 while silently ignoring node
+  // changes, which is the worst of both. All established by probing.
+
+  async listWorkflows(): Promise<{ id: string; name: string; enabled?: boolean }[]> {
+    const res = await this.request<{ id: string; name: string; enabled?: boolean }[]>('/workflows');
+    if (res.status !== 200) throw new KeeperHubError('listWorkflows failed', res.status, res.body);
+    return res.body ?? [];
+  }
+
+  async createWorkflow(definition: {
+    name: string;
+    description?: string;
+    nodes: unknown[];
+    edges: unknown[];
+  }): Promise<{ id: string }> {
+    const res = await this.request<{ id: string }>('/workflows/create', {
+      method: 'POST',
+      body: definition,
+    });
+    if (res.status >= 400) {
+      throw new KeeperHubError('createWorkflow failed', res.status, res.body);
+    }
+    return res.body;
+  }
+
+  /** Update nodes, edges or `enabled`. The only route that actually persists them. */
+  async patchWorkflow(id: string, definition: Record<string, unknown>): Promise<void> {
+    const res = await this.request(`/workflows/${id}`, { method: 'PATCH', body: definition });
+    if (res.status >= 400) {
+      throw new KeeperHubError('patchWorkflow failed', res.status, res.body);
+    }
+  }
+
+  async executeWorkflow(
+    id: string,
+    input: Record<string, unknown> = {},
+  ): Promise<{ executionId: string; status: string }> {
+    const res = await this.request<{ executionId: string; status: string }>(
+      `/workflows/${id}/execute`,
+      { method: 'POST', body: { input } },
+    );
+    if (res.status >= 400 || !res.body?.executionId) {
+      throw new KeeperHubError('executeWorkflow failed', res.status, res.body);
+    }
+    return res.body;
+  }
+
+  /**
+   * Per-node results for one workflow run.
+   *
+   * This is where a transaction hash appears — the execute call answers only
+   * with an id and `running`, so a caller that needs the hash has to come back
+   * here for it.
+   */
+  async getWorkflowExecution(executionId: string): Promise<{
+    status: string;
+    error: string | null;
+    logs: {
+      nodeId: string;
+      nodeType: string;
+      status: string;
+      output?: { transactionHash?: string; gasUsed?: string; sponsored?: boolean } | null;
+    }[];
+  }> {
+    const res = await this.request<{
+      execution: { status: string; error: string | null };
+      logs?: unknown[];
+    }>(`/workflows/executions/${executionId}/logs`);
+    if (res.status !== 200) {
+      throw new KeeperHubError('getWorkflowExecution failed', res.status, res.body);
+    }
+    return {
+      status: res.body.execution.status,
+      error: res.body.execution.error,
+      logs: (res.body.logs ?? []) as never[],
+    };
+  }
+
   async getExecutionStatus(executionId: string): Promise<KeeperHubExecution> {
     const res = await this.request<unknown>(`/execute/${executionId}/status`);
     if (res.status !== 200) {

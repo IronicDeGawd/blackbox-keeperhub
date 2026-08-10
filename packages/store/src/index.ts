@@ -132,9 +132,28 @@ export async function insertEvents(db: Database, events: readonly ExecutionEvent
   const inserted = await db
     .insert(executionEvents)
     .values(rows)
-    .onConflictDoNothing({ target: [executionEvents.sourceId, executionEvents.attemptIndex] })
-    .returning({ id: executionEvents.id });
-  return inserted.length;
+    .onConflictDoUpdate({
+      target: [executionEvents.sourceId, executionEvents.attemptIndex],
+      // A transaction observed while pending settles later, and the settled
+      // observation is the one the rules need — several of them only fire on a
+      // terminal outcome. Ignoring the conflict froze the first snapshot
+      // forever: a retry storm ingested mid-flight stayed four `pending` rows
+      // and R5 could never see it. Only pending rows are updated, so a terminal
+      // outcome is never walked back by a late or stale poll.
+      set: {
+        outcomeStatus: sql`excluded.outcome_status`,
+        blockNumber: sql`excluded.block_number`,
+        outcome: sql`excluded.outcome`,
+        simulation: sql`excluded.simulation`,
+        simulationSuccess: sql`excluded.simulation_success`,
+      },
+      setWhere: eq(executionEvents.outcomeStatus, 'pending'),
+    })
+    // `xmax = 0` is true only for a genuine insert, so the count keeps meaning
+    // "events seen for the first time". A settling update is not news — the
+    // rules re-evaluate the whole window every tick regardless.
+    .returning({ id: executionEvents.id, isNew: sql<boolean>`xmax = 0` });
+  return inserted.filter((r) => r.isNew).length;
 }
 
 /** The per-signer sliding window the rules evaluate, oldest first. */
