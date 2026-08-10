@@ -333,6 +333,7 @@ const app = await buildApp({
         chainId: requested,
         signer,
         state,
+        tickSeconds: Math.round(Number(env['BLACKBOX_TICK_MS'] ?? 15_000) / 1000),
         ...(env['CHAOS_TARGET_ADDRESS'] ? { chaosTarget: env['CHAOS_TARGET_ADDRESS'] } : {}),
       });
     },

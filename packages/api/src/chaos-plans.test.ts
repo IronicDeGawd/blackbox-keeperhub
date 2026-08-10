@@ -74,6 +74,19 @@ describe('planChaos', () => {
     expect(plan.steps).toEqual([]);
   });
 
+  it('quotes a slower detection for the nonce gap, which waits to be confirmed', () => {
+    // R2 will not call a gap real until it has persisted, so promising the
+    // same latency as a mined failure would read as a broken demo.
+    const gap = planChaos('C2', ctx()).expectedDetectionSeconds;
+    expect(gap).toBeGreaterThan(planChaos('C4', ctx()).expectedDetectionSeconds);
+    expect(gap).toBeGreaterThanOrEqual(90);
+  });
+
+  it('scales the estimate with the poll interval of this process', () => {
+    const slow = planChaos('C2', ctx({ tickSeconds: 30 })).expectedDetectionSeconds;
+    expect(slow).toBe(planChaos('C2', ctx({ tickSeconds: 15 })).expectedDetectionSeconds * 2);
+  });
+
   it('tells the caller to report the hashes, since a queued tx is in no block', () => {
     expect(planChaos('C2', ctx()).reportTo.path).toBe('/api/chaos/observe');
   });

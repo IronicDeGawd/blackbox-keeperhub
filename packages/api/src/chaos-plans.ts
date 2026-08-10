@@ -74,6 +74,8 @@ export type PlanContext = {
   state: ChainState;
   /** Deployed ChaosTarget, required by the contract-level scenarios. */
   chaosTarget?: string;
+  /** This process's poll interval, which is what detection latency is made of. */
+  tickSeconds?: number;
 };
 
 /** `armTrap()`, `work()`, `alwaysRevert()` — verified with `cast sig`. */
@@ -90,11 +92,23 @@ export type PlannableScenario = (typeof PLANNABLE_SCENARIOS)[number];
 
 export function planChaos(scenario: string, ctx: PlanContext): ChaosPlan {
   const chain = getChain(ctx.chainId);
+  // Measured, not guessed. A mined failure is seen on the tick after it lands;
+  // a nonce gap is deliberately slower, because R2 refuses to call a gap real
+  // until it has persisted across several polls — a gap seen once is just a
+  // transaction in flight. A live run took about ninety seconds.
+  const tick = ctx.tickSeconds ?? 15;
+  const detectionSeconds: Record<string, number> = {
+    C1: tick * 4,
+    C2: tick * 6,
+    C3: tick * 3,
+    C4: tick * 3,
+  };
+
   const base: Omit<ChaosPlan, 'induces' | 'expect' | 'steps'> = {
     scenario,
     chainId: ctx.chainId,
     signer: ctx.signer,
-    expectedDetectionSeconds: 45,
+    expectedDetectionSeconds: detectionSeconds[scenario] ?? tick * 4,
     reportTo: { method: 'POST', path: '/api/chaos/observe', field: 'txHashes' },
   };
 
