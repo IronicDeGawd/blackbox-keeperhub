@@ -134,6 +134,10 @@ const eth = (wei: unknown): string => {
  * to act on without opening the incident.
  */
 export function summarise(row: IncidentRow): string {
+  // Fact keys must match what the rules actually emit. They drifted once —
+  // `runwayActions` for R6's `projectedActionsRemaining` — and the only symptom
+  // was the word "unknown" in a timeline row, which reads like missing data
+  // rather than a bug. `summarise.test.ts` pins them.
   const facts = ((row.evidence as Evidence)?.facts ?? {}) as Record<string, unknown>;
   const n = (key: string): string => String(facts[key] ?? 'unknown');
 
@@ -145,7 +149,7 @@ export function summarise(row: IncidentRow): string {
       return `Nonce ${list} unfilled; ${blocked ?? 'unknown'} action(s) blocked behind it`;
     }
     case 'STUCK_TRANSACTION': {
-      const ms = Number(facts['pendingForMs']);
+      const ms = Number(facts['pendingDurationMs']);
       const pending = Number.isFinite(ms) ? `${Math.round(ms / 1000)}s` : 'an unknown time';
       return `Transaction pending ${pending} at nonce ${n('nonce')}`;
     }
@@ -156,9 +160,9 @@ export function summarise(row: IncidentRow): string {
     case 'RETRY_STORM':
       return `${n('attemptCount')} failed attempts at one action, burning ${eth(facts['totalGasBurned'])}`;
     case 'SIGNER_GAS_STARVED':
-      return `Balance ${eth(facts['signerBalance'])} covers ${n('runwayActions')} further action(s)`;
+      return `Balance ${eth(facts['signerBalance'])} covers ${n('projectedActionsRemaining')} further action(s)`;
     case 'ADVERSE_INCLUSION':
-      return `Executed ${n('slippageBps')} bps worse than quoted`;
+      return `Executed ${n('deltaBps')} bps worse than quoted`;
     default:
       return `${row.class} detected by ${row.ruleId}`;
   }

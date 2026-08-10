@@ -6,8 +6,9 @@ import {
   type PublicClient,
   type WalletClient,
 } from 'viem';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { assertChaosAllowed, getChain } from '@blackbox/core';
-import { watchTransaction, type Database } from '@blackbox/store';
+import { watchSigner, watchTransaction, type Database } from '@blackbox/store';
 
 /**
  * Chaos scenarios induce real failures against real chains.
@@ -379,48 +380,96 @@ export class ChaosHarness {
    * to zero: a signer at zero cannot even submit the transaction that would
    * demonstrate the problem, and R6 is about runway, not emptiness.
    */
-  async c5GasStarve(params: { keepWei?: bigint } = {}): Promise<ScenarioResult> {
+  /**
+   * C5 — gas starvation, against a wallet created for the purpose.
+   *
+   * The obvious implementation sweeps the chaos signer itself, and that is why
+   * the first version of this was written and never run: it blocks every other
+   * scenario until someone refunds it by hand.
+   *
+   * This funds a throwaway wallet, has it do a little work so R6 has a real
+   * cost history to take a median from, then sweeps it down to dust. Not to
+   * zero — a signer at zero cannot submit the transaction that would prove the
+   * problem, and the rule is about runway rather than emptiness.
+   *
+   * The wallet is registered for observation before it is funded, because
+   * discovery starts at the block it was registered at.
+   */
+  async c5GasStarve(params: { workCount?: number; fundingWei?: bigint } = {}): Promise<ScenarioResult> {
     assertChaosAllowed(this.options.chainId);
-    const sweepTo = this.options.sweepTo;
-    if (!sweepTo) {
-      throw new Error('C5 needs `sweepTo` — an address to move the signer\'s balance to');
-    }
 
-    const address = this.options.account.address;
-    const balance = await this.pub.getBalance({ address });
-    const block = await this.pub.getBlock({ blockTag: 'latest' });
-    const baseFee = block.baseFeePerGas ?? 1_000_000_000n;
-    const maxFeePerGas = baseFee * 2n + 1_000_000_000n;
-    const sweepCost = maxFeePerGas * 21_000n;
+    const victimKey = generatePrivateKey();
+    const victim = privateKeyToAccount(victimKey);
+    const victimWallet = createWalletClient({
+      account: victim,
+      transport: http(this.options.rpcUrl),
+    });
 
-    // Leave under one action of runway, having paid for this transaction.
-    const keep = params.keepWei ?? sweepCost / 2n;
-    const value = balance - sweepCost - keep;
-    if (value <= 0n) {
-      throw new Error(
-        `Signer already holds too little to sweep: balance ${balance} wei does not cover ` +
-          `the sweep itself (${sweepCost} wei) plus the ${keep} wei to leave behind.`,
-      );
-    }
+    await watchSigner(this.options.db, {
+      signer: victim.address,
+      chainId: this.options.chainId,
+      agentId: `${this.agentId}-starved`,
+      label: 'C5 victim',
+      at: this.now(),
+    });
 
-    const hash = await this.wallet.sendTransaction({
+    const fees = async (): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }> => {
+      const block = await this.pub.getBlock({ blockTag: 'latest' });
+      const baseFee = block.baseFeePerGas ?? 1_000_000_000n;
+      return { maxFeePerGas: baseFee * 2n + 1_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n };
+    };
+
+    const hashes: `0x${string}`[] = [];
+    const funding = params.fundingWei ?? 400_000_000_000_000n; // 0.0004 ETH
+    const fundHash = await this.wallet.sendTransaction({
       account: this.options.account,
       chain: null,
-      to: sweepTo,
-      value,
-      maxFeePerGas,
-      maxPriorityFeePerGas: 1_000_000_000n,
+      to: victim.address,
+      value: funding,
+      ...(await fees()),
     });
-    await this.register(hash, 'C5');
+    await this.pub.waitForTransactionReceipt({ hash: fundHash });
+    hashes.push(fundHash);
 
+    // Work, so the median cost R6 compares against is measured rather than
+    // assumed.
+    for (let i = 0; i < (params.workCount ?? 3); i++) {
+      const hash = await victimWallet.sendTransaction({
+        account: victim,
+        chain: null,
+        to: victim.address,
+        value: 0n,
+        ...(await fees()),
+      });
+      await this.pub.waitForTransactionReceipt({ hash });
+      hashes.push(hash);
+    }
+
+    const balance = await this.pub.getBalance({ address: victim.address });
+    const f = await fees();
+    const sweepCost = f.maxFeePerGas * 21_000n;
+    const keep = sweepCost / 3n;
+    const value = balance - sweepCost - keep;
+    if (value > 0n) {
+      const sweepHash = await victimWallet.sendTransaction({
+        account: victim,
+        chain: null,
+        to: this.options.account.address,
+        value,
+        ...f,
+      });
+      await this.pub.waitForTransactionReceipt({ hash: sweepHash });
+      hashes.push(sweepHash);
+    }
+
+    const left = await this.pub.getBalance({ address: victim.address });
     return {
       scenario: 'C5',
-      txHashes: [hash],
+      txHashes: hashes,
       detail: {
-        sweptWei: value.toString(),
-        keptWei: keep.toString(),
-        balanceBeforeWei: balance.toString(),
-        sweepTo,
+        victim: victim.address,
+        remainingWei: left.toString(),
+        note: 'a wallet made for this run, so no shared signer is drained',
       },
     };
   }

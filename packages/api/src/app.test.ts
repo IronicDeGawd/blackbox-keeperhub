@@ -341,9 +341,9 @@ describe('config', () => {
 describe('summarise', () => {
   it.each([
     ['NONCE_GAP', { missingNonces: [47], blockedActionCount: 1 }, 'Nonce 47 unfilled'],
-    ['STUCK_TRANSACTION', { nonce: 5, pendingForMs: 252_000 }, 'pending 252s'],
+    ['STUCK_TRANSACTION', { nonce: 5, pendingDurationMs: 252_000 }, 'pending 252s'],
     ['RETRY_STORM', { attemptCount: 4, totalGasBurned: '89000000000000' }, '0.000089 ETH'],
-    ['SIGNER_GAS_STARVED', { signerBalance: '900000000000000', runwayActions: 0 }, '0.000900 ETH'],
+    ['SIGNER_GAS_STARVED', { signerBalance: '900000000000000', projectedActionsRemaining: 0 }, '0.000900 ETH'],
     ['SIM_PASS_EXEC_REVERT', { simulatedAtBlock: 10, includedAtBlock: 11 }, 'reverted at 11'],
   ])('writes a specific line for %s', (cls, facts, expected) => {
     const line = summarise({
@@ -394,5 +394,48 @@ describe('the SSE contract', () => {
     bus.publish({ type: 'incident.created', data: {} });
     expect(seen).toEqual([]);
     expect(bus.subscriberCount).toBe(0);
+  });
+});
+
+describe('summary fact names match what the rules emit', () => {
+  // A renamed fact shows up as "unknown" in the timeline, which reads like
+  // missing data rather than a wrong key. These use the exact fact names from
+  // packages/detector/src/rules.ts.
+  const line = (cls: string, facts: Record<string, unknown>) =>
+    summarise({
+      ...row({ class: cls, evidence: { eventIds: ['e0'], ruleId: 'R1', facts } }),
+      resolvedAt: null,
+      resolvedBy: null,
+      rca: null,
+      remediation: null,
+    } as never);
+
+  it('R1 reads pendingDurationMs', () => {
+    expect(line('STUCK_TRANSACTION', { nonce: 5, pendingDurationMs: 252_000 })).toContain('252s');
+  });
+
+  it('R6 reads projectedActionsRemaining', () => {
+    const text = line('SIGNER_GAS_STARVED', {
+      signerBalance: '38886020810000',
+      projectedActionsRemaining: 0,
+    });
+    expect(text).toContain('covers 0 further');
+    expect(text).not.toContain('unknown');
+  });
+
+  it('R7 reads deltaBps', () => {
+    expect(line('ADVERSE_INCLUSION', { deltaBps: 410 })).toContain('410 bps');
+  });
+
+  it('R2 reads missingNonces and blockedActionCount', () => {
+    expect(line('NONCE_GAP', { missingNonces: [47], blockedActionCount: 1 })).toContain(
+      'Nonce 47 unfilled; 1 action',
+    );
+  });
+
+  it('R5 reads attemptCount and totalGasBurned', () => {
+    expect(line('RETRY_STORM', { attemptCount: 4, totalGasBurned: '89000000000000' })).toContain(
+      '4 failed attempts',
+    );
   });
 });

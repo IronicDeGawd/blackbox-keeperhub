@@ -199,7 +199,7 @@ const SCENARIOS: ChaosScenario[] = [
   { id: 'C2', name: 'Nonce gap', induces: ['NONCE_GAP'], enabled: true, deterministic: true, note: 'The reliable one. Detected within two polls.' },
   { id: 'C3', name: 'Simulation passes, execution reverts', induces: ['SIM_PASS_EXEC_REVERT'], enabled: true, deterministic: true, note: 'Arms a trap that springs one block later.' },
   { id: 'C4', name: 'Retry storm', induces: ['RETRY_STORM'], enabled: true, deterministic: true, note: 'Four attempts at a call that always reverts.' },
-  { id: 'C5', name: 'Signer gas starvation', induces: ['SIGNER_GAS_STARVED'], enabled: false, deterministic: true, note: 'Sweeps the signer below one action of runway, which blocks every later scenario until it is refunded.' },
+  { id: 'C5', name: 'Signer gas starvation', induces: ['SIGNER_GAS_STARVED'], enabled: true, deterministic: true, note: 'Funds a wallet made for the run, works it, then sweeps it to dust. No shared signer is drained.' },
   { id: 'C6', name: 'Adverse inclusion', induces: ['ADVERSE_INCLUSION'], enabled: false, deterministic: false, note: 'Needs controllable block ordering; local fork only.' },
 ];
 
@@ -215,6 +215,8 @@ async function runScenario(id: string): Promise<{ runId: string; txHashes: strin
       return { runId, txHashes: (await harness.c3SimPassExecRevert()).txHashes };
     case 'C4':
       return { runId, txHashes: (await harness.c4RetryStorm(4)).txHashes };
+    case 'C5':
+      return { runId, txHashes: (await harness.c5GasStarve()).txHashes };
     default:
       throw new Error(`scenario ${id} cannot be run from here`);
   }
