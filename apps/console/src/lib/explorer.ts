@@ -23,6 +23,26 @@ export function explorerTxUrl(
   return chain.explorerTxUrl.replace('{hash}', hash);
 }
 
+/**
+ * An address link, derived from the transaction template.
+ *
+ * The registry only publishes `explorerTxUrl`, and every explorer it names uses
+ * the sibling `/address/` path. Derived rather than hardcoded per chain, and it
+ * returns null instead of guessing when the template is not that shape.
+ */
+export function explorerAddressUrl(
+  chains: ChainConfig[],
+  chainId: number,
+  address: string | null | undefined,
+): string | null {
+  if (!address) return null;
+
+  const template = chains.find((c) => c.chainId === chainId)?.explorerTxUrl;
+  if (!template?.includes('/tx/')) return null;
+
+  return template.replace('/tx/', '/address/').replace('{hash}', address);
+}
+
 export function chainOf(chains: ChainConfig[], chainId: number): ChainConfig | null {
   return chains.find((c) => c.chainId === chainId) ?? null;
 }

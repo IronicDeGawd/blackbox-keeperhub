@@ -284,6 +284,90 @@ export type RemediationTxResult = {
   explorerUrl: string;
 };
 
+// -------------------------------------------------------------------- watched
+
+export type WatchedAddress = {
+  signer: string;
+  chainId: number;
+  agentId: string;
+  label: string | null;
+  registeredAt: string;
+};
+
+// ------------------------------------------------------------------- diagnose
+
+export type DiagnoseSimulation = {
+  performed: boolean;
+  success: boolean | null;
+  simulatedAtBlock: number | null;
+  note?: string;
+};
+
+/**
+ * One transaction explained, with nothing registered.
+ *
+ * Three shapes share this type: not found, found with no rule fired, and found
+ * and classified. `found` and `class` decide which, and the fields belonging to
+ * the other two are simply absent.
+ */
+export type DiagnoseResult = {
+  txHash: string;
+  chainId: number;
+  chain?: string;
+  found: boolean;
+  detail?: string;
+  signer?: string;
+  nonce?: number;
+  status?: string;
+  blockNumber?: number;
+  simulation?: DiagnoseSimulation;
+  explorerUrl?: string;
+  class?: IncidentClass | null;
+  severity?: Severity;
+  confidence?: number;
+  ruleId?: RuleId;
+  facts?: Record<string, unknown>;
+  rca?: Rca | null;
+  rcaSource?: string;
+  /** What was examined to conclude nothing is wrong. */
+  checked?: {
+    latestNonce?: number;
+    pendingNonce?: number;
+    missingNonces?: number[];
+    balanceWei?: string;
+  };
+};
+
+// ---------------------------------------------------------------------- chaos
+
+export type ChaosScenario = {
+  id: string;
+  name: string;
+  induces: string[];
+  enabled: boolean;
+  deterministic: boolean;
+  /** Why it does what it does — and, when disabled, why it cannot run. */
+  note: string;
+};
+
+export type ChaosContext = {
+  chainId: number;
+  chainName: string;
+  isTestnet: boolean;
+  signer: string;
+  signerBalanceWei: string;
+  targets: Record<string, string | null>;
+  items: ChaosScenario[];
+};
+
+export type ChaosRun = {
+  runId: string;
+  scenario: string;
+  txHashes: string[];
+  expectedIncidentClass?: string;
+  expectedDetectionSeconds?: number;
+};
+
 // ------------------------------------------------------------------------ sse
 
 export type ScanProgress = {

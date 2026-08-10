@@ -1,5 +1,8 @@
 import type {
   AppConfig,
+  ChaosContext,
+  ChaosRun,
+  DiagnoseResult,
   IncidentDetail,
   IncidentList,
   IncidentSummary,
@@ -7,6 +10,7 @@ import type {
   RemediationPlan,
   RemediationTxResult,
   Stats,
+  WatchedAddress,
 } from './types';
 
 /**
@@ -141,6 +145,40 @@ export const api = {
     request<RemediationTxResult>(`/api/incidents/${encodeURIComponent(id)}/remediation-tx`, {
       method: 'POST',
       body: JSON.stringify({ txHash }),
+    }),
+
+  watched: (init?: RequestInit): Promise<{ items: WatchedAddress[] }> =>
+    request<{ items: WatchedAddress[] }>('/api/watched', init),
+
+  /** 400 invalid_address or 400 unsupported_chain, both with a readable detail. */
+  watch: (body: {
+    signer: string;
+    chainId: number;
+    label?: string;
+    agentId?: string;
+  }): Promise<{ signer: string; chainId: number; watching: boolean }> =>
+    request('/api/watched', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** Stops discovery. Incidents already found are not removed. */
+  unwatch: (signer: string, chainId: number): Promise<{ watching: boolean }> =>
+    request(`/api/watched/${encodeURIComponent(signer)}?chainId=${chainId}`, {
+      method: 'DELETE',
+    }),
+
+  diagnose: (txHash: string, chainId?: number): Promise<DiagnoseResult> =>
+    request<DiagnoseResult>('/api/diagnose', {
+      method: 'POST',
+      body: JSON.stringify(chainId === undefined ? { txHash } : { txHash, chainId }),
+    }),
+
+  chaosScenarios: (init?: RequestInit): Promise<ChaosContext> =>
+    request<ChaosContext>('/api/chaos/scenarios', init),
+
+  /** 409 with the scenario's note as the detail when it cannot run. */
+  chaosRun: (scenario: string): Promise<ChaosRun> =>
+    request<ChaosRun>('/api/chaos/run', {
+      method: 'POST',
+      body: JSON.stringify({ scenario }),
     }),
 };
 

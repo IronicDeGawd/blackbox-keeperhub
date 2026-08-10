@@ -1,6 +1,6 @@
-import { FACT_KEYS, THRESHOLD_KEYS, THRESHOLD_OF, formatFact } from '../../lib/facts';
 import { formatConfidence, formatWei } from '../../lib/format';
 import type { Evidence as EvidenceType, IncidentClass } from '../../lib/types';
+import { FactsTable } from '../../ui/FactsTable';
 import { ClassBadge, RuleTag } from '../../ui/primitives';
 
 /**
@@ -23,15 +23,6 @@ export function Evidence({
   confidence: number;
 }): React.JSX.Element {
   const facts = evidence.facts ?? {};
-
-  // Documented order first so the panel reads the same for every incident of a
-  // class, then anything the rule emitted that the spec does not list.
-  const documented = FACT_KEYS[incidentClass] ?? [];
-  const extra = Object.keys(facts).filter((key) => !documented.includes(key));
-  const ordered = [...documented, ...extra].filter(
-    (key) => key in facts && !THRESHOLD_KEYS.has(key),
-  );
-
   const corroboration = evidence.corroboration ?? {};
   const corroborationKeys = Object.keys(corroboration) as (keyof typeof corroboration)[];
   const suppressed = evidence.suppressedRules ?? [];
@@ -48,37 +39,7 @@ export function Evidence({
         </div>
       </header>
 
-      <table className="facts">
-        <tbody>
-          {ordered.map((key) => {
-            const thresholdKey = THRESHOLD_OF[key];
-            const hasThreshold = thresholdKey !== undefined && thresholdKey in facts;
-            return (
-              <tr key={key}>
-                <th scope="row">{key}</th>
-                <td className="num" title={String(facts[key])}>
-                  {formatFact(key, facts[key])}
-                </td>
-                <td className="facts__threshold">
-                  {hasThreshold ? (
-                    <>
-                      <span className="dim">{thresholdKey}</span>{' '}
-                      <span className="num">{formatFact(thresholdKey, facts[thresholdKey])}</span>
-                    </>
-                  ) : null}
-                </td>
-              </tr>
-            );
-          })}
-          {ordered.length === 0 ? (
-            <tr>
-              <td colSpan={3} className="dim">
-                The rule recorded no facts.
-              </td>
-            </tr>
-          ) : null}
-        </tbody>
-      </table>
+      <FactsTable facts={facts} incidentClass={incidentClass} />
 
       {corroborationKeys.length > 0 ? (
         <div className="subsection">
