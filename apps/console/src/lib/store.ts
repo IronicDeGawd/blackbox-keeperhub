@@ -35,6 +35,12 @@ export type ConsoleState = {
   scan: ScanProgress | null;
   /** Set whenever the feed reopens, so the UI can say the list was replayed. */
   lastRefetchAt: string | null;
+  /**
+   * The last incident an event named, and when. The detail page watches this to
+   * re-read itself: an incident it is showing may not be in the filtered list
+   * at all, so the list is not a reliable signal that it changed.
+   */
+  lastTouched: { id: string; at: number } | null;
 };
 
 const initial: ConsoleState = {
@@ -47,6 +53,7 @@ const initial: ConsoleState = {
   error: null,
   scan: null,
   lastRefetchAt: null,
+  lastTouched: null,
 };
 
 let state: ConsoleState = initial;
@@ -138,11 +145,21 @@ async function loadStats(): Promise<void> {
 
 // ---------------------------------------------------------------------- events
 
+function touch(id: string): void {
+  set({ lastTouched: { id, at: Date.now() } });
+}
+
 function applyEvent(event: StreamEvent): void {
   switch (event.type) {
     case 'incident.created':
     case 'incident.updated':
       upsert(event.data);
+      touch(event.data.id);
+      break;
+
+    case 'remediation.started':
+    case 'remediation.failed':
+      touch(event.data.incidentId);
       break;
 
     case 'stats.updated':
@@ -164,6 +181,7 @@ function applyEvent(event: StreamEvent): void {
           : incident,
       );
       set({ incidents });
+      touch(incidentId);
       break;
     }
 

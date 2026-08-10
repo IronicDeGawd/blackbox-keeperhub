@@ -1,0 +1,223 @@
+/* The incident detail page: header, evidence, events. */
+
+.incident__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.incident__title {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.incident__summary {
+  margin: 0;
+  font-size: 15px;
+  color: var(--ink);
+  max-width: 80ch;
+}
+
+.incident__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s6);
+  margin: 0;
+  padding: var(--s3) 0 0;
+  border-top: 1px solid var(--rule);
+}
+
+.incident__meta dt {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.incident__meta dd {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+/* --- sections ------------------------------------------------------------ */
+
+.section {
+  padding: var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.section__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.section__title {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.section__gap {
+  flex: 1;
+}
+
+.section__empty {
+  margin: 0;
+  max-width: 80ch;
+}
+
+.subsection {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.subsection__note {
+  margin: 0;
+  max-width: 80ch;
+  font-size: 12.5px;
+}
+
+.skeleton-panel {
+  height: 220px;
+  animation: skeleton-fade 1.4s ease-in-out infinite;
+}
+
+/* --- facts --------------------------------------------------------------- */
+
+.facts {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.facts th,
+.facts td {
+  text-align: left;
+  padding: 4px var(--s3) 4px 0;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+
+.facts tr:last-child th,
+.facts tr:last-child td {
+  border-bottom: none;
+}
+
+.facts th {
+  font-weight: 400;
+  color: var(--ink-faint);
+  width: 30%;
+  white-space: nowrap;
+}
+
+.facts td {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+/* The threshold the value on its left was compared against. */
+.facts__threshold {
+  color: var(--ink-soft);
+  white-space: nowrap;
+  width: 30%;
+}
+
+/* --- events -------------------------------------------------------------- */
+
+.events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.event {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: var(--s3);
+  padding: var(--s2) 0;
+  position: relative;
+}
+
+/* The thread joining one observation to the next. */
+.event:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 24px;
+  bottom: -4px;
+  width: 1px;
+  background: var(--rule);
+}
+
+.event__glyph {
+  width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--rule-strong);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+  position: relative;
+  z-index: 1;
+}
+
+.event__glyph--detection {
+  border-color: var(--critical);
+  color: var(--critical);
+}
+.event__glyph--remediation {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.event__glyph--inclusion {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.event__glyph--rca {
+  border-color: var(--ink-faint);
+}
+
+.event__line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.event__label {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.event__kind {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.event__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s4);
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}

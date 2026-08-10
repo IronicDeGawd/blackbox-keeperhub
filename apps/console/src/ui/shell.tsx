@@ -120,10 +120,10 @@ export function StatsStrip({ stats }: { stats: Stats | null }): React.JSX.Elemen
   );
 }
 
-type Destination = { to: string; label: string; exact?: boolean; needs?: keyof Capabilities };
+type Destination = { to: string; label: string; needs?: keyof Capabilities };
 
 const DESTINATIONS: Destination[] = [
-  { to: '/', label: 'Timeline', exact: true },
+  { to: '/', label: 'Timeline' },
   { to: '/incidents', label: 'Incidents' },
   { to: '/inspect', label: 'Inspect', needs: 'diagnose' },
   { to: '/watched', label: 'Watched' },
@@ -149,7 +149,9 @@ export function Rail({ capabilities }: { capabilities: Capabilities | null }): R
             to={destination.to}
             className="rail__link"
             activeProps={{ className: 'rail__link rail__link--active' }}
-            activeOptions={destination.exact ? { exact: true } : {}}
+            // Exact, or /incidents lights up while reading /incidents/inc-1,
+            // which is a different destination.
+            activeOptions={{ exact: true }}
           >
             {destination.label}
           </Link>

@@ -57,16 +57,20 @@ export function formatGwei(value: unknown, dp = 3): string {
 /**
  * Pick the unit a human would use for this magnitude. A raw wei integer is
  * never shown without a unit attached, whichever branch is taken.
+ *
+ * `exact` keeps every digit. A summary line can round; a measured fact sitting
+ * next to the threshold it was compared against cannot, or the comparison
+ * stops being checkable.
  */
-export function formatWei(value: unknown): string {
+export function formatWei(value: unknown, exact = false): string {
   const wei = toBigInt(value);
   if (wei === null) return EM_DASH;
 
   const magnitude = wei < 0n ? -wei : wei;
   if (magnitude === 0n) return '0 ETH';
   // 0.001 ETH and up reads naturally in ETH; below that the digits vanish.
-  if (magnitude >= 10n ** 15n) return formatEth(wei);
-  if (magnitude >= 10n ** 6n) return formatGwei(wei);
+  if (magnitude >= 10n ** 15n) return formatEth(wei, exact ? ETH_DECIMALS : 6);
+  if (magnitude >= 10n ** 6n) return formatGwei(wei, exact ? GWEI_DECIMALS : 3);
   return `${wei} wei`;
 }
 
