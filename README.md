@@ -36,12 +36,13 @@ Deployed contracts (Sepolia): [`CircuitBreaker`](https://sepolia.etherscan.io/ad
 
 ## What we sent back upstream
 
-Four fixes to KeeperHub, each found by building on it and each verified against
+Five fixes to KeeperHub, each found by building on it and each verified against
 their own test suite.
 
 | PR | Fix |
 | --- | --- |
 | [#1993](https://github.com/KeeperHub/keeperhub/pull/1993) | Sub-cent marketplace prices were rounded to whole cents at the payment gate while the 402 advertised full precision, so **every payment below $0.01 failed** — most of their documented pricing range. Found by paying for our own listing. |
+| [#1995](https://github.com/KeeperHub/keeperhub/pull/1995) | `validate_workflow` reported a workflow whose chain comes from the caller as having an unknown chain id, so a **marketplace workflow that follows their own documented pattern validates as invalid** while executing correctly. The address checks a few lines away already skip template references. |
 | [#1990](https://github.com/KeeperHub/keeperhub/pull/1990) | A completed `contract-call` returned no `transactionHash`, though the route had it in hand and the docs promise it. It cost us a remediation recorded as failed after it had actually succeeded. |
 | [#1991](https://github.com/KeeperHub/keeperhub/pull/1991) | `undici` is imported by `lib/safe-fetch.ts` but declared in no dependency block, so their test suite will not start on a fresh clone with current pnpm. |
 | [#1992](https://github.com/KeeperHub/keeperhub/pull/1992) | Four fields the status endpoint returns — including `retryCount` — were undocumented. |
@@ -66,8 +67,11 @@ KeeperHub is the execution engine, not a client library we call once.
   as chain observations, so KeeperHub's own history is evidence the rules
   reason over.
 - **Gas sponsorship.** Remediations execute through the sponsored relayer.
-- **MCP.** Blackbox exposes its own MCP server so other agents can ask why a
-  transaction failed.
+- **MCP, both directions.** Blackbox exposes its own MCP server so other agents
+  can ask why a transaction failed, and consumes KeeperHub's — every workflow is
+  checked with `validate_workflow` before a remediation runs. Advisory, never
+  blocking: their validator currently rejects templated chain fields that
+  execute fine, which is [#1995](https://github.com/KeeperHub/keeperhub/pull/1995).
 - **x402.** Blackbox publishes one of its own rules to the KeeperHub Marketplace
   as a paid workflow, so another agent can pay per call for it. Settlement is
   USDC on Base via EIP-3009, and the payer needs no ETH — a facilitator submits
