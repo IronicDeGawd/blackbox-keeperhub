@@ -53,12 +53,26 @@ exists, or amend that sentence to say the hash is only guaranteed on the status
 record and that contract-call callers must poll. One line of documentation
 prevents the wrong build; returning the field prevents the question.
 
-### 1.2 No machine-readable API schema
+### 1.2 The OpenAPI document covers marketplace workflows, not the platform API
 
-`GET /api/openapi.json` is 404, and there is no OpenAPI document in the repo.
-Every endpoint was discovered by reading prose docs and, when that failed,
-guessing paths. **Fix:** publish an OpenAPI 3 document. It also removes most of
-section 2 below, because a generated client cannot miss a documented route.
+An earlier draft of this entry said there was no machine-readable schema at all.
+That was wrong, and wrong in an instructive way: we tested
+`GET /api/openapi.json`, got a 404, and stopped. The document is served at
+`GET /api/openapi` — 100KB of OpenAPI 3.1, and good.
+
+What it describes is 111 marketplace workflow endpoints
+(`/api/mcp/workflows/{slug}/call`), so an agent can discover callable
+workflows. It contains no path for the platform API a builder integrates
+against: no `/api/execute/*`, no `/api/workflows/create`, no `/api/keys`.
+
+So the real gap is narrower than we first claimed and still real: the endpoints
+you must call to *build on* KeeperHub have no machine-readable schema, and the
+one that exists is at a path a caller is unlikely to guess.
+
+**Fix.** Extend the document to cover the platform API, and serve it from
+`/api/openapi.json` as well — that is the path convention every tool tries
+first. A generated client cannot miss a documented route, which removes most of
+section 2 below.
 
 ### 1.3 Direct Execution silently ignores unknown fields
 
