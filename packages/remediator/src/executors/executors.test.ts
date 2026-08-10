@@ -93,14 +93,60 @@ describe('KeeperHubExecutor', () => {
     });
   });
 
-  it('throws rather than reporting a remediation when no transaction hash comes back', async () => {
+  it('throws rather than reporting a remediation when no hash can be obtained', async () => {
     const client = stubSubmitter({
       transfer: vi.fn(async () => ({ executionId: 'exec-9' })),
     });
-    const executor = new KeeperHubExecutor(client, verifier());
+    const executor = new KeeperHubExecutor(client, verifier(), {
+      hashLookupAttempts: 1,
+      sleep: async () => {},
+    });
     await expect(executor.submit({ plan: submitPlan(), incident: incident() })).rejects.toThrow(
       /no transaction hash/i,
     );
+  });
+
+  it('looks the hash up when the submission response omits it', async () => {
+    // A live pause() came back `completed` with no hash while the transaction
+    // was already on chain, so a real remediation was recorded as failed.
+    const getExecutionStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ transactionHash: null })
+      .mockResolvedValueOnce({ transactionHash: TX });
+    const client = stubSubmitter({
+      writeContract: vi.fn(async () => ({ executionId: 'exec-2' })),
+      getExecutionStatus,
+    });
+    const executor = new KeeperHubExecutor(client, verifier(), {
+      hashLookupAttempts: 3,
+      sleep: async () => {},
+    });
+
+    const result = await executor.submit({
+      plan: submitPlan({ call: { functionName: 'pause', args: [] } }),
+      incident: incident(),
+    });
+    expect(result).toEqual({ txHash: TX, keeperHubActionId: 'exec-2' });
+    expect(getExecutionStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps asking when a status lookup throws', async () => {
+    const getExecutionStatus = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('502'))
+      .mockResolvedValueOnce({ transactionHash: TX });
+    const client = stubSubmitter({
+      transfer: vi.fn(async () => ({ executionId: 'exec-3' })),
+      getExecutionStatus,
+    });
+    const executor = new KeeperHubExecutor(client, verifier(), {
+      hashLookupAttempts: 3,
+      sleep: async () => {},
+    });
+    await expect(executor.submit({ plan: submitPlan(), incident: incident() })).resolves.toEqual({
+      txHash: TX,
+      keeperHubActionId: 'exec-3',
+    });
   });
 });
 

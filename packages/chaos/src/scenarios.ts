@@ -339,6 +339,10 @@ export class ChaosHarness {
     assertChaosAllowed(this.options.chainId);
     const target = this.target;
     const hashes: `0x${string}`[] = [];
+    // One id across every attempt. Without it each transaction is its own
+    // logical action and R5 counts four separate one-attempt failures rather
+    // than one storm — which is exactly what the first live run did.
+    const logicalActionId = `chaos:C4:${this.options.account.address}:${this.now().getTime()}`;
 
     for (let i = 0; i < attempts; i++) {
       const hash = await this.wallet.sendTransaction({
@@ -350,7 +354,7 @@ export class ChaosHarness {
         gas: 60_000n,
       });
       hashes.push(hash);
-      await this.register(hash, `C4-attempt-${i}`);
+      await this.register(hash, `C4-attempt-${i}`, undefined, logicalActionId);
       // Serialised deliberately: parallel submissions would race on nonce and
       // produce a nonce gap, which is a different incident entirely.
       await this.pub.waitForTransactionReceipt({ hash });
@@ -359,7 +363,12 @@ export class ChaosHarness {
     return {
       scenario: 'C4',
       txHashes: hashes,
-      detail: { target, attempts, note: 'every attempt reverts on chain and burns gas' },
+      detail: {
+        target,
+        attempts,
+        logicalActionId,
+        note: 'every attempt reverts on chain and burns gas',
+      },
     };
   }
 
@@ -420,6 +429,7 @@ export class ChaosHarness {
     txHash: `0x${string}`,
     label: string,
     simulation?: { performed: boolean; success?: boolean; simulatedAtBlock?: number },
+    logicalActionId?: string,
   ): Promise<void> {
     await watchTransaction(this.options.db, {
       txHash,
@@ -429,6 +439,7 @@ export class ChaosHarness {
       label,
       at: this.now(),
       ...(simulation ? { simulation } : {}),
+      ...(logicalActionId ? { logicalActionId } : {}),
     });
   }
 

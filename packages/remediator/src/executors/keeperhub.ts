@@ -42,13 +42,52 @@ export type KeeperHubSubmitter = {
     abi?: string;
     value?: string;
   }): Promise<{ executionId: string; transactionHash?: string }>;
+  /**
+   * Fetch an execution by id.
+   *
+   * Needed because the response to a contract-call submission carries no
+   * transaction hash at all — only `executionId` and `status` — even when the
+   * call has already landed on chain. A transfer submission does include one.
+   * Without this the hash of a real, successful remediation is simply lost.
+   */
+  getExecutionStatus?(executionId: string): Promise<{ transactionHash?: string | null }>;
 };
 
 export class KeeperHubExecutor implements RemediationExecutor {
   constructor(
     private readonly client: KeeperHubSubmitter,
     private readonly verifier: ReceiptVerifier,
+    private readonly options: {
+      /** How many times to ask for the hash the submission response omitted. */
+      hashLookupAttempts?: number;
+      sleep?: (ms: number) => Promise<void>;
+      hashLookupIntervalMs?: number;
+    } = {},
   ) {}
+
+  /**
+   * Ask for the transaction hash the submission response did not include.
+   *
+   * Bounded and allowed to come back empty. Returning nothing is a real answer
+   * — the caller then refuses to report a remediation it cannot point at.
+   */
+  private async lookupHash(executionId: string): Promise<string | undefined> {
+    if (!this.client.getExecutionStatus) return undefined;
+    const attempts = this.options.hashLookupAttempts ?? 5;
+    const sleep = this.options.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+    const interval = this.options.hashLookupIntervalMs ?? 2_000;
+
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const record = await this.client.getExecutionStatus(executionId);
+        if (record.transactionHash) return record.transactionHash;
+      } catch {
+        // A status lookup that fails is not a failed remediation; keep asking.
+      }
+      if (i < attempts - 1) await sleep(interval);
+    }
+    return undefined;
+  }
 
   async submit(params: Parameters<RemediationExecutor['submit']>[0]): ReturnType<
     RemediationExecutor['submit']
@@ -78,12 +117,13 @@ export class KeeperHubExecutor implements RemediationExecutor {
           amount: formatEther(plan.value),
         });
 
-    const txHash = result.transactionHash;
+    const txHash = result.transactionHash ?? (await this.lookupHash(result.executionId));
     if (!txHash || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
       // Without a hash there is no remediation, only a claim of one.
       throw new Error(
-        `KeeperHub execution ${result.executionId} returned no transaction hash, so the ` +
-          `remediation cannot be verified and must not be reported as performed`,
+        `KeeperHub execution ${result.executionId} yielded no transaction hash, on the ` +
+          `submission response or on lookup, so the remediation cannot be verified and must ` +
+          `not be reported as performed`,
       );
     }
     return { txHash: txHash as `0x${string}`, keeperHubActionId: result.executionId };

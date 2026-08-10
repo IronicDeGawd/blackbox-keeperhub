@@ -45,7 +45,11 @@ export function normaliseExecution(
   options: NormaliseOptions,
 ): ExecutionEvent[] {
   const receipts = execution.receipts ?? [];
-  const submittedAt = new Date(execution.createdAt);
+  // A submission response carries no `createdAt` — only the status record does.
+  // Falling back to the observation time keeps a just-submitted execution
+  // normalisable; it is the closest true statement available, and the record
+  // will carry the real timestamp on the next poll.
+  const submittedAt = execution.createdAt ? new Date(execution.createdAt) : options.now;
   const observedAt = execution.completedAt ? new Date(execution.completedAt) : undefined;
   const stage = failureStage(execution);
   const revertReason = extractRevertReason(execution.error);

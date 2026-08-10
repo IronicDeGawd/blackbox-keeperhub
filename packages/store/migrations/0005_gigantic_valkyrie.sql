@@ -1,0 +1,1 @@
+ALTER TABLE "watched_transactions" ADD COLUMN "logical_action_id" text;

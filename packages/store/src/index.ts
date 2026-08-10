@@ -332,6 +332,8 @@ export async function watchTransaction(
     chainId: number;
     label?: string;
     at: Date;
+    /** Shared across retries of one action, so R5 can count them together. */
+    logicalActionId?: string;
     /**
      * What the submitter simulated, if it did. Recorded verbatim so R4 can
      * distinguish "simulated clean then reverted" from "nobody looked".
@@ -353,6 +355,7 @@ export async function watchTransaction(
       signer: params.signer.toLowerCase(),
       chainId: params.chainId,
       label: params.label ?? null,
+      logicalActionId: params.logicalActionId ?? null,
       simulation: params.simulation ? jsonSafe(params.simulation) : null,
       registeredAt: params.at,
     })

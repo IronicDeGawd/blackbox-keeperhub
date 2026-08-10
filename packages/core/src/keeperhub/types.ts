@@ -40,7 +40,14 @@ export const keeperHubExecutionSchema = z.object({
   estimatedCostUsd: z.union([z.string(), z.number()]).nullish(),
   retryCount: z.number().int().nonnegative().nullish(),
   network: z.string().nullish(),
-  createdAt: z.string(),
+  /**
+   * Present on the status record, absent from the response to the submission
+   * itself — that answers with only `executionId`, `status`, `transactionHash`
+   * and `transactionLink`. Requiring it made the client throw on a submission
+   * that had already landed on chain, so a successful remediation was recorded
+   * as failed and its hash discarded. Observed against a live pause() call.
+   */
+  createdAt: z.string().nullish(),
   completedAt: z.string().nullish(),
 });
 export type KeeperHubExecution = z.infer<typeof keeperHubExecutionSchema>;

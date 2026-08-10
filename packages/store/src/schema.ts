@@ -166,6 +166,13 @@ export const watchedTransactions = pgTable(
      * KeeperHub's own records.
      */
     simulation: jsonb('simulation'),
+    /**
+     * Groups retries of one logical action. Derived from the hash when absent,
+     * which makes every transaction its own action — correct for an unrelated
+     * transfer, and fatal for R5, which counts repeated failures of the *same*
+     * action. Only the submitter knows that two hashes were the same attempt.
+     */
+    logicalActionId: text('logical_action_id'),
     registeredAt: timestamp('registered_at', { withTimezone: true }).notNull(),
     lastPolledAt: timestamp('last_polled_at', { withTimezone: true }),
     pollCount: integer('poll_count').notNull().default(0),

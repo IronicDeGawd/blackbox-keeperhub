@@ -206,6 +206,7 @@ export class Recorder {
       chainId: watched.chainId,
       label: watched.label,
       simulation: deserialiseSimulation(watched.simulation),
+      logicalActionId: watched.logicalActionId,
       registeredAt: watched.registeredAt,
       now: at,
       makeId: this.options.makeId,

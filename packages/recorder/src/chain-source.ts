@@ -50,6 +50,8 @@ export type BuildParams = {
   label?: string | null;
   /** What the submitter simulated before broadcasting, if anything. */
   simulation?: ExecutionEvent['simulation'] | null;
+  /** Shared across retries of one action; defaults to this transaction alone. */
+  logicalActionId?: string | null;
   registeredAt: Date;
   now: Date;
   makeId: () => string;
@@ -81,7 +83,7 @@ export async function buildEventFromChain(
     id: params.makeId(),
     // Stable across polls, so re-observing the same transaction dedupes.
     sourceId: `chain:${params.chainId}:${params.txHash}`,
-    logicalActionId: `chain:${params.chainId}:${params.txHash}`,
+    logicalActionId: params.logicalActionId ?? `chain:${params.chainId}:${params.txHash}`,
     attemptIndex: 0,
     agentId: params.agentId,
     signer: params.signer,
