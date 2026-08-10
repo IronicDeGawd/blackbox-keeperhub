@@ -11,7 +11,7 @@ import {
   SignerExecutor,
   WorkflowExecutor,
 } from '@blackbox/remediator';
-import { createDb, getIncident, type Database } from '@blackbox/store';
+import { createDb, getIncident, saveIncident, type Database } from '@blackbox/store';
 import { buildApp, type ChaosScenario } from './app.js';
 import { EventBus } from './bus.js';
 import {
@@ -264,6 +264,23 @@ const app = await buildApp({
           const loaded = await loadIncident(incidentId);
           if (!loaded) return { accepted: false, finalStatus: 'not_found' };
           const outcome = await remediator!.remediate(loaded.incident);
+
+          // Persist it. The background loop writes the outcome onto the
+          // incident, and this path did not, so an operator who pressed
+          // Remediate saw the incident unchanged and no remediation panel —
+          // the work happened and left no trace anyone could see.
+          await saveIncident(db, {
+            ...(loaded.row as Record<string, unknown>),
+            remediation: outcome.record,
+          } as never);
+          runtime.attachRemediation(incidentId, outcome.record);
+          bus.publish({
+            type: outcome.record.finalStatus === 'succeeded'
+              ? 'remediation.succeeded'
+              : 'remediation.failed',
+            data: { incidentId, ...outcome.record },
+          });
+
           const attempt = outcome.record.attempts[0];
           return {
             accepted: outcome.record.finalStatus === 'succeeded',

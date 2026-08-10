@@ -54,15 +54,15 @@ function makeIncident(over = {}) {
       ruleId: 'R2',
       eventIds: ['evt-1', 'evt-2'],
       facts: {
-        gap: 1,
         latestNonce: 47,
         pendingNonce: 47,
+        highestSubmittedNonce: 48,
         missingNonces: [47],
+        gap: 1,
         blockedActionCount: 1,
         consecutiveGapPolls: 2,
-        highestSubmittedNonce: 48,
+        nonceGapConfirmations: 2,
       },
-      thresholds: { nonceGapConfirmations: 2 },
       corroboration: {
         latestNonce: 47,
         pendingNonce: 47,
@@ -80,7 +80,8 @@ function makeIncident(over = {}) {
 }
 
 const RCA_SAMPLE = {
-  narrative:
+  // Field names match packages/core/src/schemas.ts rootCauseAnalysisSchema.
+  summary:
     'A transaction was submitted at nonce 48 while nonce 47 was never used. ' +
     'Ethereum executes an account\'s transactions strictly in order, so nothing ' +
     'at 48 or above can be mined until 47 is filled. One queued action is ' +
@@ -89,12 +90,13 @@ const RCA_SAMPLE = {
     'A submission at nonce 47 was prepared but never broadcast',
     'No nonce reconciliation runs between submissions',
   ],
-  prevention:
+  recommendation:
     'Read the pending nonce immediately before signing, and reconcile the ' +
     'submitted set against the chain after every batch.',
-  confidence: 0.86,
-  model: 'claude-sonnet-5',
+  timeline: [{ at: ago(180_000), what: 'First related execution observed' }],
+  model: 'gemini-3.5-flash-lite',
   generatedAt: ago(90_000),
+  promptVersion: '2026-08-10.3',
 };
 
 const REMEDIATION_SAMPLE = {
@@ -169,8 +171,15 @@ makeIncident({
   evidence: {
     ruleId: 'R1',
     eventIds: ['evt-9'],
-    facts: { nonce: 51, pendingForMs: 252_000, submittedMaxFee: '1500000000' },
-    thresholds: { stuckAfterMs: 90_000 },
+    facts: {
+      nonce: 51,
+      txHash: '0xcc22eede6cd6cac9c3fa515204b65b59f823a4ccb6ff6e3b848ebffa73264d5c',
+      submittedMaxFeePerGas: '1500000000',
+      currentBaseFee: '2400000',
+      pendingDurationMs: 252_000,
+      stuckThresholdMs: 90_000,
+      corroborated: true,
+    },
     corroboration: { latestNonce: 51, baseFeeAtDetection: '2400000' },
     suppressedRules: [],
   },
@@ -187,8 +196,16 @@ makeIncident({
   evidence: {
     ruleId: 'R7',
     eventIds: ['evt-12'],
-    facts: { quotedPrice: '1000000000000000000', executedPrice: '1041000000000000000', slippageBps: 410 },
-    thresholds: { adverseSlippageBps: 100 },
+    facts: {
+      expectedOut: '1000000000000000000',
+      actualOut: '959000000000000000',
+      deltaBps: 410,
+      slippageToleranceBps: 100,
+      blockNumber: 11457999,
+      txIndexInBlock: 42,
+      neighbouringTxHashes: ['0xaaa…', '0xbbb…'],
+      route: 'public',
+    },
     corroboration: {},
     suppressedRules: [],
   },
@@ -203,8 +220,14 @@ makeIncident({
   evidence: {
     ruleId: 'R6',
     eventIds: ['evt-15'],
-    facts: { signerBalance: '900000000000000', medianRecentCost: '1200000000000000', runwayActions: 0 },
-    thresholds: { minRunwayActions: 3 },
+    facts: {
+      signerBalance: '38886020810000',
+      medianRecentCost: '43819765332000',
+      gasStarvedMultiple: 3,
+      thresholdBalance: '131459295996000',
+      projectedActionsRemaining: 0,
+      observedFundingFailure: false,
+    },
     corroboration: { signerBalance: '900000000000000' },
     suppressedRules: [],
   },
@@ -472,7 +495,7 @@ const server = createServer(async (req, res) => {
       confidence: 0.95,
       ruleId: 'R4',
       facts: { blockDrift: 1, simulatedAtBlock: 11457535, includedAtBlock: 11457536, gasUsed: '33245' },
-      rca: { ...RCA_SAMPLE, narrative: undefined,
+      rca: { ...RCA_SAMPLE,
         summary: 'The call simulated clean at block 11457535 and reverted at 11457536. Nothing about the call changed; the state underneath it did.',
         contributingFactors: ['State the call depends on was modified between simulation and inclusion'],
         recommendation: 'Re-simulate immediately before submission and make the call defend its own preconditions on chain.',
@@ -665,6 +688,9 @@ const server = createServer(async (req, res) => {
       latestNonce: 49,
       pendingNonce: 49,
       missingNonces: [],
+      // The signer-health route does expose runwayActions; the rule's own fact
+      // is projectedActionsRemaining. They are different fields on different
+      // shapes — do not conflate them.
       runwayActions: 42,
       openIncidents: summariesOf([...incidents.values()].filter((i) => i.status === 'open')),
       recentFailureRate: 0.12,

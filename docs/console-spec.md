@@ -336,6 +336,84 @@ matched, watching }`. A quiet line showing the scanner keeping up with head is
 worth more than it sounds: it is the difference between "nothing has happened"
 and "nothing is running".
 
+
+---
+
+## What each incident carries
+
+`evidence.facts` differs by class, and the keys below are the exact ones the
+rules emit. Render them as a key/value table; do not rename them in the UI and
+do not assume a key exists across classes.
+
+**These names have drifted before.** A summary read `runwayActions` where the
+rule emits `projectedActionsRemaining`, and the only symptom was the word
+"unknown" in a timeline row — indistinguishable from missing data. If you read a
+fact by name, pin it with a test.
+
+| Class | `evidence.facts` keys |
+| --- | --- |
+| `STUCK_TRANSACTION` (R1) | `nonce`, `txHash`, `submittedMaxFeePerGas`, `currentBaseFee`, `pendingDurationMs`, `stuckThresholdMs`, `corroborated` |
+| `NONCE_GAP` (R2) | `latestNonce`, `pendingNonce`, `highestSubmittedNonce`, `missingNonces`, `gap`, `blockedActionCount`, `consecutiveGapPolls`, `nonceGapConfirmations` |
+| `GAS_UNDERPRICED` (R3) | `nonce`, `submittedMaxFee`, `submittedPriorityFee`, `baseFeeAtDetection`, `underpriceRatio`, `thresholdFee`, `feeDeficitPct` |
+| `SIM_PASS_EXEC_REVERT` (R4) | `txHash`, `revertReason`, `simulatedAtBlock`, `includedAtBlock`, `blockDrift`, `gasEstimate`, `gasUsed`, `elapsedMs` |
+| `RETRY_STORM` (R5) | `logicalActionId`, `attemptCount`, `retryStormCount`, `windowMs`, `totalGasBurned`, `distinctRevertReasons`, `allRejectedPreflight` |
+| `SIGNER_GAS_STARVED` (R6) | `signerBalance`, `medianRecentCost`, `gasStarvedMultiple`, `thresholdBalance`, `projectedActionsRemaining`, `observedFundingFailure` |
+| `ADVERSE_INCLUSION` (R7) | `expectedOut`, `actualOut`, `deltaBps`, `slippageToleranceBps`, `blockNumber`, `txIndexInBlock`, `neighbouringTxHashes`, `route` |
+
+Every `*Wei`, `*Balance`, `*Fee`, `*Cost` and `totalGasBurned` value is a decimal
+string. Use `BigInt`.
+
+### `evidence.corroboration`
+
+Independent chain readings taken at detection time. Present on most incidents,
+and every field is optional:
+
+```jsonc
+{ "latestNonce": 105, "pendingNonce": 105,
+  "signerBalance": "61318595487686304",     // wei, decimal string
+  "baseFeeAtDetection": "1204512" }
+```
+
+### `rca` — null until the diagnostician runs
+
+```jsonc
+{
+  "summary": "…",                    // 2-4 sentences, the mechanism
+  "contributingFactors": ["…"],
+  "timeline": [{ "at": "2026-08-10T…Z", "what": "…" }],
+  "recommendation": "…",             // one concrete change
+  "model": "gemini-3.5-flash-lite",  // or the literal "template"
+  "generatedAt": "2026-08-10T…Z",
+  "promptVersion": "2026-08-10.3"
+}
+```
+
+`model: "template"` means the deterministic fallback wrote it, not a model.
+Label it as such — the UI must not present a template as model output, and must
+not present model output as measured fact.
+
+### `remediation` — null until something acts
+
+```jsonc
+{
+  "playbookId": "P4",
+  "finalStatus": "succeeded",   // succeeded | failed | skipped_by_guard | skipped_by_policy
+  "verifiedAt": "2026-08-10T…Z",
+  "attempts": [{
+    "attemptIndex": 0,
+    "startedAt": "…", "completedAt": "…",
+    "guardsPassed": ["min_confidence", "budget", "…"],
+    "guardsFailed": [],
+    "txHash": "0x…",
+    "keeperHubActionId": "…",     // present on the KeeperHub paths
+    "executor": "keeperhub-workflow",
+    "gasUsed": "52728",           // decimal string
+    "status": "succeeded",
+    "failureReason": "…"          // present when it did not work
+  }]
+}
+```
+
 ---
 
 ## API reference
@@ -426,30 +504,94 @@ See Page 5.
 
 ### `GET /api/stats`
 
-```json
+```jsonc
 {
-  "openBySeverity": { "critical": 2, "warning": 2, "info": 0 },
-  "remediations": { "total": 2, "succeeded": 1, "skipped": 1, "failed": 0, "gasWei": "21000" },
-  "meanTimeToDetectionMs": 41000,
-  "meanTimeToRemediationMs": 63000,
-  "updatedAt": "2026-08-10T06:31:28.695Z"
+  "openBySeverity": { "critical": 1, "warning": 0, "info": 0 },
+  "remediations": {
+    "total": 3, "succeeded": 2, "skipped": 0, "failed": 1,
+    "gasWei": "105444"                  // decimal string
+  },
+  "meanTimeToDetectionMs": 59000,       // null when nothing qualifies
+  "meanTimeToRemediationMs": null,      // null is "no data", not "instant"
+  "updatedAt": "2026-08-10T20:31:12.004Z"
 }
 ```
 
+Both means are `null` rather than `0` when nothing qualifies. Render that as an
+em dash, not as zero — "0ms to detection" reads as instant detection.
+
 ### `GET /api/signers/:signer/health?chainId=`
 
-Balance, latest/pending nonce, `missingNonces[]`, runway in actions, open
-incidents, recent failure rate.
+```jsonc
+{
+  "signer": "0x…", "chainId": 11155111,
+  "balanceWei": "61318595487686304",  // decimal string
+  "latestNonce": 105, "pendingNonce": 105,
+  "missingNonces": [],                // holes wedging this signer's queue
+  "runwayActions": null,              // not yet computed; render as unknown
+  "openIncidents": [ /* incident summaries, same shape as the list route */ ]
+}
+```
 
 ### `GET /api/config`
 
-Chains with `privateMempool` and explorer URL templates, remediation policy
-(`dryRun`, allowlists, budget). Use it to build explorer links rather than
-hardcoding a chain.
+```jsonc
+{
+  "chains": [{
+    "chainId": 11155111, "name": "Ethereum Sepolia",
+    "testnet": true, "privateMempool": true,
+    "explorerTxUrl": "https://sepolia.etherscan.io/tx/{hash}"
+  }],
+  "remediation": {
+    "dryRun": false, "minConfidence": 0.8, "maxAttempts": 3,
+    "signerAllowlist": ["0x…"], "chainAllowlist": [11155111],
+    "budget": { "maxRemediationsPerHour": 10, "maxGasWeiPerHour": "50000000000000000" }
+  },
+  "capabilities": {
+    "remediate": true, "chaos": true, "diagnose": true,
+    "signerHealth": true, "proposeRemediation": true
+  }
+}
+```
 
-### `GET /api/agents`, `GET /api/chaos/scenarios`, `POST /api/chaos/run`
+Build explorer links from `explorerTxUrl` rather than hardcoding a chain, and
+gate every control on `capabilities` — a route this process cannot serve does
+not exist on it.
 
-See the mock. `chaos/run` takes `{ "scenario": "C2" }`.
+### `GET /api/agents`
+
+```jsonc
+{ "items": [{
+  "agentId": "chaos", "signers": ["0x…"], "chainIds": [11155111],
+  "openIncidents": 1, "label": null,
+  "selfRemediation": true          // false for Blackbox's own incidents
+}] }
+```
+
+### `GET /api/chaos/scenarios`
+
+```jsonc
+{
+  "chainId": 11155111, "chainName": "Ethereum Sepolia", "isTestnet": true,
+  "signer": "0x…", "signerBalanceWei": "61318595487686304",
+  "targets": { "chaosTarget": "0x…", "circuitBreaker": "0x…" },
+  "items": [{
+    "id": "C5", "name": "Signer gas starvation",
+    "induces": ["SIGNER_GAS_STARVED"],
+    "enabled": true, "deterministic": true,
+    "note": "Funds a wallet made for the run, works it, then sweeps it to dust."
+  }]
+}
+```
+
+Render `note` for every scenario, and especially for a disabled one — it is the
+reason it cannot run.
+
+### `POST /api/chaos/run`
+
+`{ "scenario": "C4" }` → `202` with `{ runId, scenario, txHashes[],
+expectedIncidentClass, expectedDetectionSeconds }`. A disabled scenario answers
+`409` with the `note` as its `detail`.
 
 ### `GET /api/stream` — SSE
 

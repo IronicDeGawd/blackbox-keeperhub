@@ -408,6 +408,14 @@ export class Runtime {
     return this.id(prefix);
   }
 
+  /**
+   * Tell the tracker what a remediation did, so the incident resolves as
+   * Blackbox's work rather than as something that happened to get better.
+   */
+  attachRemediation(incidentId: string, record: Incident['remediation']): boolean {
+    return this.tracker.attachRemediation(incidentId, record);
+  }
+
   async signerHealth(params: { signer: string; chainId: number }): Promise<{
     balanceWei: string;
     latestNonce: number;
