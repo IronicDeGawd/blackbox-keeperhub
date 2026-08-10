@@ -4,6 +4,7 @@ import { RouterProvider } from '@tanstack/react-router';
 import { router } from './router';
 import './ui/tokens.css';
 import './ui/base.css';
+import './ui/primitives.css';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('#root is missing from index.html');

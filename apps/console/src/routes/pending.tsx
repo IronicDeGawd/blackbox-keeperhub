@@ -20,7 +20,9 @@ function Pending({ title, summary }: { title: string; summary: string }): React.
   );
 }
 
-const pending = (path: string, title: string, summary: string) =>
+// Generic over the path so the literal survives into the router's route types;
+// a widened `string` would make every Link to these destinations a type error.
+const pending = <P extends string>(path: P, title: string, summary: string) =>
   createRoute({
     getParentRoute: () => rootRoute,
     path,

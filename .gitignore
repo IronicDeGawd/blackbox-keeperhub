@@ -15,6 +15,10 @@ context/
 .pnpm-store/
 coverage/
 
+# screenshots and traces from browser-driven UI checks
+.playwright-mcp/
+/*.png
+
 # foundry
 contracts/out/
 contracts/cache/

@@ -1,0 +1,305 @@
+/* The feed, its filters, and the states it can be in. */
+
+.pagehead__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  margin-top: var(--s2);
+}
+
+.pagehead__title {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.scanline {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.linkbutton {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border-bottom: 1px solid transparent;
+}
+.linkbutton:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.button {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  border: 1px solid var(--rule-strong);
+  padding: var(--s1) var(--s3);
+  align-self: flex-start;
+  background: var(--surface);
+}
+.button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.button:disabled {
+  color: var(--ink-faint);
+  border-color: var(--rule);
+  cursor: not-allowed;
+}
+
+/* --- banners and states -------------------------------------------------- */
+
+.banner {
+  padding: var(--s3) var(--s4);
+  font-size: 13px;
+}
+
+.banner--stale {
+  border-left: 3px solid var(--warning);
+}
+.banner--stale strong {
+  color: var(--warning);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s5);
+}
+
+.state__lead {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.state p {
+  margin: 0;
+  max-width: 70ch;
+}
+
+/* --- filters ------------------------------------------------------------- */
+
+.filters {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.filters__gap {
+  flex: 1;
+}
+
+.filter {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.filter__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.filter__control {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--ground);
+  border: 1px solid var(--rule-strong);
+  padding: 3px var(--s2);
+  min-width: 132px;
+}
+
+.filter__control:hover {
+  border-color: var(--ink-faint);
+}
+
+.filters__clear {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  border-bottom: 1px solid var(--accent);
+}
+
+/* --- the feed ------------------------------------------------------------ */
+
+.feed {
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.row {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: var(--s1);
+  padding: var(--s3) var(--s4) var(--s3) var(--s5);
+  border-bottom: 1px solid var(--rule);
+  text-decoration: none;
+  color: inherit;
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row:hover {
+  background: var(--surface-sunk);
+}
+
+/*
+ * The whole row is clickable via a link stretched behind it. The content layer
+ * ignores the pointer so clicks reach that link; the two controls that do
+ * something else take the pointer back.
+ */
+.row__target {
+  position: absolute;
+  inset: 0;
+}
+
+.row__target:focus-visible {
+  outline-offset: -2px;
+}
+
+.row__head,
+.row__foot {
+  position: relative;
+  pointer-events: none;
+}
+
+.row .copyable,
+.row .explorer {
+  pointer-events: auto;
+}
+
+/* The severity rail. A 3px edge, the same device the panels use. */
+.row__rail {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: transparent;
+}
+.row--critical .row__rail {
+  background: var(--critical);
+}
+.row--warning .row__rail {
+  background: var(--warning);
+}
+.row--info .row__rail {
+  background: var(--rule-strong);
+}
+
+.row__head,
+.row__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-width: 0;
+}
+
+.row__gap {
+  flex: 1;
+  min-width: var(--s3);
+}
+
+.row__sev {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.row__sev--critical {
+  color: var(--critical);
+}
+.row__sev--warning {
+  color: var(--warning);
+}
+
+.row__who {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.row__chain {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.row__summary {
+  font-size: 13px;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- transitions --------------------------------------------------------- */
+
+.row--changed {
+  animation: row-changed 1.6s ease-out;
+}
+.row--landed {
+  animation: row-landed 1.6s ease-out;
+}
+
+@keyframes row-changed {
+  0% {
+    background: var(--accent-soft);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+/* Reaching resolved is the fix landing. It gets its own colour. */
+@keyframes row-landed {
+  0%,
+  30% {
+    background: var(--accent-soft);
+    box-shadow: inset 3px 0 0 var(--ok);
+  }
+  100% {
+    background: transparent;
+    box-shadow: inset 3px 0 0 transparent;
+  }
+}
+
+@media (max-width: 1000px) {
+  .row__head,
+  .row__foot {
+    flex-wrap: wrap;
+  }
+  .row__summary {
+    white-space: normal;
+  }
+}
