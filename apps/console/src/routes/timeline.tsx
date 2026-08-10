@@ -37,7 +37,7 @@ const oneOf = <T extends string>(options: readonly T[], value: unknown): T | und
  * drops that one filter rather than rendering an empty list with no
  * explanation for why.
  */
-function validateSearch(search: Record<string, unknown>): TimelineSearch {
+export function validateSearch(search: Record<string, unknown>): TimelineSearch {
   const parsed: TimelineSearch = {};
 
   const incidentClass = oneOf(INCIDENT_CLASSES, search['class']);

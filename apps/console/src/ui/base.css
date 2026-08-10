@@ -126,6 +126,11 @@ button {
   padding: var(--s4);
 }
 
+/* Wide content scrolls inside its own box; the page never scrolls sideways. */
+.tablewrap {
+  overflow-x: auto;
+}
+
 .notice__lead {
   margin: 0 0 var(--s1);
   font-family: var(--font-mono);
