@@ -281,10 +281,8 @@ export class KeeperHubClient {
   }
 
   // --- workflows ------------------------------------------------------------
-  // The route surface here is not what the reference implies. `POST /api/
-  // workflows` is 405; creation is `/api/workflows/create`. Updates are PATCH —
-  // `PUT` is 405, and `PUT /go-live` answers 200 while silently ignoring node
-  // changes, which is the worst of both. All established by probing.
+  // Routes per docs.keeperhub.com/api/workflows: creation is
+  // `POST /api/workflows/create` and updates are `PATCH /api/workflows/{id}`.
 
   async listWorkflows(): Promise<{ id: string; name: string; enabled?: boolean }[]> {
     const res = await this.request<{ id: string; name: string; enabled?: boolean }[]>('/workflows');
@@ -297,6 +295,8 @@ export class KeeperHubClient {
     description?: string;
     nodes: unknown[];
     edges: unknown[];
+    /** Accepted on create, so a workflow can go live in one round trip. */
+    enabled?: boolean;
   }): Promise<{ id: string }> {
     const res = await this.request<{ id: string }>('/workflows/create', {
       method: 'POST',

@@ -15,9 +15,13 @@ import type { ReceiptVerifier } from './verify.js';
  * the workflow does, so the same playbook against the same contract on the same
  * chain finds its workflow instead of creating a duplicate on every incident.
  *
- * Field names here differ from Direct Execution for the same concepts —
- * `abiFunction` and `args` rather than `functionName` and `functionArgs` — which
- * is undocumented and was established by reading validation errors.
+ * Field names differ from Direct Execution for the same concepts: a workflow
+ * action takes `abiFunction` and `functionArgs`, where `/execute/contract-call`
+ * takes `functionName` and `functionArgs`. Both are documented at
+ * docs.keeperhub.com/api/workflows, which also warns that the save-time
+ * validator accepts the legacy `functionName`/`args` shape while the runtime
+ * ignores it — a workflow saved that way fails at execution, or worse, executes
+ * with no arguments at all.
  *
  * The same structural limit as Direct Execution applies: workflow actions
  * execute through the sponsored relayer at the sponsor's nonce, so a plan that
@@ -31,6 +35,7 @@ export type WorkflowClient = {
     description?: string;
     nodes: unknown[];
     edges: unknown[];
+    enabled?: boolean;
   }): Promise<{ id: string }>;
   patchWorkflow(id: string, definition: Record<string, unknown>): Promise<void>;
   executeWorkflow(id: string, input?: Record<string, unknown>): Promise<{ executionId: string }>;
@@ -89,15 +94,9 @@ export class WorkflowExecutor implements RemediationExecutor {
       return existing.id;
     }
 
+    // `enabled` is accepted on create, so this is one round trip rather than a
+    // create followed by a patch.
     const created = await this.client.createWorkflow({
-      name: params.name,
-      description: params.description,
-      nodes: params.nodes,
-      edges: [{ id: 'e1', source: 'trigger-1', target: 'step-1' }],
-    });
-    // Creation leaves a workflow disabled, and only PATCH persists node config
-    // and the enabled flag — `go-live` returns 200 and drops node changes.
-    await this.client.patchWorkflow(created.id, {
       name: params.name,
       description: params.description,
       nodes: params.nodes,
@@ -132,7 +131,9 @@ export class WorkflowExecutor implements RemediationExecutor {
       id: 'trigger-1',
       type: 'trigger',
       position: { x: 0, y: 0 },
-      data: { type: 'trigger', label: 'Trigger', config: { triggerType: 'Webhook' } },
+      // Manual, because Blackbox drives this through POST /{id}/execute. A
+      // Webhook trigger would advertise an inbound URL nothing ever calls.
+      data: { type: 'trigger', label: 'Manual', config: { triggerType: 'Manual' } },
     };
 
     const step = plan.call
@@ -148,7 +149,12 @@ export class WorkflowExecutor implements RemediationExecutor {
               network: String(incident.chainId),
               contractAddress: plan.to,
               abiFunction: plan.call.functionName,
-              args: JSON.stringify(plan.call.args),
+              // `functionArgs`, not `args`: their runtime reads only this field
+              // (plugins/web3/steps/write-contract-core.ts), and a JSON-encoded
+              // array string rather than an array. Sending `args` saves without
+              // complaint and then calls the function with no arguments — which
+              // a zero-argument call like pause() cannot reveal.
+              functionArgs: JSON.stringify(plan.call.args),
               abi:
                 plan.call.abi ??
                 JSON.stringify([

@@ -296,9 +296,6 @@ describe('WorkflowExecutor', () => {
     const result = await executor(client).submit({ plan: pausePlan, incident: incident() });
 
     expect(client.createWorkflow).toHaveBeenCalled();
-    // Creation leaves a workflow disabled and drops node config; only PATCH
-    // persists both.
-    expect(client.patchWorkflow).toHaveBeenCalledWith('wf-1', expect.objectContaining({ enabled: true }));
     expect(result).toEqual({
       txHash: TX,
       keeperHubActionId: 'exec-1',
@@ -313,9 +310,36 @@ describe('WorkflowExecutor', () => {
     const nodes = (client.createWorkflow as ReturnType<typeof vi.fn>).mock.calls[0][0].nodes;
     const config = nodes[1].data.config;
     expect(config.abiFunction).toBe('pause');
-    expect(config.args).toBe('[]');
     expect(config.functionName).toBeUndefined();
-    expect(config.functionArgs).toBeUndefined();
+  });
+
+  it('sends arguments as functionArgs, the only field the runtime reads', async () => {
+    // Their write-contract step reads `functionArgs` and never `args`. Sending
+    // `args` saves without complaint and then calls the function with no
+    // arguments at all — which a zero-argument call like pause() cannot reveal,
+    // so this test uses one that takes arguments.
+    const client = stubClient();
+    await executor(client).submit({
+      plan: submitPlan({
+        call: { functionName: 'release', args: ['0xdeadbeef', 42] },
+        description: 'release escrow',
+      }),
+      incident: incident(),
+    });
+
+    const config = (client.createWorkflow as ReturnType<typeof vi.fn>).mock.calls[0][0].nodes[1]
+      .data.config;
+    expect(config.functionArgs).toBe('["0xdeadbeef",42]');
+    expect(config.args).toBeUndefined();
+  });
+
+  it('creates the workflow already enabled, in one round trip', async () => {
+    const client = stubClient();
+    await executor(client).submit({ plan: pausePlan, incident: incident() });
+    expect(client.createWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true }),
+    );
+    expect(client.patchWorkflow).not.toHaveBeenCalled();
   });
 
   it('reuses a workflow that already exists rather than piling up duplicates', async () => {
