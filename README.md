@@ -120,8 +120,13 @@ Seven rules, all deterministic. No model decides whether something is wrong.
 | R3 | `GAS_UNDERPRICED` | suppression path only |
 | R4 | `SIM_PASS_EXEC_REVERT` | yes |
 | R5 | `RETRY_STORM` | yes |
-| R6 | `SIGNER_GAS_STARVED` | tests only |
-| R7 | `ADVERSE_INCLUSION` | tests only |
+| R6 | `SIGNER_GAS_STARVED` | yes |
+| R7 | `ADVERSE_INCLUSION` | no — see below |
+
+**R7 is the honest gap.** It needs an inclusion analysis — expected against
+actual output, block position, neighbouring transactions — and nothing builds
+that yet, so it fires in tests and cannot fire live no matter what the chaos
+harness does. The field is declared and unpopulated.
 
 Five playbooks. P2 (fill a nonce gap) and P4 (halt via circuit breaker) have run
 against a live chain; P1, P3 and P5 have not. Where a playbook cannot act it
