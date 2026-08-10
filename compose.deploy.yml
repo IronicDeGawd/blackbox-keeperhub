@@ -1,0 +1,92 @@
+# The public deployment: Postgres, the API, and Caddy for HTTPS.
+#
+# Everything runs on one VM with a persistent disk. That is deliberate — the
+# detection loop ticks every fifteen seconds and holds a cursor into the chain,
+# so it wants a machine that stays up and a database that survives a restart,
+# not a container that scales to zero between requests.
+#
+#   BLACKBOX_HOST=blackbox.34-1-2-3.sslip.io docker compose -f compose.deploy.yml up -d --build
+#
+# Secrets come from .env on the host, which is never committed. See
+# .env.example for what this deployment expects and what each var turns on.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: blackbox
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: blackbox
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # No published port. The database is reachable only from the compose
+    # network, so it is not exposed to the internet along with the API.
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U blackbox -d blackbox']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Applies the schema, then exits. The API waits for it to complete, so the
+  # first request can never land on a database with no tables.
+  migrate:
+    build: .
+    command: ['pnpm', '--filter', '@blackbox/store', 'db:push']
+    environment:
+      DATABASE_URL: postgres://blackbox:${POSTGRES_PASSWORD}@postgres:5432/blackbox
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://blackbox:${POSTGRES_PASSWORD}@postgres:5432/blackbox
+      PORT: 4000
+      CHAIN_ID: ${CHAIN_ID:-11155111}
+      SEPOLIA_RPC_URL: ${SEPOLIA_RPC_URL:?set SEPOLIA_RPC_URL in .env}
+      ALCHEMY_RPC_URL: ${ALCHEMY_RPC_URL:-}
+      FALLBACK_RPC_URL: ${FALLBACK_RPC_URL:-}
+      CHAOS_TARGET_ADDRESS: ${CHAOS_TARGET_ADDRESS:-}
+      CIRCUIT_BREAKER_ADDRESS: ${CIRCUIT_BREAKER_ADDRESS:-}
+      KEEPERHUB_ORG_KEY: ${KEEPERHUB_ORG_KEY:-}
+      # Vertex authenticates through the VM's attached service account, so the
+      # model needs no key in this file or in the image.
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
+      BLACKBOX_TICK_MS: ${BLACKBOX_TICK_MS:-15000}
+      # Deliberately absent: CHAOS_SIGNER_PRIVATE_KEY. This deployment holds no
+      # key, so /api/chaos/run and server-signed remediation do not exist on it
+      # — visitors sign their own chaos and their own fixes. Setting it here
+      # would hand a spendable key to an unauthenticated URL.
+      BLACKBOX_DRY_RUN: ${BLACKBOX_DRY_RUN:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      # sslip.io resolves any host of the form 1-2-3-4.sslip.io to that IP, so
+      # Let's Encrypt can verify a name for this machine without us buying a
+      # domain. Caddy then obtains and renews the certificate on its own.
+      BLACKBOX_HOST: ${BLACKBOX_HOST:?set BLACKBOX_HOST, e.g. blackbox.34-1-2-3.sslip.io}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  caddydata:
+  caddyconfig:
