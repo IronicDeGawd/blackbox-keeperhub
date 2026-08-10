@@ -16,11 +16,15 @@ a more useful finding than any of the individual entries.
 
 ---
 
-## 1. Verified — still reproducible on 2026-08-10
+## 1. Verified
+
+Each entry says how it was checked. Two were observed once during the build and
+could not be re-tested without a second account or deliberately tripping a rate
+limiter, and they say so rather than implying a fresh reproduction.
 
 ### 1.1 A completed contract-call returns no transaction hash
 
-**Severity: blocker.** This contradicts KeeperHub's own documented behaviour and
+**Severity: blocker. Reproduced 2026-08-10**, twice, against the live API. This contradicts KeeperHub's own documented behaviour and
 costs the caller their audit trail.
 
 `docs/api/direct-execution.md` states:
@@ -55,6 +59,8 @@ prevents the wrong build; returning the field prevents the question.
 
 ### 1.2 The OpenAPI document covers marketplace workflows, not the platform API
 
+**Re-verified 2026-08-10** by fetching the document and listing its paths.
+
 An earlier draft of this entry said there was no machine-readable schema at all.
 That was wrong, and wrong in an instructive way: we tested
 `GET /api/openapi.json`, got a 404, and stopped. The document is served at
@@ -76,6 +82,11 @@ section 2 below.
 
 ### 1.3 Direct Execution silently ignores unknown fields
 
+**Re-verified 2026-08-10** with `simulate: true`, so at no gas cost. A body
+carrying `nonce`, `maxFeePerGas` and a field named `totallyMadeUpField` returned
+`success: true` with no warning; the same call missing a required field returned
+a precise `Missing required field` error, so the validator does run.
+
 `POST /api/execute/transfer` accepts `nonce`, `maxFeePerGas` and
 `maxPriorityFeePerGas` in the body, answers `202`, and ignores all three. The
 resulting transaction was sent by a sponsor EOA calling a relayer at the
@@ -93,6 +104,9 @@ capability that does not exist.
 
 ### 1.4 Wallet sign-in silently creates a second account
 
+**Observed once, during the build. Not re-tested** — doing so needs a second
+unlinked wallet and leaves another stray organization behind.
+
 Signing in with a wallet whose address is not yet linked creates a brand new
 user and organization rather than offering to link it. An operator who signed up
 with Google and later signs in with their wallet lands in an empty org with none
@@ -102,6 +116,12 @@ ask whether to create a new account or link to an existing one. At minimum,
 confirm on screen that a new organization was created.
 
 ### 1.5 Rate-limited step-up challenges are single-use and self-invalidating
+
+**Observed once, during the build. Not re-tested** — reproducing it means
+deliberately tripping a rate limiter on a shared service. Note that
+`Retry-After` *is* documented in `docs/api/errors.md`; the complaint is that the
+step-up path did not send it, which is a narrower claim than the docs being
+wrong.
 
 Sensitive actions answer with `{"code":"signature_required","challenge":"…"}`.
 Every subsequent request to that endpoint mints a *fresh* challenge, including
@@ -113,6 +133,9 @@ superseding it on the next request, and send `Retry-After` on 429 — the
 quickstart tells clients to read that header, so the auth path should send it.
 
 ### 1.6 Three fields on the status record are undocumented
+
+**Re-verified 2026-08-10** by searching `docs/` and `docs-site/` on `staging`:
+zero hits for all three, against controls (`receipts`, `sponsored`) that hit.
 
 `retryCount`, `gasPriceWei` and `estimatedCostUsd` appear on
 `GET /api/execute/{id}/status` and in no documentation. `receipts` and
