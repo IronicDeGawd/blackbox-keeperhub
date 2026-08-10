@@ -57,7 +57,17 @@ const lookupRpcUrls = [env['SEPOLIA_RPC_URL'], env['ALCHEMY_RPC_URL'], env['FALL
   .filter((url): url is string => Boolean(url))
   .filter((url) => url !== rpcUrl);
 
+// The local compose database is a convenience for development and a trap in a
+// container: unset in a deployment, the process would boot, look healthy, and
+// quietly fail every query against a host that does not exist. Refuse instead,
+// unless something is actually listening locally.
 const databaseUrl = env['DATABASE_URL'] ?? 'postgres://blackbox:blackbox@localhost:5433/blackbox';
+if (!env['DATABASE_URL'] && env['K_SERVICE']) {
+  throw new Error(
+    'DATABASE_URL is not set. Refusing to start against the local development database ' +
+      'from inside a managed container, where it cannot exist.',
+  );
+}
 const signerAccount = env['CHAOS_SIGNER_PRIVATE_KEY']
   ? privateKeyToAccount(env['CHAOS_SIGNER_PRIVATE_KEY'] as `0x${string}`)
   : undefined;
@@ -82,6 +92,9 @@ const logger = {
 
 const keeperHub = keeperHubFromEnv(env);
 const diagnostician = diagnosticianFromEnv(env);
+
+/** Answers already paid for, keyed by chain and hash. */
+const diagnosisCache = new Map<string, unknown>();
 
 const runtime = new Runtime({
   db,
@@ -264,7 +277,24 @@ const app = await buildApp({
   db,
   config,
   bus,
-  diagnose: (params) => runtime.diagnoseTransaction(params),
+  // Diagnosis spends a model call, and the route is open to anyone. The
+  // background loop already refuses to explain the same incident twice for
+  // this reason; the on-demand path needs the same memory, or the same hash
+  // asked for repeatedly bills us repeatedly for one answer.
+  diagnose: async (params) => {
+    const key = `${params.chainId}:${params.txHash.toLowerCase()}`;
+    const remembered = diagnosisCache.get(key);
+    if (remembered) return remembered;
+    const answer = await runtime.diagnoseTransaction(params);
+    // Bounded, oldest out first: a cache nobody can flush is another way to be
+    // filled up by strangers.
+    if (diagnosisCache.size >= 500) {
+      const oldest = diagnosisCache.keys().next().value;
+      if (oldest) diagnosisCache.delete(oldest);
+    }
+    diagnosisCache.set(key, answer);
+    return answer;
+  },
   signerHealth: (params) => runtime.signerHealth(params),
   ...(loop
     ? {
