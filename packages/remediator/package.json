@@ -5,7 +5,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": "./dist/index.js" },
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -13,6 +15,7 @@
   },
   "dependencies": {
     "@blackbox/core": "workspace:*",
-    "@blackbox/store": "workspace:*"
+    "@blackbox/store": "workspace:*",
+    "viem": "^2.21.45"
   }
 }

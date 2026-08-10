@@ -21,6 +21,12 @@ export type PlaybookPlan =
       to: `0x${string}`;
       value: bigint;
       data?: `0x${string}`;
+      /**
+       * The same call named at ABI level. KeeperHub's contract-call endpoint
+       * takes a function name and arguments, not raw calldata, so a plan that
+       * should be submittable through KeeperHub has to carry both forms.
+       */
+      call?: { functionName: string; args: unknown[]; abi?: string };
       maxFeePerGas: bigint;
       maxPriorityFeePerGas: bigint;
       route: 'public' | 'private';
@@ -200,6 +206,7 @@ export const P4: Playbook = {
       to: ctx.breakerAddress,
       value: 0n,
       data: PAUSE_SELECTOR,
+      call: { functionName: 'pause', args: [] },
       maxFeePerGas: ctx.baseFee * 2n + ctx.suggestedPriorityFee,
       maxPriorityFeePerGas: ctx.suggestedPriorityFee,
       route: chain.privateMempool ? 'private' : 'public',
