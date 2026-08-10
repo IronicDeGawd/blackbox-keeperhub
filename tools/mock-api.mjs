@@ -123,7 +123,7 @@ const REMEDIATION_SAMPLE = {
       explorerUrl: explorer('0x68a38ff18521775f812e27e5dd678d7ba6659b2ae3e086325c85a9d1fd88d925'),
       gasUsed: '21000',
       route: 'public',
-      executor: 'signer',
+      executor: 'keeperhub-workflow',
       description: 'fill missing nonce 47',
     },
   ],
@@ -233,6 +233,16 @@ const SCENARIOS = [
 // SSE
 // ---------------------------------------------------------------------------
 
+let watched = [
+  {
+    signer: '0xb9c58185d09d0acf3b237cd45c67345e32e628ba',
+    chainId: CHAIN_ID,
+    agentId: AGENT,
+    label: 'chaos signer',
+    registeredAt: ago(600_000),
+  },
+];
+
 const clients = new Set();
 
 function broadcast(event, data) {
@@ -317,6 +327,20 @@ setInterval(() => {
   broadcast('stats.updated', stats());
 }, 6000).unref?.();
 
+// The scanner keeping up with head. A quiet liveness signal: without it, "no
+// incidents" and "nothing is running" look identical.
+let head = 11458000;
+setInterval(() => {
+  head += 1;
+  broadcast('scan.progress', {
+    fromBlock: head,
+    toBlock: head,
+    blocksScanned: 1,
+    matched: 0,
+    watching: watched.length,
+  });
+}, 12_000).unref?.();
+
 // ---------------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------------
@@ -363,6 +387,100 @@ const server = createServer(async (req, res) => {
 
   if (path === '/api/health') return json(res, 200, { ok: true, mock: true, at: now() });
 
+  // --- watched addresses ----------------------------------------------------
+  if (path === '/api/watched' && req.method === 'GET') {
+    return json(res, 200, { items: watched });
+  }
+
+  if (path === '/api/watched' && req.method === 'POST') {
+    const body = await readBody(req);
+    const signer = String(body.signer ?? '');
+    if (!/^0x[0-9a-fA-F]{40}$/.test(signer)) {
+      return json(res, 400, {
+        error: 'invalid_address',
+        detail: `"${signer}" is not a 20-byte hex address`,
+        requestId: nextId('req'),
+      });
+    }
+    const chainId = Number(body.chainId ?? CHAIN_ID);
+    if (![11155111, 84532, 1, 8453].includes(chainId)) {
+      return json(res, 400, {
+        error: 'unsupported_chain',
+        detail: `Chain ${chainId} is not configured`,
+        requestId: nextId('req'),
+      });
+    }
+    const entry = {
+      signer: signer.toLowerCase(),
+      chainId,
+      agentId: String(body.agentId ?? signer.slice(0, 10)),
+      label: body.label ?? null,
+      registeredAt: now(),
+    };
+    watched = watched.filter((w) => w.signer !== entry.signer).concat(entry);
+    return json(res, 201, { signer: entry.signer, chainId, watching: true });
+  }
+
+  const unwatch = path.match(/^\/api\/watched\/([^/]+)$/);
+  if (unwatch && req.method === 'DELETE') {
+    watched = watched.filter((w) => w.signer !== unwatch[1].toLowerCase());
+    return json(res, 200, { signer: unwatch[1].toLowerCase(), watching: false });
+  }
+
+  // --- explain any transaction ----------------------------------------------
+  if (path === '/api/diagnose' && req.method === 'POST') {
+    const body = await readBody(req);
+    const txHash = String(body.txHash ?? '');
+    if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+      return json(res, 400, {
+        error: 'invalid_tx_hash',
+        detail: `"${txHash}" is not a 32-byte transaction hash`,
+        requestId: nextId('req'),
+      });
+    }
+    // Three shapes, chosen by the last hex digit so a UI can exercise each on
+    // demand: 0 not found, 1 nothing wrong, anything else classified.
+    const last = txHash.slice(-1);
+    if (last === '0') {
+      return json(res, 200, {
+        txHash,
+        chainId: CHAIN_ID,
+        found: false,
+        detail: 'No such transaction on this chain, or it is not yet visible to this node.',
+      });
+    }
+    if (last === '1') {
+      return json(res, 200, {
+        txHash, chainId: CHAIN_ID, chain: CHAIN_NAME, found: true,
+        signer: SIGNER, nonce: 93, status: 'included', blockNumber: 11457999,
+        simulation: { performed: false, success: null, simulatedAtBlock: null,
+          note: 'Not replayed: only a reverted transaction is worth replaying.' },
+        explorerUrl: explorer(txHash),
+        class: null,
+        detail: 'No rule fired for this transaction.',
+        checked: { latestNonce: 94, pendingNonce: 94, missingNonces: [], balanceWei: '61698676197118630' },
+      });
+    }
+    return json(res, 200, {
+      txHash, chainId: CHAIN_ID, chain: CHAIN_NAME, found: true,
+      signer: SIGNER, nonce: 42, status: 'reverted', blockNumber: 11457536,
+      simulation: { performed: true, success: true, simulatedAtBlock: 11457535,
+        note: 'Replayed against the block before inclusion to establish whether state drifted.' },
+      explorerUrl: explorer(txHash),
+      class: 'SIM_PASS_EXEC_REVERT',
+      severity: 'critical',
+      confidence: 0.95,
+      ruleId: 'R4',
+      facts: { blockDrift: 1, simulatedAtBlock: 11457535, includedAtBlock: 11457536, gasUsed: '33245' },
+      rca: { ...RCA_SAMPLE, narrative: undefined,
+        summary: 'The call simulated clean at block 11457535 and reverted at 11457536. Nothing about the call changed; the state underneath it did.',
+        contributingFactors: ['State the call depends on was modified between simulation and inclusion'],
+        recommendation: 'Re-simulate immediately before submission and make the call defend its own preconditions on chain.',
+        timeline: [] },
+      rcaSource: 'model',
+    });
+  }
+
   if (path === '/api/stats') return json(res, 200, stats());
 
   if (path === '/api/config') {
@@ -378,6 +496,13 @@ const server = createServer(async (req, res) => {
         signerAllowlist: [SIGNER],
         chainAllowlist: [11155111],
         budget: { maxRemediationsPerHour: 10, maxGasWeiPerHour: '50000000000000000' },
+      },
+      capabilities: {
+        remediate: true,
+        chaos: true,
+        diagnose: true,
+        signerHealth: true,
+        proposeRemediation: true,
       },
       version: '0.1.0-mock',
     });
@@ -460,6 +585,75 @@ const server = createServer(async (req, res) => {
       playbookId: 'P2',
       attemptId: nextId('rem'),
     });
+  }
+
+  const plan = path.match(/^\/api\/incidents\/([^/]+)\/remediation-plan$/);
+  if (plan && req.method === 'GET') {
+    const incident = incidents.get(plan[1]);
+    if (!incident) return notFound(res, `Incident ${plan[1]} not found`);
+    if (incident.chainId === 84532) {
+      return json(res, 200, {
+        incidentId: incident.id, playbookId: 'P3', actionable: false,
+        signerRequired: incident.signer, chainId: incident.chainId,
+        guards: { passed: ['min_confidence'], failed: [] },
+        transaction: null,
+        declined: { policy: 'skipped_by_policy',
+          reason: 'Base Sepolia has no private mempool, so there is no alternative route to submit through' },
+      });
+    }
+    return json(res, 200, {
+      incidentId: incident.id,
+      playbookId: 'P2',
+      actionable: true,
+      signerRequired: incident.signer,
+      chainId: incident.chainId,
+      guards: {
+        passed: ['min_confidence', 'signer_allowlist', 'chain_allowlist', 'not_self', 'budget'],
+        failed: [],
+      },
+      transaction: {
+        to: incident.signer,
+        value: '0',
+        data: null,
+        nonce: 47,
+        maxFeePerGas: '4191302983',
+        maxPriorityFeePerGas: '2000000000',
+        chainId: incident.chainId,
+        description: 'fill missing nonce 47',
+        route: 'private',
+      },
+      declined: null,
+    });
+  }
+
+  const userTx = path.match(/^\/api\/incidents\/([^/]+)\/remediation-tx$/);
+  if (userTx && req.method === 'POST') {
+    const incident = incidents.get(userTx[1]);
+    if (!incident) return notFound(res, `Incident ${userTx[1]} not found`);
+    const body = await readBody(req);
+    const txHash = String(body.txHash ?? '');
+    if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+      return json(res, 400, { error: 'invalid_tx_hash', detail: `"${txHash}" is not a 32-byte transaction hash`, requestId: nextId('req') });
+    }
+    // Ending in 9 stands for "signed by the wrong account", so the rejection
+    // path can be built without a wallet.
+    if (txHash.endsWith('9')) {
+      return json(res, 422, {
+        error: 'transaction_rejected',
+        detail: `That transaction was sent by 0xa17cb6adb58277e5b4a44b8c1ecb449bb6614e87, but this incident is about ${incident.signer}. Only a transaction from the incident's own signer can resolve it.`,
+        requestId: nextId('req'),
+      });
+    }
+    incident.status = 'resolved';
+    incident.resolvedAt = now();
+    incident.resolvedBy = 'blackbox-proposed';
+    incident.remediation = {
+      ...REMEDIATION_SAMPLE,
+      attempts: [{ ...REMEDIATION_SAMPLE.attempts[0], txHash, explorerUrl: explorer(txHash), executor: 'user-signed' }],
+    };
+    broadcast('incident.updated', summary(incident));
+    broadcast('remediation.succeeded', { incidentId: incident.id, txHash, explorerUrl: explorer(txHash) });
+    return json(res, 200, { accepted: true, included: true, gasUsed: '21000', explorerUrl: explorer(txHash) });
   }
 
   const health = path.match(/^\/api\/signers\/([^/]+)\/health$/);

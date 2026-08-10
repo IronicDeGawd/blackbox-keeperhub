@@ -51,9 +51,16 @@ Seven things can go wrong. The UI never invents its own names for these.
 
 **Severity** is `critical | warning | info`.
 
-**`resolvedBy`** is `blackbox | external | unknown` — did Blackbox fix it, did
+**`resolvedBy`** is `blackbox | blackbox-proposed | external | unknown` — did
+Blackbox fix it, did Blackbox plan the fix and a human's wallet sign it, did
 something else, or do we not know. This distinction matters more than it looks:
-it is the difference between the product working and the problem going away.
+it is the difference between the product working and the problem going away, and
+`blackbox-proposed` must never be rendered as though Blackbox acted alone.
+
+**`executor`** on a remediation attempt is `keeperhub-workflow | keeperhub |
+signer | user-signed` — which path put the transaction on chain. A workflow run
+happened inside the operator's own KeeperHub dashboard and is worth surfacing as
+such; `user-signed` means a wallet did it.
 
 **Rule IDs** `R1`–`R7` map to the classes above in order. Show them. Detection
 being mechanical and auditable is the point, so the rule that fired is evidence,
@@ -65,8 +72,8 @@ not an implementation detail.
 
 Present on every page.
 
-**Left rail or top nav** — three destinations: Timeline, Incidents (same data,
-filterable table), Chaos. Keep it to three; there is no settings page.
+**Left rail or top nav** — five destinations: Timeline, Incidents (same data,
+filterable table), **Inspect**, **Watched**, Chaos. There is no settings page.
 
 **Header strip** — always visible, driven by `GET /api/stats` and refreshed by
 the `stats.updated` SSE event:
@@ -86,6 +93,16 @@ reconnect, because events during the gap were missed.
 
 **Chain banner** — the active chain, and whether it is a testnet. If a mainnet
 chain is ever active this must be unmistakable.
+
+**Capabilities gate the UI.** `GET /api/config` returns a `capabilities` object:
+
+```json
+{ "remediate": true, "chaos": true, "diagnose": true,
+  "signerHealth": true, "proposeRemediation": true }
+```
+
+A process without a key cannot remediate, and those routes genuinely do not
+exist on it. Hide the controls rather than showing buttons that 404.
 
 ---
 
@@ -196,6 +213,12 @@ Always render `guardsPassed` and `guardsFailed`. Eight guards run and all are
 evaluated independently, so several can fail at once — show all of them, not
 just the first.
 
+**Show which path executed it.** `attempts[].executor` distinguishes a KeeperHub
+workflow run from a direct call, a locally held key, and a wallet signature.
+Label a `keeperhub-workflow` attempt as such — that remediation is visible in
+the operator's own KeeperHub dashboard, with per-node logs, and saying so is the
+point.
+
 ### Actions
 
 - **Acknowledge** — `POST /api/incidents/:id/acknowledge`
@@ -203,6 +226,37 @@ just the first.
   spends real gas. The response may come back `accepted: false` with
   `guardsFailed` — that is a normal outcome, render it in place, not as an error
   toast.
+- **Fix it myself** — the wallet flow, described below. Present whenever
+  `capabilities.proposeRemediation` is true, and as the *primary* action when
+  the plan's `signerRequired` is not an address Blackbox can sign for.
+
+### 2.5 Remediation the user signs
+
+Some fixes must occupy a specific nonce on a specific account, and only that
+account's key can do that — KeeperHub executes through a sponsored relayer at
+the sponsor's nonce, so it cannot. For those, Blackbox plans and the owner
+signs.
+
+1. `GET /api/incidents/:id/remediation-plan` returns the unsigned transaction
+   plus the guards. Render it in full before asking for a signature — `to`,
+   `value`, `nonce`, both fee caps, and the human `description`. A user is about
+   to sign this; showing them a spinner and a button is not acceptable.
+2. Connect a wallet and check the connected address equals `signerRequired`.
+   Any other account cannot help, and saying so up front avoids a wasted
+   signature.
+3. Send it with the exact values from the plan. Do not let the wallet re-price
+   or re-nonce it — a different nonce does not fill the gap.
+4. `POST /api/incidents/:id/remediation-tx { txHash }`. Blackbox verifies the
+   sender and nonce match the plan before accepting, waits for the receipt, and
+   records the attempt as `user-signed`.
+
+A mismatch answers **422** `transaction_rejected` with a `detail` explaining
+which check failed. Show that verbatim — it is specific and actionable
+("that transaction was sent by 0x…, but this incident is about 0x…").
+
+`actionable: false` on the plan means Blackbox's own guards would block it; the
+transaction is still shown, because a human may legitimately choose to sign what
+the automation is not allowed to do.
 
 ---
 
@@ -226,6 +280,61 @@ real testnet gas.
 After firing, show the returned `txHashes`, the `expectedIncidentClass`, and
 `expectedDetectionSeconds` — then let the user watch the incident appear in the
 timeline. Wiring the button to the resulting incident is the demo.
+
+---
+
+## Page 4 — Inspect (`/inspect`)
+
+The page that needs nothing from the user but a hash. Paste any transaction on a
+supported chain and Blackbox explains it — the sender does not have to be
+registered, monitored, or aware Blackbox exists.
+
+**One input, one button.** A hash field and *Explain this transaction*. This is
+the page to hand someone who is evaluating the product, so it must work with
+zero setup.
+
+`POST /api/diagnose { txHash, chainId? }` returns one of three shapes:
+
+| Shape | Render |
+| --- | --- |
+| `found: false` | The `detail` line, plainly. Not an error state — a hash from another chain is a reasonable mistake. |
+| `class: null` | "Nothing wrong with this one", plus the `checked` block — latest and pending nonce, missing nonces, balance. Showing what was examined is what makes a clean result trustworthy. |
+| a class | The full result: classification, severity, confidence, rule id, `facts`, and the `rca`. Render it exactly like the incident detail page, because it is the same thing without an incident record. |
+
+Always show the `simulation` block. For a reverted transaction Blackbox replays
+the call against the block *before* inclusion, and whether it would have
+succeeded there is the entire difference between state drift and a call that was
+doomed from the start. Say which happened, and name the block.
+
+There is no persistence: this is a question, not a subscription. Offer *Watch
+this address* as the follow-up.
+
+---
+
+## Page 5 — Watched addresses (`/watched`)
+
+Register any address and Blackbox discovers its transactions by scanning blocks.
+Nothing is installed on the watched agent's side.
+
+- **Add**: address, chain, optional label and agent id. `POST /api/watched`.
+  A malformed address answers **400** `invalid_address`; an unconfigured chain
+  answers **400** `unsupported_chain`. Both have readable `detail` lines.
+- **List**: `GET /api/watched` — address, chain, label, since when.
+- **Remove**: `DELETE /api/watched/:signer?chainId=` — stops discovery; existing
+  incidents remain.
+
+Say plainly on this page what watching does and does not give you: detection and
+explanation for any address, but remediation only where Blackbox holds a key,
+the address is a KeeperHub managed wallet, or the owner signs a plan themselves.
+Overpromising here is the fastest way to lose someone's trust.
+
+Discovery starts from the moment an address is registered, not from genesis —
+tell the user that, or an empty list reads as a bug.
+
+The `scan.progress` SSE event carries `{ fromBlock, toBlock, blocksScanned,
+matched, watching }`. A quiet line showing the scanner keeping up with head is
+worth more than it sounds: it is the difference between "nothing has happened"
+and "nothing is running".
 
 ---
 
@@ -279,6 +388,42 @@ The summary fields above plus `evidence`, `rca`, `remediation`, `events[]`,
 
 ### `POST /api/incidents/:id/acknowledge` → updated summary.
 
+### `GET /api/incidents/:id/remediation-plan`
+
+```json
+{
+  "incidentId": "inc-1",
+  "playbookId": "P2",
+  "actionable": true,
+  "signerRequired": "0xb9c58185d09d0acf3b237cd45c67345e32e628ba",
+  "chainId": 11155111,
+  "guards": { "passed": ["min_confidence", "budget"], "failed": [] },
+  "transaction": {
+    "to": "0xb9c5…", "value": "0", "data": null, "nonce": 93,
+    "maxFeePerGas": "4191302983", "maxPriorityFeePerGas": "2000000000",
+    "chainId": 11155111, "description": "fill missing nonce 93", "route": "private"
+  },
+  "declined": null
+}
+```
+
+`declined` is set instead of `transaction` when the playbook refuses — for
+example P3 on a chain with no private mempool. Show the reason.
+
+### `POST /api/incidents/:id/remediation-tx`
+
+`{ "txHash": "0x…" }` → `{ accepted, included, gasUsed, explorerUrl }`, or
+**422** `transaction_rejected` when the sender or nonce does not match the plan.
+
+### `POST /api/diagnose`
+
+`{ "txHash": "0x…", "chainId?": 11155111 }`. See Page 4 for the three response
+shapes.
+
+### `GET|POST /api/watched`, `DELETE /api/watched/:signer`
+
+See Page 5.
+
 ### `GET /api/stats`
 
 ```json
@@ -318,7 +463,8 @@ See the mock. `chaos/run` takes `{ "scenario": "C2" }`.
 | `remediation.failed` | `{ incidentId, reason }` |
 | `chaos.started` | `{ runId, scenario, at }` |
 | `chaos.completed` | `{ runId, scenario, incidentIds[] }` |
-| `stats.updated` | the stats object |
+| `scan.progress` | `{ fromBlock, toBlock, blocksScanned, matched, watching }` |
+| `stats.updated` | the full stats object, not a nudge to refetch |
 
 Comment frames (`: ping`) arrive every 15s as keepalive — ignore them.
 
@@ -336,6 +482,13 @@ Comment frames (`: ping`) arrive every 15s as keepalive — ignore them.
    the gap are gone.
 6. **Truncate addresses in display, never in copy.** Copy gives the full value.
 7. **The rule ID and thresholds are content, not debug output.** Ship them.
+8. **`blackbox-proposed` is not `blackbox`.** A fix a human signed must not be
+   rendered as autonomous remediation.
+9. **Check `capabilities` before showing a control.** Those routes do not exist
+   on a process that cannot perform them, and a 404 is a worse answer than a
+   hidden button.
+10. **Never let a wallet re-price or re-nonce a plan.** A different nonce does
+    not fill the gap, and the server will reject the hash.
 
 ---
 

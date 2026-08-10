@@ -1,0 +1,935 @@
+<title>Blackbox Console — Build Spec</title>
+<style>
+  :root {
+    --ground: #F6F7F9;
+    --surface: #FFFFFF;
+    --surface-sunk: #EDEFF3;
+    --ink: #14171D;
+    --ink-soft: #4A515E;
+    --ink-faint: #767E8C;
+    --rule: #DBDFE6;
+    --rule-strong: #C3C9D4;
+    --accent: #D24608;
+    --accent-soft: #FBEDE6;
+    --critical: #C22B2B;
+    --warning: #A66A00;
+    --ok: #1F7A4D;
+    --code-bg: #F1F3F7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #101317;
+      --surface: #171B21;
+      --surface-sunk: #1D222A;
+      --ink: #E7EAEF;
+      --ink-soft: #A8B0BC;
+      --ink-faint: #7C8492;
+      --rule: #2A3039;
+      --rule-strong: #3A424E;
+      --accent: #FF7A3D;
+      --accent-soft: #2A1A12;
+      --critical: #F2685F;
+      --warning: #D9A036;
+      --ok: #4FBE87;
+      --code-bg: #1B2028;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #101317;
+    --surface: #171B21;
+    --surface-sunk: #1D222A;
+    --ink: #E7EAEF;
+    --ink-soft: #A8B0BC;
+    --ink-faint: #7C8492;
+    --rule: #2A3039;
+    --rule-strong: #3A424E;
+    --accent: #FF7A3D;
+    --accent-soft: #2A1A12;
+    --critical: #F2685F;
+    --warning: #D9A036;
+    --ok: #4FBE87;
+    --code-bg: #1B2028;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 16px;
+    line-height: 1.65;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 clamp(20px, 5vw, 56px) 120px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  /* ---- masthead ---- */
+  header.masthead {
+    border-bottom: 2px solid var(--ink);
+    padding: clamp(40px, 7vw, 80px) 0 22px;
+    margin-bottom: 44px;
+  }
+  .eyebrow {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .eyebrow::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--rule-strong);
+  }
+  h1 {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    font-size: clamp(30px, 5.2vw, 50px);
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    text-wrap: balance;
+    margin: 0 0 20px;
+  }
+  .standfirst {
+    font-size: clamp(16px, 2vw, 19px);
+    color: var(--ink-soft);
+    max-width: 62ch;
+    margin: 0;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 28px;
+    margin-top: 26px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--ink-faint);
+  }
+  .meta b { color: var(--ink); font-weight: 500; }
+
+  /* ---- layout with rail ---- */
+  .body-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 48px;
+  }
+  @media (min-width: 1000px) {
+    .body-grid { grid-template-columns: 200px minmax(0, 1fr); gap: 56px; }
+    nav.toc { position: sticky; top: 32px; align-self: start; }
+  }
+  nav.toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+  }
+  nav.toc a {
+    color: var(--ink-faint);
+    text-decoration: none;
+    display: block;
+    padding: 4px 0 4px 12px;
+    border-left: 2px solid var(--rule);
+  }
+  nav.toc a:hover { color: var(--accent); border-left-color: var(--accent); }
+  nav.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  main { min-width: 0; display: flex; flex-direction: column; gap: 52px; }
+  section { min-width: 0; scroll-margin-top: 24px; }
+
+  h2 {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule-strong);
+    text-wrap: balance;
+  }
+  h2 .num {
+    color: var(--accent);
+    font-size: 13px;
+    vertical-align: 3px;
+    margin-right: 10px;
+    letter-spacing: 0.08em;
+  }
+  h3 {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 15px;
+    font-weight: 600;
+    margin: 32px 0 8px;
+    color: var(--ink);
+  }
+  h4 {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 26px 0 8px;
+    font-weight: 600;
+  }
+  p { margin: 0 0 14px; max-width: 68ch; }
+  section > p:first-of-type { margin-top: 14px; }
+  ul, ol.list { padding-left: 20px; max-width: 68ch; margin: 0 0 14px; }
+  li { margin-bottom: 7px; }
+  strong { font-weight: 640; }
+  a { color: var(--accent); }
+
+  code {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    font-size: 0.875em;
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 1px 5px;
+    white-space: nowrap;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 0 0 16px;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 13px;
+    white-space: pre;
+  }
+
+  .table-wrap { overflow-x: auto; margin: 0 0 16px; border: 1px solid var(--rule); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 520px; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: var(--surface-sunk);
+    white-space: nowrap;
+  }
+  tr:last-child td { border-bottom: none; }
+  td code { white-space: nowrap; }
+  .num-col { font-variant-numeric: tabular-nums; }
+
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    padding: 16px 18px;
+    margin: 0 0 16px;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .label {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  .sev { font-weight: 600; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .sev.crit { color: var(--critical); }
+  .sev.warn { color: var(--warning); }
+  .sev.ok { color: var(--ok); }
+
+  .rowsketch {
+    background: var(--surface);
+    border: 1px solid var(--rule-strong);
+    padding: 18px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 13px;
+    margin: 0 0 16px;
+    overflow-x: auto;
+  }
+  .rowsketch .dot { color: var(--critical); }
+  .rowsketch .cls { color: var(--accent); }
+  .rowsketch .dim { color: var(--ink-faint); }
+  .rowsketch .pill {
+    border: 1px solid var(--ok);
+    color: var(--ok);
+    padding: 1px 7px;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+  }
+
+  .lifecycle {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    margin: 0 0 16px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+  }
+  .lifecycle span.step {
+    padding: 3px 9px;
+    border: 1px solid var(--rule-strong);
+    color: var(--ink-soft);
+  }
+  .lifecycle span.step.end { border-color: var(--ok); color: var(--ok); }
+  .lifecycle span.arrow { color: var(--accent); }
+
+  footer.foot {
+    margin-top: 64px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--ink-faint);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="page">
+  <header class="masthead">
+    <p class="eyebrow">Build spec · v0.2 · 2026-08-10</p>
+    <h1>Blackbox Console</h1>
+    <p class="standfirst">
+      Everything needed to build the UI without reading the backend. The real API does not
+      exist yet; a zero-dependency mock that serves the exact shapes does. Build against the
+      mock, and the server drops in behind it unchanged.
+    </p>
+    <div class="meta">
+      <span>Mock <b>node tools/mock-api.mjs</b></span>
+      <span>Port <b>4001</b></span>
+      <span>Pages <b>5</b></span>
+      <span>Transport <b>REST + SSE</b></span>
+    </div>
+  </header>
+
+  <div class="body-grid">
+    <nav class="toc" aria-label="Contents">
+      <ol>
+        <li><a href="#what">What Blackbox is</a></li>
+        <li><a href="#mock">Running the mock</a></li>
+        <li><a href="#vocab">Vocabulary</a></li>
+        <li><a href="#shell">Shared shell</a></li>
+        <li><a href="#p1">1 · Timeline</a></li>
+        <li><a href="#p2">2 · Incident detail</a></li>
+        <li><a href="#p3">3 · Chaos panel</a></li>
+        <li><a href="#p4">4 · Inspect</a></li>
+        <li><a href="#p5">5 · Watched</a></li>
+        <li><a href="#api">API reference</a></li>
+        <li><a href="#traps">Easy to get wrong</a></li>
+        <li><a href="#scope">Out of scope</a></li>
+      </ol>
+    </nav>
+
+    <main>
+      <section id="what">
+        <h2><span class="num">00</span>What Blackbox is</h2>
+        <p>
+          It watches onchain agents execute transactions, detects when execution goes wrong,
+          explains why, and fixes it with a real transaction. The console is the forensic
+          surface over that.
+        </p>
+        <div class="callout">
+          <span class="label">The design constraint, before anything else</span>
+          <p>
+            This is a tool an SRE keeps open during an incident, not a marketing dashboard.
+            Dense, monospace-leaning, information-first. Every number on screen is a real
+            measured value with units. No decorative cards, no sparkline that means nothing,
+            no gradient hero. Credibility comes from looking like something you'd trust at 3am.
+          </p>
+        </div>
+      </section>
+
+      <section id="mock">
+        <h2><span class="num">01</span>Running the mock</h2>
+<pre><code>node tools/mock-api.mjs          # http://localhost:4001
+PORT=5001 node tools/mock-api.mjs</code></pre>
+        <p>
+          Zero dependencies. It serves five seeded incidents covering every visual state,
+          advances one through its lifecycle every six seconds so the live feed visibly moves,
+          and streams every change over SSE. The transaction hashes in the fixtures are real
+          Sepolia transactions, so explorer links resolve.
+        </p>
+        <p>CORS is wide open — the console runs on a different port in development.</p>
+      </section>
+
+      <section id="vocab">
+        <h2><span class="num">02</span>Vocabulary</h2>
+        <p>Seven things can go wrong. The UI never invents its own names for these.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Class</th><th>Means</th><th>Typical severity</th></tr></thead>
+            <tbody>
+              <tr><td><code>STUCK_TRANSACTION</code></td><td>Submitted, still pending well past normal</td><td><span class="sev warn">warning</span></td></tr>
+              <tr><td><code>NONCE_GAP</code></td><td>A hole in the nonce sequence wedges everything behind it</td><td><span class="sev crit">critical</span></td></tr>
+              <tr><td><code>GAS_UNDERPRICED</code></td><td>Bid has fallen below the market since submission</td><td><span class="sev warn">warning</span></td></tr>
+              <tr><td><code>SIM_PASS_EXEC_REVERT</code></td><td>Simulated clean, reverted on chain — state drifted underneath</td><td><span class="sev crit">critical</span></td></tr>
+              <tr><td><code>RETRY_STORM</code></td><td>Same action failing over and over, burning gas</td><td><span class="sev crit">critical</span></td></tr>
+              <tr><td><code>SIGNER_GAS_STARVED</code></td><td>Balance no longer covers the next action</td><td><span class="sev crit">critical</span></td></tr>
+              <tr><td><code>ADVERSE_INCLUSION</code></td><td>Landed, but at a materially worse price than quoted</td><td><span class="sev warn">warning</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h4>Status is a lifecycle</h4>
+        <div class="lifecycle">
+          <span class="step">open</span><span class="arrow">→</span>
+          <span class="step">diagnosing</span><span class="arrow">→</span>
+          <span class="step">remediating</span><span class="arrow">→</span>
+          <span class="step end">resolved</span>
+          <span class="dim" style="color:var(--ink-faint)">plus</span>
+          <span class="step">acknowledged</span>
+          <span class="step">failed</span>
+        </div>
+        <p>
+          <code>acknowledged</code> means a human took it; <code>failed</code> means remediation
+          could not fix it. Severity is <code>critical | warning | info</code>.
+        </p>
+
+        <h4>resolvedBy</h4>
+        <p>
+          <code>blackbox</code>, <code>blackbox-proposed</code>, <code>external</code>, or
+          <code>unknown</code> — did Blackbox fix it, did Blackbox plan the fix and a human's
+          wallet sign it, did something else, or do we not know. This is the difference between
+          the product working and the problem going away, and <code>blackbox-proposed</code> must
+          never be rendered as though Blackbox acted alone.
+        </p>
+
+        <h4>executor</h4>
+        <p>
+          On a remediation attempt: <code>keeperhub-workflow</code>, <code>keeperhub</code>,
+          <code>signer</code>, or <code>user-signed</code> — which path put the transaction on
+          chain. A workflow run happened inside the operator's own KeeperHub dashboard, and
+          saying so is the point.
+        </p>
+
+        <h4>Rule IDs</h4>
+        <p>
+          <code>R1</code>–<code>R7</code> map to the classes above in order. Show them. Detection
+          being mechanical and auditable is the point, so the rule that fired is evidence, not an
+          implementation detail.
+        </p>
+      </section>
+
+      <section id="shell">
+        <h2><span class="num">03</span>Shared shell</h2>
+        <p>Present on every page.</p>
+
+        <h3>Navigation</h3>
+        <p>
+          Five destinations: Timeline, Incidents (same data, filterable table), Inspect,
+          Watched, Chaos. There is no settings page.
+        </p>
+
+        <h3>Header strip</h3>
+        <p>
+          Always visible, driven by <code>GET /api/stats</code> and refreshed by the
+          <code>stats.updated</code> SSE event:
+        </p>
+        <ul>
+          <li>Open incidents by severity — three counts, colour-coded, critical first</li>
+          <li>Remediations: total, succeeded, skipped, failed, and total gas spent</li>
+          <li>Mean time to detection</li>
+          <li>Mean time to remediation</li>
+        </ul>
+        <p>
+          Format durations as <code>41s</code> / <code>1m 03s</code>, never <code>41000ms</code>.
+          Format wei as gwei or ETH with the unit stated. Never show a raw wei integer to a human
+          without a unit.
+        </p>
+
+        <h3>Live indicator</h3>
+        <p>
+          A dot showing SSE connection state: connected, reconnecting, disconnected. When
+          disconnected the feed is stale and the user must be able to tell at a glance. Reconnect
+          with backoff, and refetch <code>GET /api/incidents</code> on reconnect — events during
+          the gap are gone.
+        </p>
+
+        <h3>Chain banner</h3>
+        <p>
+          The active chain, and whether it is a testnet. If a mainnet chain is ever active this
+          must be unmistakable.
+        </p>
+
+        <h3>Capabilities gate the UI</h3>
+        <p>
+          <code>GET /api/config</code> returns a <code>capabilities</code> object —
+          <code>remediate</code>, <code>chaos</code>, <code>diagnose</code>,
+          <code>signerHealth</code>, <code>proposeRemediation</code>. A process without a key
+          cannot remediate, and those routes genuinely do not exist on it. Hide the controls
+          rather than shipping buttons that 404.
+        </p>
+      </section>
+
+      <section id="p1">
+        <h2><span class="num">04</span>Page 1 — Incident timeline</h2>
+        <p><code>/</code> · the landing page, and where the demo lives. Vertical feed, newest first, live-updating.</p>
+
+        <h3>Row anatomy</h3>
+        <div class="rowsketch">
+<span class="dot">●</span> CRITICAL&nbsp; <span class="cls">NONCE_GAP</span>&nbsp;&nbsp;&nbsp; chaos · <span class="dim">0xb9c5…28BA</span>&nbsp;&nbsp; <span class="dim">2m ago</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Nonce 47 unfilled; 1 action blocked behind it&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="pill">RESOLVED</span>
+        </div>
+        <ul>
+          <li><strong>Severity dot</strong> — colour by severity</li>
+          <li><strong>Class badge</strong> — monospace, uppercase</li>
+          <li><strong>Agent + truncated signer</strong> — <code>0xb9c5…28BA</code> form, full value on hover and on copy</li>
+          <li><strong>Relative time</strong> — updating live; absolute timestamp on hover</li>
+          <li><strong>Summary</strong> — one line of plain English from <code>summary</code></li>
+          <li><strong>Status pill</strong> — the lifecycle state</li>
+        </ul>
+
+        <h3>Status transitions animate</h3>
+        <div class="callout">
+          <span class="label">This is the moment the demo turns on</span>
+          <p>
+            <code>open → diagnosing → remediating → resolved</code> in a single row is the whole
+            product told in one motion. When a <code>remediation.succeeded</code> event arrives,
+            the row should visibly resolve and surface its transaction hash as an explorer link.
+            Give this real attention.
+          </p>
+        </div>
+
+        <h3>Filters</h3>
+        <p>
+          Class, severity, status, agent, chain. All map to query parameters on
+          <code>GET /api/incidents</code>. Filter state belongs in the URL so a view is shareable.
+        </p>
+
+        <h3>States to build</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>State</th><th>What to show</th></tr></thead>
+            <tbody>
+              <tr><td>Loading</td><td>Skeleton rows, not a spinner — the layout should not jump</td></tr>
+              <tr><td>Empty, no incidents</td><td>“No incidents. Induce one from the Chaos panel.” with a link</td></tr>
+              <tr><td>Empty, filters exclude all</td><td>Distinguish from the above; offer to clear filters</td></tr>
+              <tr><td>Error</td><td>The <code>detail</code> field from the error body, plus a retry control</td></tr>
+              <tr><td>Disconnected</td><td>Banner: the feed is stale, with reconnect state</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="p2">
+        <h2><span class="num">05</span>Page 2 — Incident detail</h2>
+        <p>
+          <code>/incidents/:id</code> · four panels. Order matters — evidence before narrative,
+          because the mechanical facts are what make the narrative trustworthy.
+        </p>
+
+        <h3>Evidence</h3>
+        <p>
+          The raw facts that tripped the rule, with the rule ID and the threshold each fact was
+          compared against. Render <code>evidence.facts</code> as a key/value table in monospace,
+          and put <code>evidence.thresholds</code> beside the fact it bounds:
+        </p>
+<pre><code>R2  NONCE_GAP                              confidence 0.90
+missingNonces          [47]
+latestNonce            47
+pendingNonce           47
+blockedActionCount     1
+consecutiveGapPolls    2        threshold  2</code></pre>
+        <p>
+          Also render <code>evidence.corroboration</code> — the independent chain readings taken at
+          detection time (balance, base fee, nonces). It is what separates a claim from a
+          measurement. <code>evidence.suppressedRules</code> lists rules that also fired but were
+          suppressed by a more specific one; show it when non-empty, since a hidden R1 under an R3
+          is otherwise confusing.
+        </p>
+        <div class="callout">
+          <span class="label">Wei values arrive as decimal strings</span>
+          <p>
+            They exceed <code>Number.MAX_SAFE_INTEGER</code>. Use <code>BigInt</code> and format for
+            display. Never <code>parseInt</code> them.
+          </p>
+        </div>
+
+        <h3>Event timeline</h3>
+        <p>
+          Event by event, oldest first, with timestamps and block numbers. Each event has a
+          <code>kind</code> — <code>submission</code>, <code>detection</code>, <code>rca</code>,
+          <code>remediation</code>, <code>inclusion</code> — give each a distinct icon. Rows with a
+          <code>txHash</code> link to the explorer.
+        </p>
+
+        <h3>Root cause analysis</h3>
+        <p>
+          <code>rca</code> is LLM-generated and <strong>must be visually distinguished</strong> from
+          measured facts — different background, and a label saying so. Fields:
+          <code>narrative</code>, <code>contributingFactors[]</code>, <code>prevention</code>,
+          <code>confidence</code>, <code>model</code>, <code>generatedAt</code>. It is
+          <code>null</code> until diagnosis runs; show a quiet placeholder, not an error.
+        </p>
+
+        <h3>Remediation</h3>
+        <p>Playbook name and ID, then the outcome. Three shapes, all equally important.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Outcome</th><th>What the panel must do</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><span class="sev ok">succeeded</span></td>
+                <td>The transaction hash as a prominent explorer link — this is the product's proof of work and should be the most visually significant element on the page. Show gas used and which executor submitted it (<code>signer</code> or <code>keeperhub</code>).</td>
+              </tr>
+              <tr>
+                <td><span class="sev warn">skipped</span></td>
+                <td><code>skipped_by_guard</code> or <code>skipped_by_policy</code>, with the reason rendered at <strong>equal prominence to a success</strong>. Blackbox declining to act with a stated reason is correct behaviour and a feature. Do not grey it out or tuck it away.</td>
+              </tr>
+              <tr>
+                <td><span class="sev crit">failed</span></td>
+                <td><code>failureReason</code>, plus any transaction hash that was submitted.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Always render <code>guardsPassed</code> and <code>guardsFailed</code>. Eight guards run
+          and all are evaluated independently, so several can fail at once — show all of them, not
+          just the first.
+        </p>
+
+        <p>
+          Show <strong>which path executed it</strong>. <code>attempts[].executor</code>
+          distinguishes a KeeperHub workflow run from a direct call, a locally held key and a
+          wallet signature. A <code>keeperhub-workflow</code> attempt is visible in the
+          operator's own KeeperHub dashboard with per-node logs — label it as such.
+        </p>
+
+        <h3>Remediation the user signs</h3>
+        <p>
+          Some fixes must occupy a specific nonce on a specific account, and only that account's
+          key can do that — KeeperHub executes through a sponsored relayer at the sponsor's
+          nonce, so it cannot. For those, Blackbox plans and the owner signs.
+        </p>
+        <ol class="list">
+          <li>
+            <code>GET /api/incidents/:id/remediation-plan</code> returns the unsigned transaction
+            plus the guards. Render it in full before asking for a signature — <code>to</code>,
+            <code>value</code>, <code>nonce</code>, both fee caps and the human
+            <code>description</code>. A user is about to sign this; a spinner and a button is not
+            acceptable.
+          </li>
+          <li>
+            Connect a wallet and check the connected address equals <code>signerRequired</code>.
+            Any other account cannot help, and saying so up front avoids a wasted signature.
+          </li>
+          <li>
+            Send it with the exact values from the plan. Do not let the wallet re-price or
+            re-nonce it — a different nonce does not fill the gap.
+          </li>
+          <li>
+            <code>POST /api/incidents/:id/remediation-tx { txHash }</code>. Blackbox verifies the
+            sender and nonce match the plan, waits for the receipt, and records the attempt as
+            <code>user-signed</code>.
+          </li>
+        </ol>
+        <div class="callout">
+          <span class="label">A mismatch answers 422, not 500</span>
+          <p>
+            <code>transaction_rejected</code> with a <code>detail</code> naming which check
+            failed — “that transaction was sent by 0x…, but this incident is about 0x…”. Show it
+            verbatim; it is specific and actionable. And <code>actionable: false</code> on the
+            plan means Blackbox's own guards would block it: still show the transaction, because
+            a human may legitimately choose to sign what the automation may not.
+          </p>
+        </div>
+
+        <h3>Actions</h3>
+        <ul>
+          <li><strong>Acknowledge</strong> — <code>POST /api/incidents/:id/acknowledge</code></li>
+          <li>
+            <strong>Remediate now</strong> — <code>POST /api/incidents/:id/remediate</code>. Confirm
+            first: this spends real gas. The response may come back <code>accepted: false</code>
+            with <code>guardsFailed</code> — that is a normal outcome, so render it in place, not
+            as an error toast.
+          </li>
+        </ul>
+      </section>
+
+      <section id="p3">
+        <h2><span class="num">06</span>Page 3 — Chaos panel</h2>
+        <p>
+          <code>/chaos</code> · induces real failures against real testnet contracts. Everything
+          here spends real testnet gas.
+        </p>
+        <ul>
+          <li>
+            <strong>Warning banner naming the active chain.</strong> Non-negotiable. The harness is
+            hard-restricted to testnets in code, but the UI must still say which one.
+          </li>
+          <li>
+            <strong>Scenario buttons</strong>, one per <code>C1</code>–<code>C6</code>, each showing
+            what it induces, whether it is deterministic, and its note. Disabled scenarios
+            (<code>enabled: false</code>) must show <em>why</em> — <code>C6</code> needs
+            controllable block ordering and only runs on a local fork.
+          </li>
+          <li>
+            <strong>Chaos signer balance and address</strong>, live. A drained signer is the most
+            common reason a scenario silently does nothing.
+          </li>
+          <li>
+            <strong>Target contract addresses</strong> — <code>chaosTarget</code> and
+            <code>circuitBreaker</code>, with explorer links.
+          </li>
+          <li><strong>Run full sweep</strong> — fires every enabled scenario in sequence.</li>
+        </ul>
+        <p>
+          After firing, show the returned <code>txHashes</code>, the
+          <code>expectedIncidentClass</code>, and <code>expectedDetectionSeconds</code> — then let
+          the user watch the incident appear in the timeline. Wiring the button to the resulting
+          incident is the demo.
+        </p>
+      </section>
+
+      <section id="p4">
+        <h2><span class="num">07</span>Page 4 — Inspect</h2>
+        <p>
+          <code>/inspect</code> · the page that needs nothing from the user but a hash. Paste any
+          transaction on a supported chain and Blackbox explains it — the sender does not have to
+          be registered, monitored, or aware Blackbox exists.
+        </p>
+        <p>
+          <strong>One input, one button.</strong> A hash field and <em>Explain this
+          transaction</em>. This is the page to hand someone evaluating the product, so it must
+          work with zero setup.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Response</th><th>Render</th></tr></thead>
+            <tbody>
+              <tr><td><code>found: false</code></td><td>The <code>detail</code> line, plainly. Not an error state — a hash from another chain is a reasonable mistake.</td></tr>
+              <tr><td><code>class: null</code></td><td>“Nothing wrong with this one”, plus the <code>checked</code> block — nonces, missing nonces, balance. Showing what was examined is what makes a clean result trustworthy.</td></tr>
+              <tr><td>a class</td><td>The full result: classification, severity, confidence, rule id, <code>facts</code> and <code>rca</code>. Render it exactly like the incident detail page — it is the same thing without an incident record.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout">
+          <span class="label">Always show the simulation block</span>
+          <p>
+            For a reverted transaction Blackbox replays the call against the block <em>before</em>
+            inclusion. Whether it would have succeeded there is the entire difference between
+            state drift and a call that was doomed from the start. Say which, and name the block.
+          </p>
+        </div>
+        <p>
+          There is no persistence here: this is a question, not a subscription. Offer
+          <em>Watch this address</em> as the follow-up.
+        </p>
+      </section>
+
+      <section id="p5">
+        <h2><span class="num">08</span>Page 5 — Watched addresses</h2>
+        <p>
+          <code>/watched</code> · register any address and Blackbox discovers its transactions by
+          scanning blocks. Nothing is installed on the watched agent's side.
+        </p>
+        <ul>
+          <li><strong>Add</strong> — address, chain, optional label and agent id. <code>POST /api/watched</code>. A malformed address answers <code>400 invalid_address</code>; an unconfigured chain answers <code>400 unsupported_chain</code>.</li>
+          <li><strong>List</strong> — <code>GET /api/watched</code>.</li>
+          <li><strong>Remove</strong> — <code>DELETE /api/watched/:signer?chainId=</code>. Stops discovery; existing incidents remain.</li>
+        </ul>
+        <div class="callout">
+          <span class="label">Do not overpromise on this page</span>
+          <p>
+            Watching gives detection and explanation for any address. Remediation only follows
+            where Blackbox holds a key, the address is a KeeperHub managed wallet, or the owner
+            signs a plan themselves. Discovery also starts from the moment an address is
+            registered, not from genesis — say so, or an empty list reads as a bug.
+          </p>
+        </div>
+        <p>
+          The <code>scan.progress</code> SSE event carries <code>{ fromBlock, toBlock,
+          blocksScanned, matched, watching }</code>. A quiet line showing the scanner keeping up
+          with head is worth more than it sounds: it is the difference between “nothing has
+          happened” and “nothing is running”.
+        </p>
+      </section>
+
+      <section id="api">
+        <h2><span class="num">09</span>API reference</h2>
+        <p>Base URL <code>http://localhost:4001</code>. All responses JSON. Errors:</p>
+<pre><code>{ "error": "not_found", "detail": "Incident inc-99 not found", "requestId": "req-104" }</code></pre>
+
+        <h3>GET /api/incidents</h3>
+        <p>
+          Query: <code>status</code>, <code>class</code>, <code>severity</code>,
+          <code>agentId</code>, <code>signer</code>, <code>chainId</code>, <code>limit</code>.
+        </p>
+<pre><code>{
+  "items": [{
+    "id": "inc-1",
+    "class": "NONCE_GAP",
+    "severity": "critical",
+    "status": "resolved",
+    "agentId": "chaos",
+    "signer": "0xb9c58185d09D0aCf3b237cD45C67345E32e628BA",
+    "chainId": 11155111,
+    "summary": "Nonce 47 unfilled; cleared by Blackbox",
+    "detectedAt": "2026-08-10T06:29:26.557Z",
+    "lastSeenAt": "2026-08-10T06:31:06.557Z",
+    "resolvedAt": "2026-08-10T06:31:01.557Z",
+    "resolvedBy": "blackbox",
+    "confidence": 0.9,
+    "ruleId": "R2",
+    "hasRca": true,
+    "remediationStatus": "succeeded",
+    "remediationTxHash": "0x68a38ff1…"
+  }],
+  "nextCursor": null,
+  "total": 5
+}</code></pre>
+
+        <h3>GET /api/incidents/:id</h3>
+        <p>
+          The summary fields above plus <code>evidence</code>, <code>rca</code>,
+          <code>remediation</code>, <code>events[]</code>, <code>explorerUrls[]</code>. The mock
+          has a full example of each.
+        </p>
+
+        <h3>POST /api/incidents/:id/remediate</h3>
+        <p>
+          <code>202</code> with <code>{ accepted: true, playbookId, attemptId }</code>,
+          <strong>or</strong> <code>200</code> with
+          <code>{ accepted: false, guardsFailed: [{ guard, reason }] }</code>. Both are normal.
+        </p>
+
+        <h3>GET /api/incidents/:id/remediation-plan</h3>
+<pre><code>{
+  "incidentId": "inc-1", "playbookId": "P2", "actionable": true,
+  "signerRequired": "0xb9c58185d09d0acf3b237cd45c67345e32e628ba",
+  "chainId": 11155111,
+  "guards": { "passed": ["min_confidence", "budget"], "failed": [] },
+  "transaction": {
+    "to": "0xb9c5…", "value": "0", "data": null, "nonce": 93,
+    "maxFeePerGas": "4191302983", "maxPriorityFeePerGas": "2000000000",
+    "chainId": 11155111, "description": "fill missing nonce 93", "route": "private"
+  },
+  "declined": null
+}</code></pre>
+        <p>
+          <code>declined</code> is set instead of <code>transaction</code> when the playbook
+          refuses — P3 on a chain with no private mempool, for example. Show the reason.
+        </p>
+
+        <h3>POST /api/incidents/:id/remediation-tx</h3>
+        <p>
+          <code>{ "txHash": "0x…" }</code> → <code>{ accepted, included, gasUsed, explorerUrl }</code>,
+          or <strong>422</strong> <code>transaction_rejected</code> when the sender or nonce does
+          not match the plan.
+        </p>
+
+        <h3>POST /api/diagnose</h3>
+        <p>
+          <code>{ "txHash": "0x…", "chainId?": 11155111 }</code>. Three response shapes, see
+          Page 4. In the mock, the last hex digit selects one: <code>0</code> not found,
+          <code>1</code> nothing wrong, anything else classified.
+        </p>
+
+        <h3>GET | POST /api/watched, DELETE /api/watched/:signer</h3>
+        <p>See Page 5. In the mock, a remediation hash ending in <code>9</code> is treated as signed by the wrong account, so the rejection path can be built without a wallet.</p>
+
+        <h3>GET /api/stats</h3>
+<pre><code>{
+  "openBySeverity": { "critical": 2, "warning": 2, "info": 0 },
+  "remediations": { "total": 2, "succeeded": 1, "skipped": 1, "failed": 0, "gasWei": "21000" },
+  "meanTimeToDetectionMs": 41000,
+  "meanTimeToRemediationMs": 63000,
+  "updatedAt": "2026-08-10T06:31:28.695Z"
+}</code></pre>
+
+        <h3>Other routes</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Route</th><th>Returns</th></tr></thead>
+            <tbody>
+              <tr><td><code>POST /api/incidents/:id/acknowledge</code></td><td>Updated incident summary</td></tr>
+              <tr><td><code>GET /api/signers/:signer/health?chainId=</code></td><td>Balance, latest and pending nonce, <code>missingNonces[]</code>, runway in actions, open incidents, recent failure rate</td></tr>
+              <tr><td><code>GET /api/config</code></td><td>Chains with <code>privateMempool</code> and explorer URL templates; remediation policy — <code>dryRun</code>, allowlists, budget. Build explorer links from this rather than hardcoding a chain.</td></tr>
+              <tr><td><code>GET /api/agents</code></td><td>Agents with their signers, chains, open incident counts</td></tr>
+              <tr><td><code>GET /api/chaos/scenarios</code></td><td>Chain, signer, balance, target addresses, scenario list</td></tr>
+              <tr><td><code>POST /api/chaos/run</code></td><td>Takes <code>{ "scenario": "C2" }</code>; returns run id, tx hashes, expected class</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>GET /api/stream — SSE</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Event</th><th>Payload</th></tr></thead>
+            <tbody>
+              <tr><td><code>hello</code></td><td><code>{ at, chainId }</code> on connect</td></tr>
+              <tr><td><code>incident.created</code></td><td>incident summary</td></tr>
+              <tr><td><code>incident.updated</code></td><td>incident summary</td></tr>
+              <tr><td><code>remediation.started</code></td><td><code>{ incidentId, playbookId }</code></td></tr>
+              <tr><td><code>remediation.succeeded</code></td><td><code>{ incidentId, txHash, explorerUrl }</code></td></tr>
+              <tr><td><code>remediation.failed</code></td><td><code>{ incidentId, reason }</code></td></tr>
+              <tr><td><code>chaos.started</code></td><td><code>{ runId, scenario, at }</code></td></tr>
+              <tr><td><code>chaos.completed</code></td><td><code>{ runId, scenario, incidentIds[] }</code></td></tr>
+              <tr><td><code>scan.progress</code></td><td><code>{ fromBlock, toBlock, blocksScanned, matched, watching }</code></td></tr>
+              <tr><td><code>stats.updated</code></td><td>the full stats object, not a nudge to refetch</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Comment frames (<code>: ping</code>) arrive every 15s as keepalive — ignore them.</p>
+      </section>
+
+      <section id="traps">
+        <h2><span class="num">10</span>Rules that are easy to get wrong</h2>
+        <ol class="list">
+          <li><strong>Wei is a decimal string, always.</strong> <code>BigInt</code>, never <code>Number</code>.</li>
+          <li><strong>Timestamps are ISO 8601 UTC strings.</strong> Render relative, keep the absolute value on hover.</li>
+          <li><strong>A skipped remediation is not a failure.</strong> Same visual weight as a success.</li>
+          <li><strong><code>resolvedBy: "external"</code> means Blackbox did not fix it.</strong> Do not show a success state for it.</li>
+          <li><strong>Reconnecting SSE is not enough</strong> — refetch the list, because events during the gap are gone.</li>
+          <li><strong>Truncate addresses in display, never in copy.</strong> Copy gives the full value.</li>
+          <li><strong>The rule ID and thresholds are content, not debug output.</strong> Ship them.</li>
+          <li><strong><code>blackbox-proposed</code> is not <code>blackbox</code>.</strong> A fix a human signed must not be rendered as autonomous remediation.</li>
+          <li><strong>Check <code>capabilities</code> before showing a control.</strong> Those routes do not exist on a process that cannot perform them, and a 404 is a worse answer than a hidden button.</li>
+          <li><strong>Never let a wallet re-price or re-nonce a plan.</strong> A different nonce does not fill the gap, and the server will reject the hash.</li>
+        </ol>
+      </section>
+
+      <section id="scope">
+        <h2><span class="num">11</span>Out of scope</h2>
+        <p>
+          Auth, multi-tenancy, settings and config editing, a dark/light toggle — pick one look and
+          commit — and mobile-first layouts. This is a desktop operator tool; it should degrade
+          gracefully below 1280px but is not designed for phones.
+        </p>
+      </section>
+
+      <footer class="foot">
+        Blackbox console build spec · mock API at <code>tools/mock-api.mjs</code> · source of truth for shapes is the mock, not this document
+      </footer>
+    </main>
+  </div>
+</div>
