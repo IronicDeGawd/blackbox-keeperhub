@@ -14,7 +14,14 @@ import {
   RpcCorroborator,
   type ChainReader,
 } from '@blackbox/recorder';
-import { getIncident, listIncidents, saveIncident, stats, type Database } from '@blackbox/store';
+import {
+  getIncident,
+  listIncidents,
+  saveIncident,
+  stats,
+  watchTransaction,
+  type Database,
+} from '@blackbox/store';
 import { KeeperHubClient } from '@blackbox/core';
 import type { EventBus } from './bus.js';
 import { incidentSummary, type IncidentRow } from './serialise.js';
@@ -50,6 +57,20 @@ export type RuntimeOptions = {
    * chain shows, and every KeeperHub-specific field is simply absent.
    */
   keeperHub?: KeeperHubClient;
+  /**
+   * Extra endpoints to consult when looking up a transaction someone else's
+   * wallet broadcast.
+   *
+   * A transaction above an unused nonce is *queued*, not pending, and a node
+   * does not gossip queued transactions to its peers — they are not yet
+   * executable, so there is nothing to propagate. It therefore exists only on
+   * whichever endpoint the sender's wallet happened to use. Asking one node
+   * finds a stranger's nonce gap only by luck; asking every endpoint we have
+   * turns luck into reasonable odds.
+   */
+  fallbackRpcUrls?: string[];
+  /** How many times to sweep those endpoints before giving up on a hash. */
+  lookupRounds?: number;
   intervalMs?: number;
   logger?: { info: (m: string, d?: unknown) => void; error: (m: string, d?: unknown) => void };
 };
@@ -104,9 +125,44 @@ export function makeChainReader(clients: Record<number, PublicClient>): ChainRea
   };
 }
 
+/**
+ * Ask each endpoint in turn, and take the first that knows.
+ *
+ * Not redundancy for its own sake. A queued transaction — one sitting above an
+ * unused nonce — is never gossiped between nodes, because it is not yet
+ * executable, so it exists only in the mempool of the single machine its
+ * sender talked to. Even one public endpoint is a fleet behind a load
+ * balancer, so "does this transaction exist" is a question with a different
+ * answer per request. One reader answers it wrongly and confidently.
+ */
+export function makeFallbackReader(readers: ChainReader[]): ChainReader {
+  const first = readers[0]!;
+  return {
+    getTransaction: async (params) => {
+      for (const reader of readers) {
+        const tx = await reader.getTransaction(params);
+        if (tx) return tx;
+      }
+      return null;
+    },
+    getReceipt: async (params) => {
+      for (const reader of readers) {
+        const receipt = await reader.getReceipt(params);
+        if (receipt) return receipt;
+      }
+      return null;
+    },
+    // A simulation is a question about state, not about a mempool, so every
+    // endpoint gives the same answer and there is nothing to fall back to.
+    ...(first.call ? { call: first.call } : {}),
+  };
+}
+
 export class Runtime {
   private readonly client: PublicClient;
   private readonly reader: ChainReader;
+  /** The primary first, then any fallback, for finding a queued transaction. */
+  private readonly lookupReaders: ChainReader[];
   private readonly recorder: Recorder;
   private readonly scanner: BlockScanner;
   private readonly tracker: IncidentTracker;
@@ -117,7 +173,19 @@ export class Runtime {
 
   constructor(private readonly options: RuntimeOptions) {
     this.client = createPublicClient({ transport: http(options.rpcUrl) }) as PublicClient;
-    this.reader = makeChainReader({ [options.chainId]: this.client });
+    this.lookupReaders = [
+      makeChainReader({ [options.chainId]: this.client }),
+      ...(options.fallbackRpcUrls ?? [])
+        .filter((url) => url && url !== options.rpcUrl)
+        .map((url) =>
+          makeChainReader({
+            [options.chainId]: createPublicClient({ transport: http(url) }) as PublicClient,
+          }),
+        ),
+    ];
+    // The recorder reads through the same fallback, so a transaction only one
+    // endpoint can see is still ingested on an ordinary tick.
+    this.reader = makeFallbackReader(this.lookupReaders);
     this.tracker = new IncidentTracker({ makeId: () => this.id('inc') });
 
     this.recorder = new Recorder({
@@ -438,6 +506,97 @@ export class Runtime {
       missingNonces: [],
       runwayActions: null,
     };
+  }
+
+  /**
+   * Take delivery of transactions somebody else's wallet sent.
+   *
+   * Needed because block scanning cannot see the most interesting failure at
+   * all: a transaction above an unused nonce is queued, never mined, and so
+   * never appears in any block. Only the wallet that sent it knows it exists.
+   *
+   * The hash is taken as a pointer, not as testimony. Who sent it, at what
+   * nonce and at what price are read from the chain, so a caller reporting
+   * someone else's hash attributes it to that someone else and gains nothing.
+   */
+  async observeSubmissions(params: {
+    txHashes: string[];
+    chainId: number;
+    /** Shared across a batch so retries of one action group together for R5. */
+    runId?: string;
+  }): Promise<{
+    observed: { txHash: string; signer: string; nonce: number }[];
+    ignored: { txHash: string; reason: string }[];
+  }> {
+    const observed: { txHash: string; signer: string; nonce: number }[] = [];
+    const ignored: { txHash: string; reason: string }[] = [];
+
+    for (const raw of params.txHashes) {
+      const txHash = String(raw);
+      if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+        ignored.push({ txHash, reason: 'not a transaction hash' });
+        continue;
+      }
+      // Safe by the regex just above, which is the only reason this narrows.
+      const hash = txHash as `0x${string}`;
+      // Rounds, not one pass. A public endpoint is a fleet behind a load
+      // balancer, and a queued transaction lives in the mempool of exactly one
+      // machine in it — measured at roughly two misses for every hit on
+      // Sepolia. Asking again lands on a different backend.
+      let tx = null;
+      const rounds = this.options.lookupRounds ?? 4;
+      for (let round = 0; round < rounds && !tx; round++) {
+        for (const reader of this.lookupReaders) {
+          tx = await reader.getTransaction({ hash, chainId: params.chainId });
+          if (tx) break;
+        }
+        if (!tx && round < rounds - 1) await new Promise((r) => setTimeout(r, 250));
+      }
+      if (!tx) {
+        // Every endpoint we have denies knowing it. Most likely it was queued
+        // behind a nonce gap on a node we cannot reach, since those are never
+        // gossiped. Attributing it anyway would mean taking the caller's word
+        // for who signed it, which is exactly what this refuses to do.
+        ignored.push({
+          txHash,
+          reason:
+            'no endpoint we can reach has this transaction; if it is queued behind a nonce ' +
+            'gap it exists only on the node your wallet broadcast to',
+        });
+        continue;
+      }
+      await watchTransaction(this.options.db, {
+        txHash,
+        signer: tx.from,
+        agentId: tx.from.slice(0, 10),
+        chainId: params.chainId,
+        label: 'self-signed chaos',
+        at: new Date(),
+        ...(params.runId ? { logicalActionId: params.runId } : {}),
+      });
+      observed.push({ txHash, signer: tx.from, nonce: tx.nonce });
+    }
+    return { observed, ignored };
+  }
+
+  /**
+   * What a wallet needs to sign chaos for itself.
+   *
+   * Read live rather than assumed: the nonce decides where the gap goes, and
+   * the base fee decides what "underpriced" means on this chain right now.
+   * A stale value for either produces a transaction that either fails to
+   * broadcast or induces nothing.
+   */
+  async chaosChainState(signer: string): Promise<{ nextNonce: number; baseFeePerGas: bigint }> {
+    const [nextNonce, block] = await Promise.all([
+      // Pending, not latest: their wallet will sign the next one it would use,
+      // so the gap has to be measured from there or there is no gap at all.
+      this.client.getTransactionCount({ address: signer as `0x${string}`, blockTag: 'pending' }),
+      this.client.getBlock({ blockTag: 'latest' }),
+    ]);
+    // A pre-1559 chain reports no base fee; the fallback keeps the plan
+    // signable rather than pricing everything at zero.
+    return { nextNonce, baseFeePerGas: block.baseFeePerGas ?? 1_000_000_000n };
   }
 }
 

@@ -324,12 +324,116 @@ describe('chaos', () => {
   });
 });
 
+describe('planning chaos for someone else to sign', () => {
+  const OTHER = '0x00000000000000000000000000000000000000cc';
+  const planner = async (over = {}) =>
+    app({
+      chaosPlan: {
+        plan: async ({ scenario, signer }: { scenario: string; signer: string }) =>
+          scenario === 'C9'
+            ? { scenario, declined: 'no' }
+            : { scenario, signer, steps: [{ order: 1 }] },
+        // Stands in for the chain read: attribution comes back as the address
+        // that actually signed, which is the point being tested below.
+        observe: async ({ txHashes }: { txHashes: string[] }) => ({
+          observed: txHashes.map((txHash, i) => ({ txHash, signer: OTHER, nonce: i })),
+          ignored: [],
+        }),
+      },
+      ...over,
+    });
+
+  it('404s when the process was not configured to plan', async () => {
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/chaos/plan',
+      payload: { scenario: 'C2', signer: SIGNER },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('registers the address so the loop runs without the caller reporting a hash', async () => {
+    const res = await (await planner()).inject({
+      method: 'POST',
+      url: '/api/chaos/plan',
+      payload: { scenario: 'C2', signer: SIGNER, chainId: CHAIN_IDS.sepolia },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().watching).toBe(true);
+    expect(await db.select().from(watchedSigners)).toHaveLength(1);
+  });
+
+  it('does not register an address whose plan was declined', async () => {
+    const res = await (await planner()).inject({
+      method: 'POST',
+      url: '/api/chaos/plan',
+      payload: { scenario: 'C9', signer: SIGNER },
+    });
+    // A refusal is a stated outcome, not an error.
+    expect(res.statusCode).toBe(200);
+    expect(res.json().watching).toBe(false);
+    expect(await db.select().from(watchedSigners)).toHaveLength(0);
+  });
+
+  it('refuses to plan a deliberate failure on a chain where gas is real money', async () => {
+    const res = await (await planner()).inject({
+      method: 'POST',
+      url: '/api/chaos/plan',
+      payload: { scenario: 'C2', signer: SIGNER, chainId: 1 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('mainnet_refused');
+    expect(await db.select().from(watchedSigners)).toHaveLength(0);
+  });
+
+  it('takes reported hashes, since a queued transaction is in no block to scan', async () => {
+    const hash = `0x${'d'.repeat(64)}`;
+    const res = await (await planner()).inject({
+      method: 'POST',
+      url: '/api/chaos/observe',
+      payload: { txHashes: [hash], chainId: CHAIN_IDS.sepolia },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().observed[0].txHash).toBe(hash);
+  });
+
+  it('watches whoever actually signed, not whoever reported the hash', async () => {
+    await (await planner()).inject({
+      method: 'POST',
+      url: '/api/chaos/observe',
+      payload: { txHashes: [`0x${'d'.repeat(64)}`], chainId: CHAIN_IDS.sepolia },
+    });
+    const rows = await db.select().from(watchedSigners);
+    expect(rows.map((r) => r.signer.toLowerCase())).toEqual([OTHER]);
+  });
+
+  it('rejects an empty report rather than silently doing nothing', async () => {
+    const res = await (await planner()).inject({
+      method: 'POST',
+      url: '/api/chaos/observe',
+      payload: { txHashes: [] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects an address that is not one', async () => {
+    const res = await (await planner()).inject({
+      method: 'POST',
+      url: '/api/chaos/plan',
+      payload: { scenario: 'C2', signer: 'vitalik.eth' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('invalid_address');
+  });
+});
+
 describe('config', () => {
   it('tells the console which controls this process can actually drive', async () => {
     const body = (await (await app({ chaos: undefined })).inject({ url: '/api/config' })).json();
     expect(body.capabilities).toEqual({
       remediate: false,
       chaos: false,
+      signChaos: false,
       diagnose: false,
       signerHealth: false,
       proposeRemediation: false,

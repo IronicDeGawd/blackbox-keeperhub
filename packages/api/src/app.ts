@@ -86,6 +86,31 @@ export type ProposalHandler = {
   accept(incidentId: string, txHash: string): Promise<{ accepted: boolean; reason?: string } & Record<string, unknown>>;
 };
 
+/**
+ * Chaos the caller signs themselves.
+ *
+ * Distinct from `chaos` on purpose. That one needs a funded key Blackbox
+ * holds, so it only exists where we are willing to spend. This one holds no
+ * key and spends nothing: it returns unsigned transactions built for the
+ * caller's own address, which is what makes it safe to expose publicly.
+ */
+export type ChaosPlanHandler = {
+  plan(params: { scenario: string; signer: string; chainId: number }): Promise<
+    { declined?: string } & Record<string, unknown>
+  >;
+  /**
+   * Accept the hashes their wallet produced.
+   *
+   * Not optional politeness: a nonce-gap transaction is queued rather than
+   * mined, so it appears in no block and block scanning can never find it.
+   * The wallet is the only party that knows it exists.
+   */
+  observe(params: { txHashes: string[]; chainId: number; runId?: string }): Promise<{
+    observed: { txHash: string; signer: string; nonce: number }[];
+    ignored: { txHash: string; reason: string }[];
+  }>;
+};
+
 export type AppOptions = {
   db: Database;
   config: BlackboxConfig;
@@ -93,6 +118,8 @@ export type AppOptions = {
   /** Absent means the route 404s: this process cannot remediate. */
   remediate?: RemediateHandler;
   chaos?: ChaosHandler;
+  /** Plans chaos for the caller's own wallet. Needs no key, so it is safe on a public URL. */
+  chaosPlan?: ChaosPlanHandler;
   signerHealth?: SignerHealthHandler;
   /** Explains any transaction hash, for someone who has integrated nothing. */
   diagnose?: DiagnoseHandler;
@@ -157,6 +184,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     capabilities: {
       remediate: Boolean(options.remediate),
       chaos: Boolean(options.chaos),
+      signChaos: Boolean(options.chaosPlan),
       diagnose: Boolean(options.diagnose),
       signerHealth: Boolean(options.signerHealth),
       proposeRemediation: Boolean(options.proposals),
@@ -346,6 +374,99 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     });
     return reply.code(201).send({ signer: signer.toLowerCase(), chainId, watching: true });
   });
+
+  if (options.chaosPlan) {
+    const chaosPlan = options.chaosPlan;
+
+    // Deliberately a sibling of /api/chaos/run rather than a mode of it. The
+    // two differ in who pays and who signs, which is the whole distinction
+    // worth exposing: this one can run on a public URL because it can spend
+    // nothing.
+    app.post('/api/chaos/plan', async (request, reply) => {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const signer = String(body['signer'] ?? '');
+      if (!/^0x[0-9a-fA-F]{40}$/.test(signer)) {
+        return reply.code(400).send({
+          error: 'invalid_address',
+          detail: `"${signer}" is not a 20-byte hex address`,
+          requestId: request.id,
+        });
+      }
+      const chainId = Number(body['chainId'] ?? DEFAULT_CHAIN);
+      let chain;
+      try {
+        chain = getChain(chainId);
+      } catch {
+        return reply.code(400).send({
+          error: 'unsupported_chain',
+          detail: `Chain ${chainId} is not configured`,
+          requestId: request.id,
+        });
+      }
+      // Chaos costs the caller real gas. Planning it against a chain where
+      // that is real money is not ours to offer, whatever they asked for.
+      if (!chain.isTestnet) {
+        return reply.code(400).send({
+          error: 'mainnet_refused',
+          detail: `${chain.name} is not a testnet; Blackbox will not plan a deliberate failure there`,
+          requestId: request.id,
+        });
+      }
+
+      const scenario = String(body['scenario'] ?? '');
+      const plan = await chaosPlan.plan({ scenario, signer, chainId });
+
+      // Registering the address is what makes the rest happen on its own: the
+      // block scanner picks their transactions up without them reporting a
+      // hash, so the loop they are about to trigger runs unattended. Skipped
+      // on a declined plan, which registers an address for nothing.
+      if (!plan.declined) {
+        await watchSigner(db, {
+          signer,
+          chainId,
+          agentId: String(body['agentId'] ?? signer.slice(0, 10)),
+          label: String(body['label'] ?? 'self-signed chaos'),
+          at: new Date(),
+        });
+      }
+
+      // A scenario this deployment cannot plan is a stated refusal, not an
+      // error — same treatment as a guard declining a remediation.
+      return { ...plan, watching: !plan.declined };
+    });
+
+    app.post('/api/chaos/observe', async (request, reply) => {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const txHashes = Array.isArray(body['txHashes']) ? (body['txHashes'] as string[]) : [];
+      if (txHashes.length === 0) {
+        return reply.code(400).send({
+          error: 'no_transactions',
+          detail: 'Send the hashes your wallet returned as `txHashes`',
+          requestId: request.id,
+        });
+      }
+      const chainId = Number(body['chainId'] ?? DEFAULT_CHAIN);
+      const result = await chaosPlan.observe({
+        txHashes: txHashes.slice(0, 20),
+        chainId,
+        ...(body['runId'] ? { runId: String(body['runId']) } : {}),
+      });
+
+      // Every reported transaction is attributed to whoever actually signed
+      // it, read from the chain — so each sender is registered on the strength
+      // of their own signature, not on the caller's say-so.
+      for (const { signer } of result.observed) {
+        await watchSigner(db, {
+          signer,
+          chainId,
+          agentId: signer.slice(0, 10),
+          label: 'self-signed chaos',
+          at: new Date(),
+        });
+      }
+      return result;
+    });
+  }
 
   app.delete('/api/watched/:signer', async (request) => {
     const { signer } = request.params as { signer: string };

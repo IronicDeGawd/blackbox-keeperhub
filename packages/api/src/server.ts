@@ -14,6 +14,7 @@ import {
 import { createDb, getIncident, saveIncident, type Database } from '@blackbox/store';
 import { buildApp, type ChaosScenario } from './app.js';
 import { EventBus } from './bus.js';
+import { planChaos } from './chaos-plans.js';
 import {
   buildProposal,
   recordUserRemediation,
@@ -49,6 +50,12 @@ const env = loadEnv();
 const chainId = Number(env['CHAIN_ID'] ?? 11155111);
 const rpcUrl = env['ALCHEMY_RPC_URL'] ?? env['SEPOLIA_RPC_URL'];
 if (!rpcUrl) throw new Error('No RPC URL: set ALCHEMY_RPC_URL or SEPOLIA_RPC_URL');
+// Every endpoint we know of, for finding a transaction a stranger's wallet
+// broadcast somewhere else. Queued transactions are not gossiped, so which
+// node holds one is a matter of which node their wallet talked to.
+const lookupRpcUrls = [env['SEPOLIA_RPC_URL'], env['ALCHEMY_RPC_URL'], env['FALLBACK_RPC_URL']]
+  .filter((url): url is string => Boolean(url))
+  .filter((url) => url !== rpcUrl);
 
 const databaseUrl = env['DATABASE_URL'] ?? 'postgres://blackbox:blackbox@localhost:5433/blackbox';
 const signerAccount = env['CHAOS_SIGNER_PRIVATE_KEY']
@@ -82,6 +89,7 @@ const runtime = new Runtime({
   bus,
   chainId,
   rpcUrl,
+  ...(lookupRpcUrls.length > 0 ? { fallbackRpcUrls: lookupRpcUrls } : {}),
   ...(diagnostician ? { diagnostician } : {}),
   ...(keeperHub ? { keeperHub } : {}),
   ...(env['BLACKBOX_TICK_MS'] ? { intervalMs: Number(env['BLACKBOX_TICK_MS']) } : {}),
@@ -315,6 +323,21 @@ const app = await buildApp({
         },
       }
     : {}),
+  // Unconditional, unlike `chaos` above: planning needs no key and no funds,
+  // only the ability to read the chain. This is what a public deployment
+  // offers a visitor who wants to see the loop run on their own wallet.
+  chaosPlan: {
+    plan: async ({ scenario, signer, chainId: requested }) => {
+      const state = await runtime.chaosChainState(signer);
+      return planChaos(scenario, {
+        chainId: requested,
+        signer,
+        state,
+        ...(env['CHAOS_TARGET_ADDRESS'] ? { chaosTarget: env['CHAOS_TARGET_ADDRESS'] } : {}),
+      });
+    },
+    observe: (params) => runtime.observeSubmissions(params),
+  },
   proposals: {
     plan: async (incidentId: string) => {
       const loaded = await loadIncident(incidentId);
