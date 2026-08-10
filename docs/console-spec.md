@@ -97,7 +97,7 @@ chain is ever active this must be unmistakable.
 **Capabilities gate the UI.** `GET /api/config` returns a `capabilities` object:
 
 ```json
-{ "remediate": true, "chaos": true, "diagnose": true,
+{ "remediate": true, "chaos": true, "signChaos": true, "diagnose": true,
   "signerHealth": true, "proposeRemediation": true }
 ```
 
@@ -280,6 +280,37 @@ real testnet gas.
 After firing, show the returned `txHashes`, the `expectedIncidentClass`, and
 `expectedDetectionSeconds` — then let the user watch the incident appear in the
 timeline. Wiring the button to the resulting incident is the demo.
+
+### Bring your own wallet (`capabilities.signChaos`)
+
+The same panel, for a visitor who has no key of ours and should not need one.
+Present this whenever `signChaos` is true — on the public deployment it is the
+*only* chaos available, since `chaos` needs a funded key the server does not
+carry there.
+
+1. **Connect wallet.** Their address is the subject; nothing else is required
+   of them, and no registration step comes first.
+2. `POST /api/chaos/plan { scenario, signer }` → a plan whose `steps` are
+   unsigned transactions built against live chain state, plus `expect`
+   describing what they are about to see. `declined` means this scenario cannot
+   be signed from a wallet — render the reason, not an error.
+3. **Sign each step in order.** A step with `waitForInclusion: true` must be
+   mined before the next is offered — `C3` depends on it entirely, since the
+   trap it arms only springs a block later. Show each step's `explanation` next
+   to the wallet prompt; the `nonce` and `gas` fields are deliberate and must
+   be passed through, not recomputed by the wallet.
+4. **Report the hashes.** `POST /api/chaos/observe { txHashes }`, as the plan's
+   `reportTo` says. **Not optional:** a transaction above an unused nonce is
+   queued rather than mined, so it never appears in a block and Blackbox
+   cannot find it any other way. A console that skips this waits forever.
+5. **Watch the incident arrive**, then offer the remediation plan for the same
+   wallet to sign — the existing `GET /api/incidents/:id/remediation-plan` and
+   `POST /api/incidents/:id/remediation-tx` pair, unchanged.
+
+`observe` answers with `observed[]` (attributed to whoever actually signed,
+read from the chain) and `ignored[]` with a reason each. A hash in `ignored`
+usually means no endpoint we can reach has seen it yet; offer a retry rather
+than declaring failure.
 
 ---
 
@@ -548,7 +579,7 @@ em dash, not as zero — "0ms to detection" reads as instant detection.
     "budget": { "maxRemediationsPerHour": 10, "maxGasWeiPerHour": "50000000000000000" }
   },
   "capabilities": {
-    "remediate": true, "chaos": true, "diagnose": true,
+    "remediate": true, "chaos": true, "signChaos": true, "diagnose": true,
     "signerHealth": true, "proposeRemediation": true
   }
 }
@@ -592,6 +623,46 @@ reason it cannot run.
 `{ "scenario": "C4" }` → `202` with `{ runId, scenario, txHashes[],
 expectedIncidentClass, expectedDetectionSeconds }`. A disabled scenario answers
 `409` with the `note` as its `detail`.
+
+### `POST /api/chaos/plan`
+
+`{ "scenario": "C2", "signer": "0x…", "chainId"?: 11155111 }` → `200`:
+
+```json
+{
+  "scenario": "C2", "chainId": 11155111, "signer": "0x…",
+  "induces": "NONCE_GAP", "expectedDetectionSeconds": 45,
+  "expect": "Nonce 121 is left unused, so this transaction and everything after it is stuck…",
+  "steps": [
+    {
+      "order": 1,
+      "label": "Send at nonce 122, skipping 121",
+      "explanation": "Ethereum runs an account's transactions in strict order…",
+      "transaction": {
+        "to": "0x…", "value": "0", "data": null, "nonce": 122,
+        "maxFeePerGas": "2931145536", "maxPriorityFeePerGas": "1000000000",
+        "gas": "30000", "chainId": 11155111
+      },
+      "waitForInclusion": false
+    }
+  ],
+  "reportTo": { "method": "POST", "path": "/api/chaos/observe", "field": "txHashes" },
+  "watching": true
+}
+```
+
+`C1`–`C4` are signable. `C5` and `C6` answer `200` with `declined` and no
+steps — `C5` would leave the visitor's own wallet unable to transact, `C6`
+needs control over block ordering. A non-testnet `chainId` is `400`
+`mainnet_refused`; a malformed address is `400` `invalid_address`.
+
+### `POST /api/chaos/observe`
+
+`{ "txHashes": ["0x…"], "chainId"?: 11155111, "runId"?: "…" }` → `200` with
+`{ observed: [{ txHash, signer, nonce }], ignored: [{ txHash, reason }] }`.
+Pass `runId` for a multi-transaction scenario so the attempts group as retries
+of one action rather than as unrelated submissions. An empty `txHashes` is
+`400`. Up to 20 hashes per call.
 
 ### `GET /api/stream` — SSE
 
