@@ -23,6 +23,7 @@ Real transactions on Ethereum Sepolia, produced by the system end to end.
 | Blackbox filled a nonce gap it detected, unwedging the signer | [`0xb1982439…`](https://sepolia.etherscan.io/tx/0xb198243930fc745817914dd6ff4fee5e57d4a357b7c632b55743dafd292a57ed) |
 | A user's wallet signed a fix Blackbox planned, which Blackbox then verified | [`0x59563255…`](https://sepolia.etherscan.io/tx/0x5956325573c201d473812a08d0b0aeb96d2c3bace24954835bfda62e0e08d22e) |
 | Chaos: a call that simulated clean and reverted one block later | [`0xa0dbdb74…`](https://sepolia.etherscan.io/tx/0xa0dbdb74dc0f19bdcfb6a8cc983b36a9fdbc548af0c716d363500befb45901c6) |
+| An agent paid Blackbox over x402 for a diagnosis — USDC settled on Base | [`0x8cd8d6ac…`](https://basescan.org/tx/0x8cd8d6ac5dae125e5f3cf039db1ffb7f6b7dafa44243396d00e30074a93a51f9) |
 
 The first one is the interesting one. Blackbox detected a retry storm, decided
 to halt the agent, **created a KeeperHub workflow over the API, enabled it, and
@@ -30,6 +31,23 @@ executed it** — the remediation is a workflow run in the operator's own
 dashboard, with per-node logs, not a side channel only Blackbox can see.
 
 Deployed contracts (Sepolia): [`CircuitBreaker`](https://sepolia.etherscan.io/address/0x69C744Bb9f953D822a52E88604D26C9a895ac0E0) · [`ChaosTarget`](https://sepolia.etherscan.io/address/0x5d3437a8b5C182B91dC72087f4049ac00b1C528A)
+
+---
+
+## What we sent back upstream
+
+Four fixes to KeeperHub, each found by building on it and each verified against
+their own test suite.
+
+| PR | Fix |
+| --- | --- |
+| [#1993](https://github.com/KeeperHub/keeperhub/pull/1993) | Sub-cent marketplace prices were rounded to whole cents at the payment gate while the 402 advertised full precision, so **every payment below $0.01 failed** — most of their documented pricing range. Found by paying for our own listing. |
+| [#1990](https://github.com/KeeperHub/keeperhub/pull/1990) | A completed `contract-call` returned no `transactionHash`, though the route had it in hand and the docs promise it. It cost us a remediation recorded as failed after it had actually succeeded. |
+| [#1991](https://github.com/KeeperHub/keeperhub/pull/1991) | `undici` is imported by `lib/safe-fetch.ts` but declared in no dependency block, so their test suite will not start on a fresh clone with current pnpm. |
+| [#1992](https://github.com/KeeperHub/keeperhub/pull/1992) | Four fields the status endpoint returns — including `retryCount` — were undocumented. |
+
+`docs/friction-log.md` is the fuller teardown, including the entries we withdrew
+after finding they were documented all along and we simply had not looked.
 
 ---
 
@@ -50,6 +68,10 @@ KeeperHub is the execution engine, not a client library we call once.
 - **Gas sponsorship.** Remediations execute through the sponsored relayer.
 - **MCP.** Blackbox exposes its own MCP server so other agents can ask why a
   transaction failed.
+- **x402.** Blackbox publishes one of its own rules to the KeeperHub Marketplace
+  as a paid workflow, so another agent can pay per call for it. Settlement is
+  USDC on Base via EIP-3009, and the payer needs no ETH — a facilitator submits
+  the transfer. See below.
 
 One structural finding shaped the architecture, established by probing rather
 than assuming: KeeperHub executes through a sponsored relayer at the *sponsor's*
@@ -187,6 +209,32 @@ See `packages/chaos/e2e/README.md` — one of them deliberately leaves the
 circuit breaker paused and prints the command to undo it.
 
 ---
+
+## Selling a rule over x402
+
+`signer-gas-runway` is R6 published to the KeeperHub Marketplace: give it an
+address and it answers whether that signer can still pay for its next
+transaction. KeeperHub registers it on x402scan under its own server entry, and
+an agent that has never heard of Blackbox can discover it, pay, and get an
+answer.
+
+```bash
+# discover it in KeeperHub's public OpenAPI
+curl -s https://app.keeperhub.com/openapi.json | jq '.paths | keys[] | select(contains("signer-gas-runway"))'
+
+# call it without paying
+curl -XPOST https://app.keeperhub.com/api/mcp/workflows/signer-gas-runway/call \
+  -H 'content-type: application/json' -d '{"address":"0x...","network":"sepolia"}'
+# -> 402, with the amount, asset and payTo to sign against
+
+# pay and get the answer
+cd packages/chaos && node e2e/x402-pay.mjs
+```
+
+The client is `packages/chaos/e2e/x402-pay.mjs`: it takes the 402, signs an
+EIP-3009 `TransferWithAuthorization` with the reference `@x402/core` client,
+retries with the `PAYMENT-SIGNATURE` header, and confirms the USDC moved. The
+paying wallet holds **no ETH at all**.
 
 ## MCP server
 
