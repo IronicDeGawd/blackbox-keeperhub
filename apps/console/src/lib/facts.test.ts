@@ -60,6 +60,15 @@ describe('fact formatting', () => {
     expect(formatFact('includedAtBlock', 11457999)).toBe('11457999');
   });
 
+  it('labels swap amounts as base units rather than asserting a token', () => {
+    // R7 does not identify what was swapped, so calling these ETH would be a
+    // claim the rule never made — but a bare 18-digit integer gets misread.
+    expect(formatFact('expectedOut', '1000000000000000000')).toBe(
+      '1000000000000000000 base units',
+    );
+    expect(formatFact('actualOut', '959000000000000000')).toBe('959000000000000000 base units');
+  });
+
   it('does not mistake a hash or a reason for a fee', () => {
     expect(formatFact('revertReason', 'trap sprung')).toBe('trap sprung');
     expect(formatFact('route', 'public')).toBe('public');

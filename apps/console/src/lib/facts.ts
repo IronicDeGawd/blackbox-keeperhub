@@ -102,6 +102,16 @@ const WEI_KEY = /(wei|balance|fee|cost|gasburned)$/i;
 const MS_KEY = /ms$/i;
 
 /**
+ * Amounts of a token R7 does not identify.
+ *
+ * They are base units of whatever was swapped, so rendering them as ETH would
+ * assert a token nobody established. Leaving them as a bare integer is not an
+ * option either — an unlabelled 18-digit number is the exact thing that gets
+ * misread. They are labelled for what they are.
+ */
+const BASE_UNIT_KEYS = new Set(['expectedOut', 'actualOut']);
+
+/**
  * Wei-valued facts arrive as decimal strings beyond Number.MAX_SAFE_INTEGER and
  * are rendered with a unit; durations are rendered as durations. Everything
  * else is shown as it came.
@@ -117,6 +127,10 @@ export function formatFact(key: string, value: unknown): string {
 
   if (MS_KEY.test(key) && typeof value === 'number') {
     return formatDuration(value);
+  }
+
+  if (BASE_UNIT_KEYS.has(key)) {
+    return `${formatFactValue(value)} base units`;
   }
 
   return formatFactValue(value);

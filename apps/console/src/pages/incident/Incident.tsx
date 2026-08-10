@@ -17,6 +17,8 @@ import {
 } from '../../ui/primitives';
 import { Evidence } from './Evidence';
 import { EventTimeline } from './EventTimeline';
+import { Rca } from './Rca';
+import { Remediation } from './Remediation';
 import './incident.css';
 
 /**
@@ -148,6 +150,14 @@ export function Incident(): React.JSX.Element {
       />
 
       <EventTimeline events={detail.events ?? []} chains={chains} chainId={detail.chainId} />
+
+      <Rca rca={detail.rca} />
+
+      <Remediation
+        remediation={detail.remediation}
+        chains={chains}
+        chainId={detail.chainId}
+      />
     </section>
   );
 }
