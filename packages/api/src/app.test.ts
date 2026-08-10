@@ -427,6 +427,53 @@ describe('planning chaos for someone else to sign', () => {
   });
 });
 
+describe('surviving an unauthenticated internet', () => {
+  it('refuses a caller who exceeds the budget on a route that costs us a model call', async () => {
+    const instance = await app({ diagnose: async () => ({ found: false }) });
+    const hit = () =>
+      instance.inject({
+        method: 'POST',
+        url: '/api/diagnose',
+        payload: { txHash: `0x${'e'.repeat(64)}` },
+      });
+    // The limit is 10 a minute; the eleventh is the one that must be refused.
+    for (let i = 0; i < 10; i++) expect((await hit()).statusCode).toBe(200);
+    const refused = await hit();
+    expect(refused.statusCode).toBe(429);
+    expect(refused.json().error).toBe('rate_limited');
+  });
+
+  it('will not let a second caller rename an address someone else registered', async () => {
+    const instance = await app();
+    await instance.inject({
+      method: 'POST',
+      url: '/api/watched',
+      payload: { signer: SIGNER, label: 'the original', agentId: 'first' },
+    });
+    await instance.inject({
+      method: 'POST',
+      url: '/api/watched',
+      payload: { signer: SIGNER, label: 'hijacked', agentId: 'attacker' },
+    });
+    const rows = await db.select().from(watchedSigners);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.label).toBe('the original');
+    expect(rows[0]?.agentId).toBe('first');
+  });
+
+  it('bounds the strings a caller can store, since nothing else does', async () => {
+    const instance = await app();
+    await instance.inject({
+      method: 'POST',
+      url: '/api/watched',
+      payload: { signer: SIGNER, label: 'x'.repeat(5_000), agentId: 'y'.repeat(5_000) },
+    });
+    const rows = await db.select().from(watchedSigners);
+    expect(rows[0]?.label?.length).toBeLessThanOrEqual(64);
+    expect(rows[0]?.agentId.length).toBeLessThanOrEqual(64);
+  });
+});
+
 describe('config', () => {
   it('tells the console which controls this process can actually drive', async () => {
     const body = (await (await app({ chaos: undefined })).inject({ url: '/api/config' })).json();

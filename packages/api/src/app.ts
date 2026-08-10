@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import { CHAINS, getChain, type BlackboxConfig } from '@blackbox/core';
 import {
   activeSigners,
@@ -126,6 +127,8 @@ export type AppOptions = {
   /** Propose-and-verify remediation, for a signer Blackbox has no key for. */
   proposals?: ProposalHandler;
   logger?: boolean;
+  /** Request budget per caller. Absent means the defaults, which are not off. */
+  rateLimits?: { perMinute?: number };
 };
 
 const DEFAULT_CHAIN = 11155111;
@@ -134,8 +137,25 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const { db, config } = options;
   const bus = options.bus ?? new EventBus();
 
-  const app = Fastify({ logger: options.logger ?? false });
+  // 64 KB. Nothing this API accepts is large, and the default megabyte is an
+  // invitation on an endpoint anyone can reach.
+  const app = Fastify({ logger: options.logger ?? false, bodyLimit: 64 * 1024 });
   await app.register(cors, { origin: true });
+
+  // Deliberately unauthenticated — a judge should need no account — so the
+  // budget has to be enforced per caller instead of per user. The tight limits
+  // below sit on the routes that cost us money rather than cycles: a model
+  // call, a fan-out of RPC lookups, a row that the scanner then revisits every
+  // tick for the rest of the deployment's life.
+  const limits = options.rateLimits ?? {};
+  await app.register(rateLimit, {
+    global: true,
+    max: limits.perMinute ?? 120,
+    timeWindow: '1 minute',
+  });
+
+  /** Applied to the routes where one request buys a disproportionate amount of our work. */
+  const costly = (max: number) => ({ config: { rateLimit: { max, timeWindow: '1 minute' } } });
 
   app.setNotFoundHandler((request, reply) =>
     reply.code(404).send({
@@ -151,6 +171,16 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       typeof error === 'object' && error !== null && 'statusCode' in error
         ? Number((error as { statusCode?: number }).statusCode) || 500
         : 500;
+    // Being refused for asking too often is not an internal error, and a
+    // console that renders it as one would tell the user the server is broken
+    // when it is working exactly as intended.
+    if (status === 429) {
+      return reply.code(429).send({
+        error: 'rate_limited',
+        detail: 'Too many requests to this route; wait a minute and try again',
+        requestId: request.id,
+      });
+    }
     reply.code(status).send({
       error: 'internal_error',
       detail: error instanceof Error ? error.message : String(error),
@@ -331,6 +361,48 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   // The route that makes this usable by someone who did not build it: register
   // any address and its transactions are discovered by block scanning.
 
+  /**
+   * A watched address is a standing cost, not a one-off write.
+   *
+   * The block scanner loads every active signer on every tick and matches it
+   * against every transaction in every new block, for as long as the
+   * deployment lives. Anyone can register anything here, so the registry needs
+   * a ceiling and a rule about who may rename what.
+   */
+  const MAX_WATCHED = 500;
+  const short = (value: unknown, max = 64): string => String(value ?? '').slice(0, max);
+
+  const registerWatch = async (params: {
+    signer: string;
+    chainId: number;
+    agentId: string;
+    label: string;
+  }): Promise<{ registered: boolean; reason?: string }> => {
+    const rows = await activeSigners(db);
+    const already = rows.find(
+      (row) => row.signer.toLowerCase() === params.signer.toLowerCase() && row.chainId === params.chainId,
+    );
+    // Re-registering an address that is already watched is a no-op rather than
+    // an update. The upsert underneath would happily rewrite the label and
+    // agent of a row somebody else created, which is a free way to relabel
+    // another participant's demo — or ours.
+    if (already) return { registered: true };
+    if (rows.length >= MAX_WATCHED) {
+      return {
+        registered: false,
+        reason: `This deployment is already watching ${MAX_WATCHED} addresses, which is its ceiling`,
+      };
+    }
+    await watchSigner(db, {
+      signer: params.signer,
+      chainId: params.chainId,
+      agentId: short(params.agentId),
+      label: short(params.label),
+      at: new Date(),
+    });
+    return { registered: true };
+  };
+
   app.get('/api/watched', async () => {
     const rows = await activeSigners(db);
     return {
@@ -344,7 +416,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     };
   });
 
-  app.post('/api/watched', async (request, reply) => {
+  app.post('/api/watched', costly(20), async (request, reply) => {
     const body = (request.body ?? {}) as Record<string, unknown>;
     const signer = String(body['signer'] ?? '');
     if (!/^0x[0-9a-fA-F]{40}$/.test(signer)) {
@@ -365,13 +437,15 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       });
     }
 
-    await watchSigner(db, {
+    const result = await registerWatch({
       signer,
       chainId,
       agentId: String(body['agentId'] ?? signer.slice(0, 10)),
-      ...(body['label'] ? { label: String(body['label']) } : {}),
-      at: new Date(),
+      label: String(body['label'] ?? ''),
     });
+    if (!result.registered) {
+      return reply.code(429).send({ error: 'watch_limit', detail: result.reason, requestId: request.id });
+    }
     return reply.code(201).send({ signer: signer.toLowerCase(), chainId, watching: true });
   });
 
@@ -382,7 +456,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     // two differ in who pays and who signs, which is the whole distinction
     // worth exposing: this one can run on a public URL because it can spend
     // nothing.
-    app.post('/api/chaos/plan', async (request, reply) => {
+    app.post('/api/chaos/plan', costly(20), async (request, reply) => {
       const body = (request.body ?? {}) as Record<string, unknown>;
       const signer = String(body['signer'] ?? '');
       if (!/^0x[0-9a-fA-F]{40}$/.test(signer)) {
@@ -420,22 +494,26 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       // block scanner picks their transactions up without them reporting a
       // hash, so the loop they are about to trigger runs unattended. Skipped
       // on a declined plan, which registers an address for nothing.
+      let watching = false;
       if (!plan.declined) {
-        await watchSigner(db, {
+        const result = await registerWatch({
           signer,
           chainId,
           agentId: String(body['agentId'] ?? signer.slice(0, 10)),
           label: String(body['label'] ?? 'self-signed chaos'),
-          at: new Date(),
         });
+        watching = result.registered;
+        // Worth saying out loud rather than handing back a plan that will be
+        // signed and then watched by nobody.
+        if (!result.registered) return { ...plan, watching, declined: result.reason };
       }
 
       // A scenario this deployment cannot plan is a stated refusal, not an
       // error — same treatment as a guard declining a remediation.
-      return { ...plan, watching: !plan.declined };
+      return { ...plan, watching };
     });
 
-    app.post('/api/chaos/observe', async (request, reply) => {
+    app.post('/api/chaos/observe', costly(10), async (request, reply) => {
       const body = (request.body ?? {}) as Record<string, unknown>;
       const txHashes = Array.isArray(body['txHashes']) ? (body['txHashes'] as string[]) : [];
       if (txHashes.length === 0) {
@@ -456,12 +534,11 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       // it, read from the chain — so each sender is registered on the strength
       // of their own signature, not on the caller's say-so.
       for (const { signer } of result.observed) {
-        await watchSigner(db, {
+        await registerWatch({
           signer,
           chainId,
           agentId: signer.slice(0, 10),
           label: 'self-signed chaos',
-          at: new Date(),
         });
       }
       return result;
@@ -498,7 +575,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   if (options.diagnose) {
     const diagnose = options.diagnose;
     // Explain any transaction, with nothing registered and nothing installed.
-    app.post('/api/diagnose', async (request, reply) => {
+    app.post('/api/diagnose', costly(10), async (request, reply) => {
       const body = (request.body ?? {}) as Record<string, unknown>;
       const txHash = String(body['txHash'] ?? '');
       if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {

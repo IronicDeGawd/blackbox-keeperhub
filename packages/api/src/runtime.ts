@@ -137,21 +137,26 @@ export function makeChainReader(clients: Record<number, PublicClient>): ChainRea
  */
 export function makeFallbackReader(readers: ChainReader[]): ChainReader {
   const first = readers[0]!;
+  // Each reader is tried inside its own guard. The readers built here never
+  // throw, but this composes any ChainReader, and one that does would
+  // otherwise abort the sweep at the first endpoint — taking the whole
+  // recorder tick down with it, since a throw from a lookup propagates all the
+  // way out of the poll. A broken endpoint must cost us that endpoint, not
+  // every observation in that tick.
+  const tryEach = async <T>(attempt: (reader: ChainReader) => Promise<T | null>): Promise<T | null> => {
+    for (const reader of readers) {
+      try {
+        const result = await attempt(reader);
+        if (result) return result;
+      } catch {
+        // This endpoint cannot answer. The next one may.
+      }
+    }
+    return null;
+  };
   return {
-    getTransaction: async (params) => {
-      for (const reader of readers) {
-        const tx = await reader.getTransaction(params);
-        if (tx) return tx;
-      }
-      return null;
-    },
-    getReceipt: async (params) => {
-      for (const reader of readers) {
-        const receipt = await reader.getReceipt(params);
-        if (receipt) return receipt;
-      }
-      return null;
-    },
+    getTransaction: (params) => tryEach((reader) => reader.getTransaction(params)),
+    getReceipt: (params) => tryEach((reader) => reader.getReceipt(params)),
     // A simulation is a question about state, not about a mempool, so every
     // endpoint gives the same answer and there is nothing to fall back to.
     ...(first.call ? { call: first.call } : {}),
