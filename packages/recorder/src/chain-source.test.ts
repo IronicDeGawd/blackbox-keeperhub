@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildEventFromChain, type ChainReader } from './chain-source.js';
 
 const TX = `0x${'f'.repeat(64)}` as `0x${string}`;
@@ -124,5 +124,126 @@ describe('building an event from a chain transaction', () => {
   it('carries the scenario label through for the timeline', async () => {
     const { event } = await buildEventFromChain(reader(pendingTx), params);
     expect(event!.trigger.detail).toMatchObject({ source: 'chain', label: 'C1' });
+  });
+});
+
+describe('zero-integration evidence', () => {
+  const CONTRACT = '0x5d3437a8b5c182b91dc72087f4049ac00b1c528a' as `0x${string}`;
+  const revertedTx = {
+    hash: TX,
+    from: SIGNER,
+    to: CONTRACT,
+    input: '0x9fb37853abcdef' as `0x${string}`,
+    nonce: 5,
+    maxFeePerGas: 100_000_000n,
+    maxPriorityFeePerGas: 50_000_000n,
+    blockNumber: 100n,
+  };
+  const revertedReceipt = {
+    status: 'reverted' as const,
+    blockNumber: 100n,
+    gasUsed: 21_000n,
+    effectiveGasPrice: 90_000_000n,
+  };
+
+  const withCall = (
+    tx: Awaited<ReturnType<ChainReader['getTransaction']>>,
+    receipt: Awaited<ReturnType<ChainReader['getReceipt']>>,
+    call: ChainReader['call'],
+  ): ChainReader => ({ getTransaction: async () => tx, getReceipt: async () => receipt, call });
+
+  it('establishes state drift by replaying the call against the parent block', async () => {
+    // The whole point: R4 becomes reachable for an agent that integrated
+    // nothing, because Blackbox measures the simulation itself after the fact.
+    const call = vi.fn(async () => ({ success: true }));
+    const { event } = await buildEventFromChain(
+      withCall(revertedTx, revertedReceipt, call),
+      params,
+    );
+
+    expect(call).toHaveBeenCalledWith(
+      expect.objectContaining({ blockNumber: 99n, to: CONTRACT, from: SIGNER }),
+    );
+    expect(event!.simulation).toMatchObject({
+      performed: true,
+      success: true,
+      simulatedAtBlock: 99,
+    });
+  });
+
+  it('records a replay that also reverted, so R4 cannot fire on a doomed call', async () => {
+    const call = vi.fn(async () => ({ success: false, revertReason: 'AlwaysReverts()' }));
+    const { event } = await buildEventFromChain(
+      withCall(revertedTx, revertedReceipt, call),
+      params,
+    );
+    expect(event!.simulation).toMatchObject({ performed: true, success: false });
+  });
+
+  it('does not replay a transaction that succeeded', async () => {
+    const call = vi.fn(async () => ({ success: true }));
+    await buildEventFromChain(
+      withCall(revertedTx, { ...revertedReceipt, status: 'success' }, call),
+      params,
+    );
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('does not replay when the submitter already recorded a simulation', async () => {
+    const call = vi.fn(async () => ({ success: true }));
+    await buildEventFromChain(withCall(revertedTx, revertedReceipt, call), {
+      ...params,
+      simulation: { performed: true, success: true, simulatedAtBlock: 42 },
+    });
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('reports no simulation when the node cannot answer for an old block', async () => {
+    // An archive-less node is a normal deployment. Not knowing is a valid
+    // outcome; inventing a result is not.
+    const call = vi.fn(async () => {
+      throw new Error('missing trie node');
+    });
+    const { event } = await buildEventFromChain(
+      withCall(revertedTx, revertedReceipt, call),
+      params,
+    );
+    expect(event!.simulation).toEqual({ performed: false });
+  });
+
+  it('groups attempts at the same function on the same contract', async () => {
+    const first = await buildEventFromChain(reader(revertedTx, revertedReceipt), params);
+    const second = await buildEventFromChain(
+      reader({ ...revertedTx, hash: `0x${'e'.repeat(64)}`, nonce: 6 }, revertedReceipt),
+      { ...params, txHash: `0x${'e'.repeat(64)}` },
+    );
+    expect(first.event!.logicalActionId).toBe(second.event!.logicalActionId);
+    expect(first.event!.logicalActionId).toContain(CONTRACT);
+    expect(first.event!.logicalActionId).toContain('0x9fb37853');
+  });
+
+  it('keeps different functions on one contract apart', async () => {
+    const a = await buildEventFromChain(reader(revertedTx, revertedReceipt), params);
+    const b = await buildEventFromChain(
+      reader({ ...revertedTx, input: '0x27eab502' }, revertedReceipt),
+      params,
+    );
+    expect(a.event!.logicalActionId).not.toBe(b.event!.logicalActionId);
+  });
+
+  it('lets an explicit logical action id win over the inferred one', async () => {
+    const { event } = await buildEventFromChain(reader(revertedTx, revertedReceipt), {
+      ...params,
+      logicalActionId: 'agent:batch-7',
+    });
+    expect(event!.logicalActionId).toBe('agent:batch-7');
+  });
+
+  it('falls back to the hash alone for a contract creation, which groups with nothing', async () => {
+    const { event } = await buildEventFromChain(
+      reader({ ...revertedTx, to: null }, revertedReceipt),
+      params,
+    );
+    expect(event!.logicalActionId).toBe(`chain:11155111:${TX}`);
   });
 });

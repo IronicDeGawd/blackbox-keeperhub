@@ -43,6 +43,13 @@
       "when": 1786344433272,
       "tag": "0005_gigantic_valkyrie",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786349290061,
+      "tag": "0006_third_steel_serpent",
+      "breakpoints": true
     }
   ]
 }

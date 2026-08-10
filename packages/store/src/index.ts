@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import type { ExecutionEvent } from '@blackbox/core';
@@ -8,6 +8,7 @@ import {
   ingestCursors,
   signerState,
   watchedExecutions,
+  watchedSigners,
   watchedTransactions,
   remediationLedger,
 } from './schema.js';
@@ -202,17 +203,169 @@ export async function saveIncident(db: Database, incident: IncidentRow): Promise
     });
 }
 
+export type IncidentFilters = {
+  limit?: number;
+  status?: string;
+  class?: string;
+  severity?: string;
+  agentId?: string;
+  signer?: string;
+  chainId?: number;
+  /** Only incidents detected at or after this instant. */
+  since?: Date;
+};
+
+/**
+ * Incidents matching every supplied filter, newest first.
+ *
+ * Filters compose with AND, which is what a console's filter bar means when it
+ * offers several at once. `signer` is matched case-insensitively because
+ * addresses arrive checksummed from a UI and are stored lowercased.
+ */
 export async function listIncidents(
   db: Database,
-  params: { limit?: number; status?: string } = {},
+  params: IncidentFilters = {},
 ): Promise<(typeof incidents.$inferSelect)[]> {
-  const where = params.status ? eq(incidents.status, params.status) : undefined;
+  const clauses = [
+    params.status ? eq(incidents.status, params.status) : undefined,
+    params.class ? eq(incidents.class, params.class) : undefined,
+    params.severity ? eq(incidents.severity, params.severity) : undefined,
+    params.agentId ? eq(incidents.agentId, params.agentId) : undefined,
+    params.signer ? eq(incidents.signer, params.signer.toLowerCase()) : undefined,
+    params.chainId !== undefined ? eq(incidents.chainId, params.chainId) : undefined,
+    params.since ? gte(incidents.detectedAt, params.since) : undefined,
+  ].filter((c): c is NonNullable<typeof c> => c !== undefined);
+
   return db
     .select()
     .from(incidents)
-    .where(where)
+    .where(clauses.length > 0 ? and(...clauses) : undefined)
     .orderBy(desc(incidents.detectedAt))
     .limit(params.limit ?? 100);
+}
+
+export async function getIncident(
+  db: Database,
+  id: string,
+): Promise<(typeof incidents.$inferSelect) | null> {
+  const [row] = await db.select().from(incidents).where(eq(incidents.id, id)).limit(1);
+  return row ?? null;
+}
+
+/**
+ * The events an incident cites as evidence, oldest first.
+ *
+ * Returned as stored rows rather than domain events: the console renders the
+ * timeline from block numbers and outcome status, and rehydrating bigints only
+ * to format them again would lose precision for nothing.
+ */
+export async function eventsByIds(
+  db: Database,
+  ids: readonly string[],
+): Promise<(typeof executionEvents.$inferSelect)[]> {
+  if (ids.length === 0) return [];
+  return db
+    .select()
+    .from(executionEvents)
+    .where(inArray(executionEvents.id, [...ids]))
+    .orderBy(asc(executionEvents.submittedAt));
+}
+
+export type LedgerRow = typeof remediationLedger.$inferSelect;
+
+/** Every remediation attempt against one incident, oldest first. */
+export async function ledgerForIncident(db: Database, incidentId: string): Promise<LedgerRow[]> {
+  return db
+    .select()
+    .from(remediationLedger)
+    .where(eq(remediationLedger.incidentId, incidentId))
+    .orderBy(asc(remediationLedger.attemptedAt));
+}
+
+export type Stats = {
+  openBySeverity: { critical: number; warning: number; info: number };
+  remediations: {
+    total: number;
+    succeeded: number;
+    skipped: number;
+    failed: number;
+    gasWei: string;
+  };
+  meanTimeToDetectionMs: number | null;
+  meanTimeToRemediationMs: number | null;
+  updatedAt: Date;
+};
+
+/**
+ * The header strip.
+ *
+ * Both means are null rather than zero when nothing qualifies — "0ms to
+ * detection" would read as instant detection rather than as no data, and this
+ * number is one a viewer will quote.
+ */
+export async function stats(db: Database, now: Date = new Date()): Promise<Stats> {
+  const [incidentRows, ledgerRows] = await Promise.all([
+    db.select().from(incidents).orderBy(desc(incidents.detectedAt)).limit(500),
+    db.select().from(remediationLedger).orderBy(desc(remediationLedger.attemptedAt)).limit(500),
+  ]);
+
+  const open = incidentRows.filter((i) => i.status !== 'resolved' && i.status !== 'acknowledged');
+  const countSeverity = (severity: string): number =>
+    open.filter((i) => i.severity === severity).length;
+
+  // Detection latency is measured from the first event that became evidence,
+  // not from when the incident row was written — the gap between them is
+  // exactly what this number is meant to expose.
+  const detectionLatencies = incidentRows
+    .map((i) => i.detectedAt.getTime() - i.firstEventAt.getTime())
+    .filter((ms) => ms >= 0);
+
+  const remediated = incidentRows.filter((i) => i.resolvedAt && i.resolvedBy === 'blackbox');
+  const remediationLatencies = remediated
+    .map((i) => i.resolvedAt!.getTime() - i.detectedAt.getTime())
+    .filter((ms) => ms >= 0);
+
+  const mean = (values: number[]): number | null =>
+    values.length === 0 ? null : Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+
+  return {
+    openBySeverity: {
+      critical: countSeverity('critical'),
+      warning: countSeverity('warning'),
+      info: countSeverity('info'),
+    },
+    remediations: {
+      total: ledgerRows.length,
+      succeeded: ledgerRows.filter((r) => r.status === 'succeeded').length,
+      skipped: ledgerRows.filter((r) => r.status === 'skipped').length,
+      failed: ledgerRows.filter((r) => r.status === 'failed').length,
+      gasWei: ledgerRows.reduce((sum, r) => sum + BigInt(r.gasSpentWei), 0n).toString(),
+    },
+    meanTimeToDetectionMs: mean(detectionLatencies),
+    meanTimeToRemediationMs: mean(remediationLatencies),
+    updatedAt: now,
+  };
+}
+
+/** Distinct agents seen, with their signers, chains and open incident counts. */
+export async function listAgents(db: Database): Promise<
+  { agentId: string; signers: string[]; chainIds: number[]; openIncidents: number }[]
+> {
+  const rows = await db.select().from(incidents).limit(1000);
+  const byAgent = new Map<string, { signers: Set<string>; chainIds: Set<number>; open: number }>();
+  for (const row of rows) {
+    const entry = byAgent.get(row.agentId) ?? { signers: new Set(), chainIds: new Set(), open: 0 };
+    entry.signers.add(row.signer);
+    entry.chainIds.add(row.chainId);
+    if (row.status !== 'resolved' && row.status !== 'acknowledged') entry.open += 1;
+    byAgent.set(row.agentId, entry);
+  }
+  return [...byAgent.entries()].map(([agentId, e]) => ({
+    agentId,
+    signers: [...e.signers],
+    chainIds: [...e.chainIds],
+    openIncidents: e.open,
+  }));
 }
 
 export async function getCursor(db: Database, source: string): Promise<string | null> {
@@ -438,4 +591,52 @@ export async function recordRemediationAttempt(
     gasSpentWei: (entry.gasSpentWei ?? 0n).toString(),
     txHash: entry.txHash ?? null,
   });
+}
+
+export type WatchedSigner = typeof watchedSigners.$inferSelect;
+
+/**
+ * Register an address for observation. Idempotent: registering twice
+ * reactivates rather than failing, because a console button will be pressed
+ * twice.
+ */
+export async function watchSigner(
+  db: Database,
+  params: {
+    signer: string;
+    chainId: number;
+    agentId: string;
+    label?: string;
+    at: Date;
+  },
+): Promise<void> {
+  await db
+    .insert(watchedSigners)
+    .values({
+      signer: params.signer.toLowerCase(),
+      chainId: params.chainId,
+      agentId: params.agentId,
+      label: params.label ?? null,
+      registeredAt: params.at,
+      active: true,
+    })
+    .onConflictDoUpdate({
+      target: [watchedSigners.signer, watchedSigners.chainId],
+      set: { agentId: params.agentId, label: params.label ?? null, active: true },
+    });
+}
+
+export async function unwatchSigner(db: Database, signer: string, chainId: number): Promise<void> {
+  await db
+    .update(watchedSigners)
+    .set({ active: false })
+    .where(and(eq(watchedSigners.signer, signer.toLowerCase()), eq(watchedSigners.chainId, chainId)));
+}
+
+export async function activeSigners(db: Database, chainId?: number): Promise<WatchedSigner[]> {
+  const clauses = [
+    eq(watchedSigners.active, true),
+    chainId !== undefined ? eq(watchedSigners.chainId, chainId) : undefined,
+  ].filter((c): c is NonNullable<typeof c> => c !== undefined);
+  return db.select().from(watchedSigners).where(and(...clauses));
 }

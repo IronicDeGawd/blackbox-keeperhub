@@ -8,8 +8,14 @@ import {
   insertEvents,
   listIncidents,
   loadSignerWindow,
+  eventsByIds,
+  getIncident,
+  listAgents,
   recordGapObservation,
+  recordRemediationAttempt,
+  remediationLedger,
   saveIncident,
+  stats,
   setCursor,
   signerState,
   type Database,
@@ -67,6 +73,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.delete(executionEvents);
   await db.delete(incidents);
+  await db.delete(remediationLedger);
   await db.delete(signerState);
 });
 
@@ -289,5 +296,119 @@ describe('saveIncident with bigint payloads', () => {
     expect((stored?.remediation as { attempts: { gasUsed: unknown }[] }).attempts[0]?.gasUsed).toBe(
       '21000',
     );
+  });
+});
+
+describe('API queries', () => {
+  const mkIncident = (over: Record<string, unknown> = {}) => ({
+    id: `inc-${Math.random().toString(36).slice(2)}`,
+    key: 'k',
+    class: 'NONCE_GAP',
+    severity: 'critical',
+    status: 'open',
+    agentId: 'chaos',
+    signer: '0x01cc313321eb09c51f5b649f2bbd578ee32750a5',
+    chainId: 11155111,
+    detectedAt: new Date('2026-08-10T12:01:00Z'),
+    firstEventAt: new Date('2026-08-10T12:00:00Z'),
+    lastSeenAt: new Date('2026-08-10T12:01:00Z'),
+    ruleId: 'R2',
+    confidence: 0.9,
+    evidence: { eventIds: ['e0'], ruleId: 'R2', facts: {} },
+    ...over,
+  });
+
+  it('composes filters with AND', async () => {
+    await saveIncident(db, mkIncident({ id: 'a' }) as never);
+    await saveIncident(db, mkIncident({ id: 'b', severity: 'warning' }) as never);
+    await saveIncident(db, mkIncident({ id: 'c', chainId: 84532 }) as never);
+
+    const found = await listIncidents(db, { severity: 'critical', chainId: 11155111 });
+    expect(found.map((i) => i.id).sort()).toEqual(['a']);
+  });
+
+  it('matches a signer case-insensitively, since a UI sends it checksummed', async () => {
+    await saveIncident(db, mkIncident({ id: 'a' }) as never);
+    const found = await listIncidents(db, {
+      signer: '0x01CC313321EB09C51F5B649F2BBD578EE32750A5',
+    });
+    expect(found).toHaveLength(1);
+  });
+
+  it('returns null for an incident that does not exist', async () => {
+    expect(await getIncident(db, 'nope')).toBeNull();
+  });
+
+  it('reports means as null rather than zero when nothing qualifies', async () => {
+    const s = await stats(db);
+    // Zero would read as instant detection rather than as no data.
+    expect(s.meanTimeToDetectionMs).toBeNull();
+    expect(s.meanTimeToRemediationMs).toBeNull();
+  });
+
+  it('measures detection latency from the first evidence event, not the row write', async () => {
+    await saveIncident(db, mkIncident({ id: 'a' }) as never);
+    const s = await stats(db);
+    expect(s.meanTimeToDetectionMs).toBe(60_000);
+  });
+
+  it('counts only Blackbox-attributed resolutions as remediation latency', async () => {
+    await saveIncident(
+      db,
+      mkIncident({
+        id: 'a',
+        status: 'resolved',
+        resolvedAt: new Date('2026-08-10T12:02:00Z'),
+        resolvedBy: 'external',
+      }) as never,
+    );
+    expect((await stats(db)).meanTimeToRemediationMs).toBeNull();
+
+    await saveIncident(
+      db,
+      mkIncident({
+        id: 'b',
+        status: 'resolved',
+        resolvedAt: new Date('2026-08-10T12:02:00Z'),
+        resolvedBy: 'blackbox',
+      }) as never,
+    );
+    expect((await stats(db)).meanTimeToRemediationMs).toBe(60_000);
+  });
+
+  it('excludes resolved and acknowledged incidents from the open counts', async () => {
+    await saveIncident(db, mkIncident({ id: 'a' }) as never);
+    await saveIncident(db, mkIncident({ id: 'b', status: 'acknowledged' }) as never);
+    await saveIncident(db, mkIncident({ id: 'c', status: 'resolved' }) as never);
+    expect((await stats(db)).openBySeverity.critical).toBe(1);
+  });
+
+  it('sums ledger gas as a bigint string, since the total can exceed 2^53', async () => {
+    for (const [i, gas] of ['9000000000000000000', '9000000000000000000'].entries()) {
+      await recordRemediationAttempt(db, {
+        id: `rem-${i}`,
+        incidentId: 'a',
+        playbookId: 'P2',
+        signer: '0x01cc313321eb09c51f5b649f2bbd578ee32750a5',
+        chainId: 11155111,
+        attemptedAt: new Date(),
+        gasSpentWei: BigInt(gas),
+        status: 'succeeded',
+      });
+    }
+    expect((await stats(db)).remediations.gasWei).toBe('18000000000000000000');
+  });
+
+  it('groups agents with their signers, chains and open counts', async () => {
+    await saveIncident(db, mkIncident({ id: 'a' }) as never);
+    await saveIncident(db, mkIncident({ id: 'b', chainId: 84532, status: 'resolved' }) as never);
+    const agents = await listAgents(db);
+    expect(agents).toHaveLength(1);
+    expect(agents[0]).toMatchObject({ agentId: 'chaos', openIncidents: 1 });
+    expect(agents[0]?.chainIds.sort()).toEqual([11155111, 84532]);
+  });
+
+  it('returns an empty list for no event ids rather than querying', async () => {
+    expect(await eventsByIds(db, [])).toEqual([]);
   });
 });

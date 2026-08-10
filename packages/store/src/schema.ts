@@ -5,6 +5,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   real,
   text,
   timestamp,
@@ -91,6 +92,31 @@ export const incidents = pgTable(
     openByKey: index('incidents_key_status_idx').on(t.key, t.status),
     timeline: index('incidents_detected_idx').on(t.detectedAt),
     bySigner: index('incidents_signer_idx').on(t.signer, t.chainId),
+  }),
+);
+
+/**
+ * Addresses to watch.
+ *
+ * The difference between a demo and a product: without this, Blackbox only
+ * ever sees transactions something told it about, which in practice means its
+ * own chaos harness. Registering an address makes the block scanner pick up
+ * everything that address does, with no integration on the agent's side at all.
+ */
+export const watchedSigners = pgTable(
+  'watched_signers',
+  {
+    signer: text('signer').notNull(),
+    chainId: integer('chain_id').notNull(),
+    /** Whose incidents these are in the console. */
+    agentId: text('agent_id').notNull(),
+    label: text('label'),
+    registeredAt: timestamp('registered_at', { withTimezone: true }).notNull(),
+    active: boolean('active').notNull().default(true),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.signer, t.chainId] }),
+    byChain: index('watched_signers_chain_idx').on(t.chainId, t.active),
   }),
 );
 
