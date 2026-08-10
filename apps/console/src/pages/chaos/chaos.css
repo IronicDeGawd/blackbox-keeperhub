@@ -1,0 +1,102 @@
+.banner--testnet {
+  border-left: 3px solid var(--ok);
+  padding: var(--s3) var(--s4);
+  font-size: 13px;
+}
+.banner--testnet strong {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--ok);
+}
+
+.scenarios {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--s3);
+}
+
+.scenario {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s4);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+/* A scenario that cannot run here still shows everything, including why. */
+.scenario--off {
+  border-style: dashed;
+  color: var(--ink-faint);
+}
+
+.scenario__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.scenario__id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+}
+
+.scenario__name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.scenario__induces,
+.scenario__determinism,
+.scenario__note {
+  margin: 0;
+  font-size: 12px;
+}
+
+.scenario__induces {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.scenario__determinism {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+
+.scenario__note {
+  flex: 1;
+  line-height: 1.5;
+}
+
+.run {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.run__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  font-size: 12px;
+}
+
+.run__hashes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+}
