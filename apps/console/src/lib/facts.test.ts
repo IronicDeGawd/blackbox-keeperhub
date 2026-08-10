@@ -41,6 +41,42 @@ describe('fact keys', () => {
   });
 });
 
+/**
+ * Every documented fact that carries a wei value, listed from the rules that
+ * emit them rather than from the formatter — so the formatter can be caught
+ * failing to recognise one. Two of these once rendered as bare integers.
+ */
+const WEI_VALUED_FACTS = [
+  'submittedMaxFeePerGas',
+  'currentBaseFee',
+  'submittedMaxFee',
+  'submittedPriorityFee',
+  'baseFeeAtDetection',
+  'thresholdFee',
+  'totalGasBurned',
+  'signerBalance',
+  'medianRecentCost',
+  'thresholdBalance',
+];
+
+describe('wei-valued facts', () => {
+  it('are all keys some rule actually emits', () => {
+    for (const key of WEI_VALUED_FACTS) {
+      const owner = INCIDENT_CLASSES.find((c) => FACT_KEYS[c].includes(key));
+      expect(owner, `no class emits ${key}`).toBeDefined();
+    }
+  });
+
+  it('never render as a bare integer', () => {
+    for (const key of WEI_VALUED_FACTS) {
+      // A raw wei integer with no unit is the one thing the spec forbids.
+      expect(formatFact(key, '1500000000'), `${key} rendered without a unit`).toMatch(
+        /\s(ETH|gwei|wei)$/,
+      );
+    }
+  });
+});
+
 describe('fact formatting', () => {
   it('gives wei-valued facts a unit and full precision', () => {
     expect(formatFact('signerBalance', '38886020810000')).toBe('38886.02081 gwei');

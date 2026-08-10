@@ -102,6 +102,17 @@ const WEI_KEY = /(wei|balance|fee|cost|gasburned)$/i;
 const MS_KEY = /ms$/i;
 
 /**
+ * Wei-valued facts whose names do not end in a word the pattern above catches.
+ *
+ * Both are decimal wei strings at the source — `submittedMaxFeePerGas` and
+ * `baseFeeAtDetection` in packages/detector/src/rules.ts — and both used to
+ * render as bare integers with no unit, which is the one thing the spec says
+ * never to do with wei. Matching "fee" anywhere in the name instead would drag
+ * in `feeDeficitPct`, which is a percentage.
+ */
+const WEI_KEYS = new Set(['submittedMaxFeePerGas', 'baseFeeAtDetection']);
+
+/**
  * Amounts of a token R7 does not identify.
  *
  * They are base units of whatever was swapped, so rendering them as ETH would
@@ -119,7 +130,8 @@ const BASE_UNIT_KEYS = new Set(['expectedOut', 'actualOut']);
 export function formatFact(key: string, value: unknown): string {
   if (value === null || value === undefined) return formatFactValue(value);
 
-  if (WEI_KEY.test(key) && (typeof value === 'string' || typeof value === 'number')) {
+  const isWei = WEI_KEY.test(key) || WEI_KEYS.has(key);
+  if (isWei && (typeof value === 'string' || typeof value === 'number')) {
     // Exact: this value is evidence, and it sits beside the threshold it was
     // compared against. A rounded figure makes that comparison uncheckable.
     return formatWei(value, true);
