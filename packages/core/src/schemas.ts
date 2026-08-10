@@ -148,6 +148,12 @@ export const remediationAttemptSchema = z.object({
   guardsFailed: z.array(z.string()),
   txHash: hexHash.optional(),
   keeperHubActionId: z.string().optional(),
+  /**
+   * Who put the transaction on chain. `user-signed` means Blackbox planned the
+   * remediation and a human's wallet signed it — a materially different claim
+   * from acting autonomously, and one the UI must not blur.
+   */
+  executor: z.enum(['signer', 'keeperhub', 'user-signed']).optional(),
   status: z.enum(['succeeded', 'failed', 'skipped']),
   failureReason: z.string().optional(),
   gasUsed: bigintString.optional(),

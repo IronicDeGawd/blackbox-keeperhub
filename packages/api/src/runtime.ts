@@ -15,6 +15,7 @@ import {
   type ChainReader,
 } from '@blackbox/recorder';
 import { getIncident, listIncidents, saveIncident, stats, type Database } from '@blackbox/store';
+import { KeeperHubClient } from '@blackbox/core';
 import type { EventBus } from './bus.js';
 import { incidentSummary, type IncidentRow } from './serialise.js';
 
@@ -40,6 +41,15 @@ export type RuntimeOptions = {
   rpcUrl: string;
   /** Absent means incidents are detected but never explained. */
   diagnostician?: Diagnostician;
+  /**
+   * KeeperHub, when the process has a key for it.
+   *
+   * With it, executions submitted through KeeperHub are polled and normalised
+   * alongside chain observations, which is the audit trail Blackbox was built
+   * to read. Without it the recorder still works — it just sees only what the
+   * chain shows, and every KeeperHub-specific field is simply absent.
+   */
+  keeperHub?: KeeperHubClient;
   intervalMs?: number;
   logger?: { info: (m: string, d?: unknown) => void; error: (m: string, d?: unknown) => void };
 };
@@ -112,9 +122,14 @@ export class Runtime {
 
     this.recorder = new Recorder({
       db: options.db,
-      keeperHub: {
+      keeperHub: options.keeperHub ?? {
         getExecutionStatus: async () => {
-          throw new Error('KeeperHub polling is not enabled in this process');
+          // Only reached if something registered an execution while no key was
+          // configured. Saying so beats a silent empty result.
+          throw new Error(
+            'A KeeperHub execution is registered but this process has no KeeperHub key. ' +
+              'Set KEEPERHUB_ORG_KEY to poll it.',
+          );
         },
       },
       corroboration: new RpcCorroborator({ rpcUrls: { [options.chainId]: options.rpcUrl } }),
@@ -356,6 +371,43 @@ export class Runtime {
     };
   }
 
+  /** Current market rates, for planning a replacement that will actually displace. */
+  async market(): Promise<{ baseFee: bigint; suggestedPriorityFee: bigint }> {
+    const block = await this.client.getBlock({ blockTag: 'latest' });
+    return {
+      baseFee: block.baseFeePerGas ?? 1_000_000_000n,
+      suggestedPriorityFee: 1_000_000_000n,
+    };
+  }
+
+  async getSubmittedTransaction(
+    hash: `0x${string}`,
+  ): Promise<{ from: string; to: string | null; nonce: number } | null> {
+    try {
+      const tx = await this.client.getTransaction({ hash });
+      return { from: tx.from, to: tx.to ?? null, nonce: tx.nonce };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Wait for inclusion, bounded — a wallet may be slow, but not unbounded. */
+  async waitForReceipt(
+    hash: `0x${string}`,
+    timeoutMs = 90_000,
+  ): Promise<{ included: boolean; gasUsed?: bigint }> {
+    try {
+      const receipt = await this.client.waitForTransactionReceipt({ hash, timeout: timeoutMs });
+      return { included: receipt.status === 'success', gasUsed: receipt.gasUsed };
+    } catch {
+      return { included: false };
+    }
+  }
+
+  nextId(prefix: string): string {
+    return this.id(prefix);
+  }
+
   async signerHealth(params: { signer: string; chainId: number }): Promise<{
     balanceWei: string;
     latestNonce: number;
@@ -396,6 +448,17 @@ function rowToIncident(row: Awaited<ReturnType<typeof listIncidents>>[number]): 
     confidence: row.confidence,
     evidence: row.evidence,
   } as Incident;
+}
+
+/** Build a KeeperHub client from env, or nothing if no key is configured. */
+export function keeperHubFromEnv(
+  env: Record<string, string | undefined>,
+): KeeperHubClient | undefined {
+  const orgKey = env['KEEPERHUB_ORG_KEY'];
+  // The webhook (`wfb_`) key 200s on reads and 401s on every execution, so a
+  // key of the wrong type is worse than none: it looks configured and is not.
+  if (!orgKey || !orgKey.startsWith('kh_')) return undefined;
+  return new KeeperHubClient({ orgKey });
 }
 
 /** Build a diagnostician from env, or nothing if no project is configured. */

@@ -245,6 +245,8 @@ export const remediationLedger = pgTable(
     gasSpentWei: text('gas_spent_wei').notNull().default('0'),
     status: text('status').notNull(),
     txHash: text('tx_hash'),
+    /** signer | keeperhub | user-signed. Absent on older rows. */
+    executor: text('executor'),
   },
   (t) => ({
     budget: index('remediation_ledger_budget_idx').on(t.signer, t.chainId, t.attemptedAt),

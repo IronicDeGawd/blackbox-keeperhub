@@ -412,3 +412,46 @@ describe('API queries', () => {
     expect(await eventsByIds(db, [])).toEqual([]);
   });
 });
+
+describe('saving an incident without analysis', () => {
+  const base = {
+    id: 'inc-preserve',
+    key: 'k',
+    class: 'NONCE_GAP',
+    severity: 'critical',
+    status: 'open',
+    agentId: 'chaos',
+    signer: '0x01cc313321eb09c51f5b649f2bbd578ee32750a5',
+    chainId: 11155111,
+    detectedAt: new Date(),
+    firstEventAt: new Date(),
+    lastSeenAt: new Date(),
+    ruleId: 'R2',
+    confidence: 0.9,
+    evidence: { eventIds: ['e0'], ruleId: 'R2', facts: {} },
+  };
+
+  it('keeps an analysis the update did not carry', async () => {
+    // The recorder re-saves every tracked incident each tick and knows nothing
+    // about rca or remediation. Overwriting them with null silently erased a
+    // completed remediation between one poll and the next.
+    await saveIncident(db, base as never);
+    await saveIncident(db, {
+      ...base,
+      rca: { summary: 'because of the nonce', contributingFactors: [] },
+      remediation: { playbookId: 'P2', finalStatus: 'succeeded', attempts: [] },
+    } as never);
+
+    await saveIncident(db, { ...base, status: 'open' } as never);
+
+    const stored = await getIncident(db, 'inc-preserve');
+    expect(stored?.remediation).toMatchObject({ finalStatus: 'succeeded' });
+    expect(stored?.rca).toMatchObject({ summary: 'because of the nonce' });
+  });
+
+  it('still lets an update replace an existing analysis', async () => {
+    await saveIncident(db, { ...base, rca: { summary: 'first' } } as never);
+    await saveIncident(db, { ...base, rca: { summary: 'second' } } as never);
+    expect((await getIncident(db, 'inc-preserve'))?.rca).toMatchObject({ summary: 'second' });
+  });
+});

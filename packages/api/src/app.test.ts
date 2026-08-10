@@ -332,6 +332,7 @@ describe('config', () => {
       chaos: false,
       diagnose: false,
       signerHealth: false,
+      proposeRemediation: false,
     });
     expect(body.remediation.budget.maxGasWeiPerHour).toBeTypeOf('string');
   });

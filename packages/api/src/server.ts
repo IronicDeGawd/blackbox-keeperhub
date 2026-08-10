@@ -1,15 +1,33 @@
 import { readFileSync } from 'node:fs';
-import { blackboxConfigSchema } from '@blackbox/core';
-import { createDb } from '@blackbox/store';
-import { buildApp } from './app.js';
+import { privateKeyToAccount } from 'viem/accounts';
+import { blackboxConfigSchema, getChain } from '@blackbox/core';
+import { ChaosHarness } from '@blackbox/chaos';
+import {
+  KeeperHubExecutor,
+  ReceiptVerifier,
+  RemediationLoop,
+  Remediator,
+  RoutingExecutor,
+  SignerExecutor,
+} from '@blackbox/remediator';
+import { createDb, getIncident, type Database } from '@blackbox/store';
+import { buildApp, type ChaosScenario } from './app.js';
 import { EventBus } from './bus.js';
-import { diagnosticianFromEnv, Runtime } from './runtime.js';
+import {
+  buildProposal,
+  recordUserRemediation,
+  verifyUserSubmission,
+  type Proposal,
+} from './proposals.js';
+import { diagnosticianFromEnv, keeperHubFromEnv, Runtime } from './runtime.js';
 
 /**
  * Composition root.
  *
- * Reads `.env.local` if present so a developer needs no shell setup, then falls
- * back to the process environment for a deployed run.
+ * Every capability is conditional on what the environment actually provides, so
+ * a process with no key cannot pretend to remediate and the console is told
+ * which controls to show. Reads `.env.local` if present so a developer needs no
+ * shell setup, and falls back to the process environment for a deployed run.
  */
 function loadEnv(): Record<string, string | undefined> {
   const merged: Record<string, string | undefined> = { ...process.env };
@@ -32,13 +50,17 @@ const rpcUrl = env['ALCHEMY_RPC_URL'] ?? env['SEPOLIA_RPC_URL'];
 if (!rpcUrl) throw new Error('No RPC URL: set ALCHEMY_RPC_URL or SEPOLIA_RPC_URL');
 
 const databaseUrl = env['DATABASE_URL'] ?? 'postgres://blackbox:blackbox@localhost:5433/blackbox';
+const signerAccount = env['CHAOS_SIGNER_PRIVATE_KEY']
+  ? privateKeyToAccount(env['CHAOS_SIGNER_PRIVATE_KEY'] as `0x${string}`)
+  : undefined;
+
 const config = blackboxConfigSchema.parse({
   keeperHub: { orgKey: env['KEEPERHUB_ORG_KEY'] ?? 'kh_unset' },
   databaseUrl,
   remediation: {
     // Live remediation stays an explicit opt-in, even here.
     dryRun: env['BLACKBOX_DRY_RUN'] !== 'false',
-    ...(env['CHAOS_SIGNER_ADDRESS'] ? { signerAllowlist: [env['CHAOS_SIGNER_ADDRESS']] } : {}),
+    ...(signerAccount ? { signerAllowlist: [signerAccount.address] } : {}),
     chainAllowlist: [chainId],
   },
 });
@@ -50,7 +72,9 @@ const logger = {
   error: (m: string, d?: unknown) => console.error('[error]', m, d ?? ''),
 };
 
+const keeperHub = keeperHubFromEnv(env);
 const diagnostician = diagnosticianFromEnv(env);
+
 const runtime = new Runtime({
   db,
   config,
@@ -58,9 +82,151 @@ const runtime = new Runtime({
   chainId,
   rpcUrl,
   ...(diagnostician ? { diagnostician } : {}),
+  ...(keeperHub ? { keeperHub } : {}),
   ...(env['BLACKBOX_TICK_MS'] ? { intervalMs: Number(env['BLACKBOX_TICK_MS']) } : {}),
   logger,
 });
+
+// --- remediation ------------------------------------------------------------
+// KeeperHub first, because a remediation that goes through it lands in the
+// customer's own audit trail and under its spend controls. A held key is the
+// fallback, and only it can serve a plan that names a nonce.
+const verifier = new ReceiptVerifier({ [chainId]: rpcUrl });
+const breakers = env['CIRCUIT_BREAKER_ADDRESS']
+  ? { chaos: env['CIRCUIT_BREAKER_ADDRESS'] as `0x${string}` }
+  : undefined;
+
+const keeperHubExecutor = keeperHub
+  ? new KeeperHubExecutor(
+      {
+        transfer: async (params) => {
+          const execution = await keeperHub.transfer(params);
+          return {
+            executionId: execution.executionId,
+            ...(execution.transactionHash ? { transactionHash: execution.transactionHash } : {}),
+          };
+        },
+        writeContract: async (params) => {
+          const execution = await keeperHub.writeContract(params);
+          return {
+            executionId: execution.executionId,
+            ...(execution.transactionHash ? { transactionHash: execution.transactionHash } : {}),
+          };
+        },
+        // A contract-call submission answers without a hash even once mined.
+        getExecutionStatus: async (id) => {
+          const execution = await keeperHub.getExecutionStatus(id);
+          return { transactionHash: execution.transactionHash ?? null };
+        },
+      },
+      verifier,
+    )
+  : undefined;
+
+const signerExecutor = signerAccount
+  ? new SignerExecutor([signerAccount], { [chainId]: rpcUrl }, verifier)
+  : undefined;
+
+const canRemediate = Boolean(keeperHubExecutor ?? signerExecutor);
+const remediator = canRemediate
+  ? new Remediator({
+      db,
+      config,
+      executor: new RoutingExecutor({
+        ...(keeperHubExecutor ? { keeperHub: keeperHubExecutor } : {}),
+        ...(signerExecutor ? { signer: signerExecutor } : {}),
+      }),
+      market: async () => runtime.market(),
+      ...(breakers ? { breakers } : {}),
+      makeId: () => runtime.nextId('rem'),
+      logger,
+    })
+  : undefined;
+
+const loop = remediator
+  ? new RemediationLoop({
+      db,
+      remediator,
+      onRemediated: (id, outcome) =>
+        bus.publish({
+          type: outcome.record.finalStatus === 'succeeded'
+            ? 'remediation.succeeded'
+            : 'remediation.failed',
+          data: { incidentId: id, ...outcome.record },
+        }),
+      logger,
+    })
+  : undefined;
+
+// --- chaos ------------------------------------------------------------------
+// Only when a signer key exists and the chain is a permitted chaos target; the
+// harness refuses anything else at construction, which is the real guard.
+const harness =
+  signerAccount && env['CHAOS_TARGET_ADDRESS']
+    ? new ChaosHarness({
+        db,
+        account: signerAccount,
+        chainId,
+        rpcUrl,
+        chaosTarget: env['CHAOS_TARGET_ADDRESS'] as `0x${string}`,
+      })
+    : undefined;
+
+const SCENARIOS: ChaosScenario[] = [
+  { id: 'C1', name: 'Underpriced submission', induces: ['GAS_UNDERPRICED', 'STUCK_TRANSACTION'], enabled: true, deterministic: false, note: 'Bids at the base fee with no tip; inclusion depends on network conditions.' },
+  { id: 'C2', name: 'Nonce gap', induces: ['NONCE_GAP'], enabled: true, deterministic: true, note: 'The reliable one. Detected within two polls.' },
+  { id: 'C3', name: 'Simulation passes, execution reverts', induces: ['SIM_PASS_EXEC_REVERT'], enabled: true, deterministic: true, note: 'Arms a trap that springs one block later.' },
+  { id: 'C4', name: 'Retry storm', induces: ['RETRY_STORM'], enabled: true, deterministic: true, note: 'Four attempts at a call that always reverts.' },
+  { id: 'C5', name: 'Signer gas starvation', induces: ['SIGNER_GAS_STARVED'], enabled: false, deterministic: true, note: 'Sweeps the signer below one action of runway, which blocks every later scenario until it is refunded.' },
+  { id: 'C6', name: 'Adverse inclusion', induces: ['ADVERSE_INCLUSION'], enabled: false, deterministic: false, note: 'Needs controllable block ordering; local fork only.' },
+];
+
+async function runScenario(id: string): Promise<{ runId: string; txHashes: string[] }> {
+  if (!harness) throw new Error('chaos is not configured in this process');
+  const runId = runtime.nextId('run');
+  switch (id) {
+    case 'C1':
+      return { runId, txHashes: (await harness.c1UnderpricedStuck()).txHashes };
+    case 'C2':
+      return { runId, txHashes: (await harness.c2NonceGap()).txHashes };
+    case 'C3':
+      return { runId, txHashes: (await harness.c3SimPassExecRevert()).txHashes };
+    case 'C4':
+      return { runId, txHashes: (await harness.c4RetryStorm(4)).txHashes };
+    default:
+      throw new Error(`scenario ${id} cannot be run from here`);
+  }
+}
+
+// --- proposals --------------------------------------------------------------
+const proposalDeps = {
+  db,
+  config,
+  market: async () => runtime.market(),
+  ...(breakers ? { breakers } : {}),
+};
+
+async function loadIncident(id: string): Promise<{ row: Record<string, unknown>; incident: import('@blackbox/core').Incident } | null> {
+  const row = await getIncident(db as Database, id);
+  if (!row) return null;
+  return {
+    row: row as unknown as Record<string, unknown>,
+    incident: {
+      id: row.id,
+      class: row.class,
+      severity: row.severity,
+      status: row.status,
+      agentId: row.agentId,
+      signer: row.signer,
+      chainId: row.chainId,
+      detectedAt: row.detectedAt,
+      firstEventAt: row.firstEventAt,
+      ...(row.resolvedAt ? { resolvedAt: row.resolvedAt } : {}),
+      confidence: row.confidence,
+      evidence: row.evidence,
+    } as import('@blackbox/core').Incident,
+  };
+}
 
 const app = await buildApp({
   db,
@@ -68,6 +234,83 @@ const app = await buildApp({
   bus,
   diagnose: (params) => runtime.diagnoseTransaction(params),
   signerHealth: (params) => runtime.signerHealth(params),
+  ...(loop
+    ? {
+        remediate: async (incidentId: string) => {
+          const loaded = await loadIncident(incidentId);
+          if (!loaded) return { accepted: false, finalStatus: 'not_found' };
+          const outcome = await remediator!.remediate(loaded.incident);
+          const attempt = outcome.record.attempts[0];
+          return {
+            accepted: outcome.record.finalStatus === 'succeeded',
+            playbookId: outcome.record.playbookId,
+            finalStatus: outcome.record.finalStatus,
+            guardsFailed: outcome.guardsFailed,
+            ...(attempt?.txHash ? { txHash: attempt.txHash } : {}),
+            ...(attempt?.failureReason ? { reason: attempt.failureReason } : {}),
+          };
+        },
+      }
+    : {}),
+  ...(harness
+    ? {
+        chaos: {
+          scenarios: () => SCENARIOS,
+          context: async () => {
+            const chain = getChain(chainId);
+            return {
+              chainId,
+              chainName: chain.name,
+              isTestnet: chain.isTestnet,
+              signer: signerAccount!.address,
+              signerBalanceWei: (await runtime.signerHealth({ signer: signerAccount!.address, chainId })).balanceWei,
+              targets: {
+                chaosTarget: env['CHAOS_TARGET_ADDRESS'] ?? null,
+                circuitBreaker: env['CIRCUIT_BREAKER_ADDRESS'] ?? null,
+              },
+            };
+          },
+          run: runScenario,
+        },
+      }
+    : {}),
+  proposals: {
+    plan: async (incidentId: string) => {
+      const loaded = await loadIncident(incidentId);
+      if (!loaded) return { error: 'not_found' };
+      return buildProposal(proposalDeps, loaded.incident);
+    },
+    accept: async (incidentId: string, txHash: string) => {
+      const loaded = await loadIncident(incidentId);
+      if (!loaded) return { accepted: false, reason: 'incident not found' };
+
+      const proposal: Proposal = await buildProposal(proposalDeps, loaded.incident);
+      const result = await verifyUserSubmission(
+        {
+          db,
+          getTransaction: (hash) => runtime.getSubmittedTransaction(hash),
+          waitForReceipt: (hash) => runtime.waitForReceipt(hash),
+          makeId: () => runtime.nextId('rem'),
+        },
+        loaded.incident,
+        proposal,
+        txHash as `0x${string}`,
+      );
+
+      if (result.accepted) {
+        await recordUserRemediation(
+          db,
+          loaded.row,
+          loaded.incident,
+          proposal,
+          txHash,
+          result,
+          new Date(),
+        );
+      }
+      return result as { accepted: boolean; reason?: string } & Record<string, unknown>;
+    },
+  },
   logger: false,
 });
 
@@ -76,14 +319,21 @@ await app.listen({ port, host: '0.0.0.0' });
 runtime.start();
 
 console.log(`blackbox api on http://localhost:${port}`);
-console.log(`  chain ${chainId} · diagnostician ${diagnostician ? 'on' : 'off'} · dryRun ${config.remediation.dryRun}`);
-console.log('  POST /api/watched   { "signer": "0x..." }   watch any address');
-console.log('  POST /api/diagnose  { "txHash": "0x..." }   explain any transaction');
+console.log(
+  `  chain ${chainId} · keeperhub ${keeperHub ? 'on' : 'off'} · ` +
+    `diagnostician ${diagnostician ? 'on' : 'off'} · remediate ${canRemediate ? 'on' : 'off'} · ` +
+    `chaos ${harness ? 'on' : 'off'} · dryRun ${config.remediation.dryRun}`,
+);
+console.log('  POST /api/watched                          watch any address');
+console.log('  POST /api/diagnose                         explain any transaction');
+console.log('  GET  /api/incidents/:id/remediation-plan   what to sign');
+console.log('  POST /api/incidents/:id/remediation-tx     what you signed');
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     void (async () => {
       runtime.stop();
+      loop?.tick;
       await app.close();
       await close();
       process.exit(0);

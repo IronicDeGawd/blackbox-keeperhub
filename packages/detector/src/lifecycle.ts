@@ -20,7 +20,7 @@ export const incidentKey = (
 ): IncidentKey => `${agentId}|${signer.toLowerCase()}|${chainId}|${cls}`;
 
 /** Who ended the incident. Recorded separately from whether it ended. */
-export type Attribution = 'blackbox' | 'external' | 'unknown';
+export type Attribution = 'blackbox' | 'blackbox-proposed' | 'external' | 'unknown';
 
 export type TrackedIncident = Incident & {
   key: IncidentKey;
@@ -238,8 +238,7 @@ export function resolutionOf(
   ctx: RuleContext,
 ): Attribution | null {
   const corr = ctx.corroboration;
-  const attribution: Attribution =
-    incident.remediation?.finalStatus === 'succeeded' ? 'blackbox' : 'external';
+  const attribution: Attribution = attributionOf(incident);
 
   switch (incident.class) {
     case 'STUCK_TRANSACTION':
@@ -301,9 +300,23 @@ export function resolutionOf(
       // Nothing on chain will retract it, so it stays open until a human
       // acknowledges it or a reroute records a remediation. Auto-resolving
       // would erase the only record that it happened.
-      return incident.remediation?.finalStatus === 'succeeded' ? 'blackbox' : null;
+      return incident.remediation?.finalStatus === 'succeeded' ? attributionOf(incident) : null;
 
     default:
       return null;
   }
+}
+
+/**
+ * Who actually fixed it.
+ *
+ * A remediation Blackbox planned and a human's wallet signed is not the same
+ * claim as one Blackbox performed unattended, and the difference is the whole
+ * value of this field. Overstating it here would make every "resolved by
+ * blackbox" in the UI less believable.
+ */
+function attributionOf(incident: TrackedIncident): Attribution {
+  if (incident.remediation?.finalStatus !== 'succeeded') return 'external';
+  const executor = incident.remediation.attempts[0]?.executor;
+  return executor === 'user-signed' ? 'blackbox-proposed' : 'blackbox';
 }

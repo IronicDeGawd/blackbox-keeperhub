@@ -1,0 +1,1 @@
+ALTER TABLE "remediation_ledger" ADD COLUMN "executor" text;

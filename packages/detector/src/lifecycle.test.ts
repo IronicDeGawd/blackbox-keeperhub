@@ -346,3 +346,41 @@ describe('attachRemediation', () => {
     ).toBe(false);
   });
 });
+
+describe('attribution of a user-signed remediation', () => {
+  const remediated = (executor?: string) => ({
+    playbookId: 'P2',
+    finalStatus: 'succeeded' as const,
+    attempts: [
+      {
+        attemptIndex: 0,
+        startedAt: T0,
+        guardsPassed: [],
+        guardsFailed: [],
+        status: 'succeeded' as const,
+        ...(executor ? { executor } : {}),
+      },
+    ],
+  });
+
+  it('credits Blackbox when Blackbox submitted it', () => {
+    const t = tracker();
+    const created = t.ingest([stuckDraft()], [evt({ status: 'pending', nonce: 5 })], ctx()).created[0]!;
+    t.attachRemediation(created.id, remediated('signer') as never);
+
+    const resolved = t.ingest([], [evt({ status: 'included', nonce: 5 })], ctx({ now: at(320_000) }))
+      .resolved;
+    expect(resolved[0]?.resolvedBy).toBe('blackbox');
+  });
+
+  it('says proposed when a wallet signed what Blackbox planned', () => {
+    // Overstating this would make every "resolved by blackbox" less believable.
+    const t = tracker();
+    const created = t.ingest([stuckDraft()], [evt({ status: 'pending', nonce: 5 })], ctx()).created[0]!;
+    t.attachRemediation(created.id, remediated('user-signed') as never);
+
+    const resolved = t.ingest([], [evt({ status: 'included', nonce: 5 })], ctx({ now: at(320_000) }))
+      .resolved;
+    expect(resolved[0]?.resolvedBy).toBe('blackbox-proposed');
+  });
+});

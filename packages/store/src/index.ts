@@ -184,23 +184,28 @@ export async function saveIncident(db: Database, incident: IncidentRow): Promise
     rca: jsonSafe(incident.rca) ?? null,
     remediation: jsonSafe(incident.remediation) ?? null,
   };
-  await db
-    .insert(incidents)
-    .values(row)
-    .onConflictDoUpdate({
-      target: incidents.id,
-      set: {
-        severity: row.severity,
-        status: row.status,
-        lastSeenAt: row.lastSeenAt,
-        resolvedAt: row.resolvedAt ?? null,
-        resolvedBy: row.resolvedBy ?? null,
-        confidence: row.confidence,
-        evidence: row.evidence,
-        rca: row.rca,
-        remediation: row.remediation,
-      },
-    });
+  // `rca` and `remediation` are written by the diagnostician and the
+  // remediator; the recorder re-saves every tracked incident on every tick and
+  // knows about neither. Overwriting them with null on those saves silently
+  // erased a root cause analysis and a completed remediation between one poll
+  // and the next — observed as an incident that stayed open forever with its
+  // ledger row intact. An update that carries no analysis leaves the stored one
+  // alone.
+  const set: Record<string, unknown> = {
+    severity: row.severity,
+    status: row.status,
+    lastSeenAt: row.lastSeenAt,
+    resolvedAt: row.resolvedAt ?? null,
+    resolvedBy: row.resolvedBy ?? null,
+    confidence: row.confidence,
+    evidence: row.evidence,
+  };
+  if (row.rca !== null && row.rca !== undefined) set['rca'] = row.rca;
+  if (row.remediation !== null && row.remediation !== undefined) {
+    set['remediation'] = row.remediation;
+  }
+
+  await db.insert(incidents).values(row).onConflictDoUpdate({ target: incidents.id, set });
 }
 
 export type IncidentFilters = {
@@ -583,6 +588,7 @@ export async function recordRemediationAttempt(
     gasSpentWei?: bigint;
     status: string;
     txHash?: string;
+    executor?: string;
   },
 ): Promise<void> {
   await db.insert(remediationLedger).values({
@@ -590,6 +596,7 @@ export async function recordRemediationAttempt(
     signer: entry.signer.toLowerCase(),
     gasSpentWei: (entry.gasSpentWei ?? 0n).toString(),
     txHash: entry.txHash ?? null,
+    executor: entry.executor ?? null,
   });
 }
 

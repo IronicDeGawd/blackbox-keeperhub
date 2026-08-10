@@ -75,6 +75,17 @@ export type SignerHealthHandler = (params: { signer: string; chainId: number }) 
 
 export type DiagnoseHandler = (params: { txHash: string; chainId: number }) => Promise<unknown>;
 
+/**
+ * Plan a remediation for someone else to sign, and verify what they signed.
+ *
+ * The route that opens nonce-precise remediation to an address whose key
+ * Blackbox does not hold, which is every address but its own.
+ */
+export type ProposalHandler = {
+  plan(incidentId: string): Promise<unknown>;
+  accept(incidentId: string, txHash: string): Promise<{ accepted: boolean; reason?: string } & Record<string, unknown>>;
+};
+
 export type AppOptions = {
   db: Database;
   config: BlackboxConfig;
@@ -85,6 +96,8 @@ export type AppOptions = {
   signerHealth?: SignerHealthHandler;
   /** Explains any transaction hash, for someone who has integrated nothing. */
   diagnose?: DiagnoseHandler;
+  /** Propose-and-verify remediation, for a signer Blackbox has no key for. */
+  proposals?: ProposalHandler;
   logger?: boolean;
 };
 
@@ -146,6 +159,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       chaos: Boolean(options.chaos),
       diagnose: Boolean(options.diagnose),
       signerHealth: Boolean(options.signerHealth),
+      proposeRemediation: Boolean(options.proposals),
     },
   }));
 
@@ -219,6 +233,57 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       // A refusal is an outcome, not an error: 200 with the guards that blocked
       // it, so the console renders the reason as prominently as a success.
       return reply.code(result.accepted ? 202 : 200).send({ incidentId: id, ...result });
+    });
+  }
+
+  if (options.proposals) {
+    const proposals = options.proposals;
+
+    // What transaction would fix this, and who has to sign it. Read-only.
+    app.get('/api/incidents/:id/remediation-plan', async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!(await getIncident(db, id))) {
+        return reply
+          .code(404)
+          .send({ error: 'not_found', detail: `Incident ${id} not found`, requestId: request.id });
+      }
+      return proposals.plan(id);
+    });
+
+    // A transaction the owner's wallet signed, offered as the remediation.
+    app.post('/api/incidents/:id/remediation-tx', async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!(await getIncident(db, id))) {
+        return reply
+          .code(404)
+          .send({ error: 'not_found', detail: `Incident ${id} not found`, requestId: request.id });
+      }
+
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const txHash = String(body['txHash'] ?? '');
+      if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+        return reply.code(400).send({
+          error: 'invalid_tx_hash',
+          detail: `"${txHash}" is not a 32-byte transaction hash`,
+          requestId: request.id,
+        });
+      }
+
+      const result = await proposals.accept(id, txHash);
+      if (!result.accepted) {
+        // A hash that does not match the plan is a rejected claim, not a server
+        // error: the caller is told exactly which check failed.
+        return reply.code(422).send({
+          error: 'transaction_rejected',
+          detail: result.reason ?? 'The transaction does not match this incident.',
+          requestId: request.id,
+        });
+      }
+
+      const updated = await getIncident(db, id);
+      if (updated) bus.publish({ type: 'incident.updated', data: incidentSummary(updated as IncidentRow) });
+      bus.publish({ type: 'remediation.succeeded', data: { incidentId: id, txHash, ...result } });
+      return result;
     });
   }
 
