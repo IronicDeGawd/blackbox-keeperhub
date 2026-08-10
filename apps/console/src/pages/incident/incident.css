@@ -135,6 +135,71 @@
   width: 30%;
 }
 
+/* --- actions -------------------------------------------------------------- */
+
+.actions__row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  background: var(--surface-sunk);
+}
+
+.confirm__text {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.button--go {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/*
+ * A refusal is an outcome. It gets a bordered panel of its own rather than a
+ * red toast, because the reason is the content.
+ */
+.refusal {
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  padding: var(--s3) var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.refusal__lead {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.refusal p {
+  margin: 0;
+  max-width: 80ch;
+}
+
+.refusal__guards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  font-size: 13px;
+}
+
 /* --- root cause analysis -------------------------------------------------- */
 
 /*

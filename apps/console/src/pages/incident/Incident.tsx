@@ -15,6 +15,7 @@ import {
   SeverityDot,
   StatusPill,
 } from '../../ui/primitives';
+import { Actions } from './Actions';
 import { Evidence } from './Evidence';
 import { EventTimeline } from './EventTimeline';
 import { Rca } from './Rca';
@@ -142,6 +143,13 @@ export function Incident(): React.JSX.Element {
           </div>
         </dl>
       </header>
+
+      <Actions
+        incident={detail}
+        capabilities={config?.capabilities ?? null}
+        chains={chains}
+        onChanged={() => void load()}
+      />
 
       <Evidence
         evidence={detail.evidence}
