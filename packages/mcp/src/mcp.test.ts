@@ -1,0 +1,286 @@
+import { describe, expect, it, vi } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { BlackboxClient } from './client.js';
+import { buildMcpServer } from './server.js';
+import { callTool, toolDescriptions, toolSchemas, type ToolName } from './tools.js';
+
+const ok = (body: unknown) =>
+  vi.fn(async () => new Response(JSON.stringify(body), { status: 200 }));
+
+const client = (fetchImpl: typeof fetch) =>
+  new BlackboxClient({ baseUrl: 'http://api.test', fetchImpl });
+
+describe('argument validation', () => {
+  it('rejects a hash that is not 32 bytes, without calling the API', async () => {
+    const fetchImpl = ok({});
+    const result = await callTool(client(fetchImpl as never), 'diagnose_execution', {
+      txHash: '0xdeadbeef',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/32-byte transaction hash/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('rejects an address that is not 20 bytes', async () => {
+    const result = await callTool(client(ok({}) as never), 'get_signer_health', {
+      signer: 'vitalik.eth',
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it('returns invalid arguments as a readable result, not a thrown error', async () => {
+    // An agent can read this and fix its call; a thrown transport error just
+    // ends the turn with nothing to reason about.
+    await expect(
+      callTool(client(ok({}) as never), 'list_incidents', { severity: 'catastrophic' }),
+    ).resolves.toMatchObject({ isError: true });
+  });
+});
+
+describe('diagnose_execution', () => {
+  const hash = `0x${'a'.repeat(64)}`;
+
+  it('explains a classified transaction with its root cause', async () => {
+    const fetchImpl = ok({
+      found: true,
+      class: 'SIM_PASS_EXEC_REVERT',
+      severity: 'critical',
+      confidence: 0.95,
+      ruleId: 'R4',
+      rca: { summary: 'State changed between simulation and inclusion.', recommendation: 'Re-simulate immediately before submitting.' },
+    });
+    const result = await callTool(client(fetchImpl as never), 'diagnose_execution', { txHash: hash });
+
+    expect(result.text).toContain('SIM_PASS_EXEC_REVERT');
+    expect(result.text).toContain('State changed');
+    expect(result.text).toContain('Recommended:');
+    expect(result.isError).toBeUndefined();
+  });
+
+  it('says plainly when nothing is wrong, rather than returning nothing', async () => {
+    const fetchImpl = ok({
+      found: true,
+      class: null,
+      status: 'included',
+      detail: 'No rule fired for this transaction.',
+      checked: { latestNonce: 5, missingNonces: [] },
+    });
+    const result = await callTool(client(fetchImpl as never), 'diagnose_execution', { txHash: hash });
+    expect(result.text).toContain('No rule fired');
+    expect(result.text).toContain('latestNonce');
+  });
+
+  it('reports a transaction that does not exist', async () => {
+    const fetchImpl = ok({ found: false, detail: 'No such transaction on this chain.' });
+    const result = await callTool(client(fetchImpl as never), 'diagnose_execution', { txHash: hash });
+    expect(result.text).toBe('No such transaction on this chain.');
+  });
+});
+
+describe('request_remediation', () => {
+  it('refuses to act without explicit authorisation', async () => {
+    // The only tool that spends money. An agent must not reach it by accident
+    // while exploring.
+    const fetchImpl = ok({ accepted: true });
+    const result = await callTool(client(fetchImpl as never), 'request_remediation', {
+      incidentId: 'inc-1',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/authorized: true/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('rejects authorized: false as firmly as an omission', async () => {
+    const fetchImpl = ok({ accepted: true });
+    const result = await callTool(client(fetchImpl as never), 'request_remediation', {
+      incidentId: 'inc-1',
+      authorized: false,
+    });
+    expect(result.isError).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('reports a guard refusal as an answer, naming what blocked it', async () => {
+    const fetchImpl = ok({
+      accepted: false,
+      finalStatus: 'skipped_by_guard',
+      guardsFailed: [{ guard: 'budget', reason: '10 remediations in the last hour reaches the cap' }],
+    });
+    const result = await callTool(client(fetchImpl as never), 'request_remediation', {
+      incidentId: 'inc-1',
+      authorized: true,
+    });
+    // A refusal with a reason is a real answer, not an error.
+    expect(result.isError).toBeUndefined();
+    expect(result.text).toContain('budget');
+    expect(result.text).toContain('reaches the cap');
+  });
+
+  it('reports the transaction when it acted', async () => {
+    const fetchImpl = ok({ accepted: true, playbookId: 'P4', txHash: `0x${'b'.repeat(64)}` });
+    const result = await callTool(client(fetchImpl as never), 'request_remediation', {
+      incidentId: 'inc-1',
+      authorized: true,
+    });
+    expect(result.text).toContain('P4');
+    expect(result.text).toContain('0xbbbb');
+  });
+});
+
+describe('get_remediation_plan', () => {
+  it('describes the transaction and who must sign it', async () => {
+    const fetchImpl = ok({
+      playbookId: 'P2',
+      signerRequired: '0xb9c5',
+      chainId: 11155111,
+      guards: { passed: ['budget'], failed: [] },
+      transaction: {
+        description: 'fill missing nonce 93',
+        to: '0xb9c5',
+        value: '0',
+        nonce: 93,
+        maxFeePerGas: '4191302983',
+        maxPriorityFeePerGas: '2000000000',
+      },
+      declined: null,
+    });
+    const result = await callTool(client(fetchImpl as never), 'get_remediation_plan', {
+      incidentId: 'inc-1',
+    });
+    expect(result.text).toContain('fill missing nonce 93');
+    expect(result.text).toContain('Must be signed by 0xb9c5');
+    expect(result.text).toContain('nonce=93');
+  });
+
+  it('passes on a refusal with its reason', async () => {
+    const fetchImpl = ok({
+      playbookId: 'P3',
+      declined: { policy: 'skipped_by_policy', reason: 'Base Sepolia has no private mempool' },
+      transaction: null,
+      guards: { passed: [], failed: [] },
+    });
+    const result = await callTool(client(fetchImpl as never), 'get_remediation_plan', {
+      incidentId: 'inc-1',
+    });
+    expect(result.text).toContain('no private mempool');
+  });
+
+  it('warns when Blackbox itself would be blocked from acting', async () => {
+    const fetchImpl = ok({
+      playbookId: 'P2',
+      signerRequired: '0xb9c5',
+      chainId: 11155111,
+      guards: { passed: [], failed: [{ guard: 'signer_allowlist', reason: 'not on the allowlist' }] },
+      transaction: { description: 'fill nonce 4', to: '0x1', value: '0', nonce: 4, maxFeePerGas: '1', maxPriorityFeePerGas: '1' },
+      declined: null,
+    });
+    const result = await callTool(client(fetchImpl as never), 'get_remediation_plan', {
+      incidentId: 'inc-1',
+    });
+    expect(result.text).toContain('signer_allowlist');
+  });
+});
+
+describe('list_incidents', () => {
+  it('renders one line per incident', async () => {
+    const fetchImpl = ok({
+      total: 2,
+      items: [
+        { id: 'inc-1', class: 'NONCE_GAP', severity: 'critical', status: 'open', summary: 'Nonce 47 unfilled' },
+        { id: 'inc-2', class: 'RETRY_STORM', severity: 'critical', status: 'resolved', summary: '4 failed attempts' },
+      ],
+    });
+    const result = await callTool(client(fetchImpl as never), 'list_incidents', { status: 'open' });
+    expect(result.text.split('\n')).toHaveLength(2);
+    expect(result.text).toContain('Nonce 47 unfilled');
+  });
+
+  it('says so when nothing matches', async () => {
+    const result = await callTool(client(ok({ total: 0, items: [] }) as never), 'list_incidents', {});
+    expect(result.text).toBe('No incidents match those filters.');
+  });
+
+  it('only sends filters that were supplied', async () => {
+    const fetchImpl = ok({ total: 0, items: [] });
+    await callTool(client(fetchImpl as never), 'list_incidents', { severity: 'critical' });
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe('http://api.test/api/incidents?severity=critical');
+  });
+});
+
+describe('errors from the API', () => {
+  it('surfaces the detail rather than a bare status code', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: 'not_found', detail: 'Incident inc-9 not found' }), {
+          status: 404,
+        }),
+    );
+    await expect(
+      callTool(client(fetchImpl as never), 'get_remediation_plan', { incidentId: 'inc-9' }),
+    ).rejects.toThrow('Incident inc-9 not found');
+  });
+});
+
+describe('the MCP surface', () => {
+  it('advertises every tool with a description', async () => {
+    const server = buildMcpServer({ fetchImpl: ok({ total: 0, items: [] }) as never });
+    const mcp = new Client({ name: 'test', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), mcp.connect(clientTransport)]);
+
+    const { tools } = await mcp.listTools();
+    const names = tools.map((t) => t.name).sort();
+    expect(names).toEqual([
+      'diagnose_execution',
+      'get_remediation_plan',
+      'get_signer_health',
+      'list_incidents',
+      'request_remediation',
+      'watch_address',
+    ]);
+    for (const tool of tools) expect(tool.description?.length ?? 0).toBeGreaterThan(40);
+    await mcp.close();
+  });
+
+  it('answers a real tool call over the protocol', async () => {
+    const server = buildMcpServer({
+      fetchImpl: ok({
+        total: 1,
+        items: [{ id: 'inc-1', class: 'NONCE_GAP', severity: 'critical', status: 'open', summary: 'Nonce 47 unfilled' }],
+      }) as never,
+    });
+    const mcp = new Client({ name: 'test', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), mcp.connect(clientTransport)]);
+
+    const result = await mcp.callTool({ name: 'list_incidents', arguments: { status: 'open' } });
+    const content = result.content as { type: string; text: string }[];
+    expect(content[0]?.text).toContain('Nonce 47 unfilled');
+    await mcp.close();
+  });
+
+  it('reports an unreachable Blackbox as a tool error the agent can read', async () => {
+    const server = buildMcpServer({
+      fetchImpl: vi.fn(async () => {
+        throw new Error('connect ECONNREFUSED');
+      }) as never,
+    });
+    const mcp = new Client({ name: 'test', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), mcp.connect(clientTransport)]);
+
+    const result = await mcp.callTool({ name: 'list_incidents', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]?.text).toContain('ECONNREFUSED');
+    await mcp.close();
+  });
+});
+
+describe('tool metadata', () => {
+  it('documents every tool it exposes', () => {
+    for (const name of Object.keys(toolSchemas) as ToolName[]) {
+      expect(toolDescriptions[name]).toBeTruthy();
+    }
+  });
+});
