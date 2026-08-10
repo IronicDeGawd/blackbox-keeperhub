@@ -175,21 +175,27 @@ moment a new builder is most likely to give up.
 
 ---
 
-## 3. What this cost us, and what it caught
+## 3. Withdrawn — the safe sequence is already documented, twice
 
-Following the documented sequence in `docs/api/direct-execution.md` — simulate,
+An earlier draft of this section said the documented execute sequence — simulate,
 check `wouldRevert`, execute with an `Idempotency-Key`, poll on
-`X-Poll-Interval-Hint`, trust the verified receipt — turned out to matter more
-than any individual endpoint detail. We were not doing any of it, because we
-built from the API surface rather than the guide.
+`X-Poll-Interval-Hint`, trust the verified receipt — was reachable only by
+already knowing to open the Direct Execution page, and recommended putting it in
+the quickstart.
 
-Adopting it changed the product: remediations are now pre-flighted, so one that
-would revert is never broadcast; retries carry a derived idempotency key, so an
-interrupted client cannot double-spend; and the transaction hash comes from a
-verified receipt rather than a self-reported field.
+It is in the quickstart. Section 6, *Send your first transaction safely*, gives
+that exact sequence for the MCP tools, and `docs/api/direct-execution.md` gives
+the REST equivalent at the top of the page. We read neither, and built the naive
+version anyway: broadcasting without a pre-flight, without an idempotency key,
+and polling on an interval we invented.
 
-**Fix, and the highest-leverage one in this document.** That sequence is the
-single most valuable page in the docs and it is reachable only by already
-knowing to open Direct Execution. Put it in the quickstart, before the first
-`curl`. A builder who follows the quickstart today writes the naive version we
-wrote.
+Adopting it changed our product materially. Remediations are now pre-flighted, so
+one that would revert is never broadcast; retries carry a derived idempotency
+key, so an interrupted client cannot double-spend; and the transaction hash comes
+from a verified receipt rather than a self-reported field.
+
+So there is no docs fix here. The finding is the same one as section 2: a builder
+who starts from the API surface never meets the guide, and nothing in the API's
+own responses points back at it. Of everything in this document, the change most
+likely to prevent that is the smallest — make error bodies name the page that
+explains them.
