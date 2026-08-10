@@ -8,13 +8,22 @@ import { GoogleAuth } from 'google-auth-library';
  * leak. The trade is that the environment must be logged in — an unauthenticated
  * machine gets a clear error rather than a silent downgrade.
  *
+ * Model availability was probed on 2026-08-10 against this project. Serving:
+ * `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`,
+ * `gemini-2.5-flash-lite`, `gemini-2.5-flash`. Not serving: `gemini-3-flash`,
+ * `gemini-3.1-flash`, `gemini-3-flash-lite`. The default is pinned to an
+ * explicit version rather than the `-latest` alias, because the model id is
+ * stored on every analysis as provenance and an alias that moves under you
+ * makes two analyses claiming the same model incomparable. The 2.5 line is
+ * scheduled for decommissioning in October.
+ *
  * Two facts about this endpoint were established by probing it (2026-08-10):
  *
  * 1. Only the **global** endpoint answers. The regional host
  *    (`us-central1-aiplatform.googleapis.com` with `locations/us-central1`)
  *    returns an HTML 404 for these models — not a JSON error, an actual 404
  *    page, which is easy to mistake for a bad path.
- * 2. `gemini-2.5-flash` spends output tokens on thinking before it writes
+ * 2. Flash models spend output tokens on thinking before they write
  *    anything. A request capped at 16 tokens came back `MAX_TOKENS` with a
  *    `content` object containing no `parts` at all and 13 thought tokens
  *    burned. A caller that assumes `parts[0].text` exists throws on a
@@ -62,7 +71,7 @@ export class VertexGemini {
   private auth: GoogleAuth | undefined;
 
   constructor(private readonly options: VertexOptions) {
-    this.model = options.model ?? 'gemini-2.5-flash';
+    this.model = options.model ?? 'gemini-3.5-flash-lite';
     this.location = options.location ?? 'global';
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 30_000;

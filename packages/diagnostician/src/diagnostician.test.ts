@@ -42,7 +42,7 @@ const goodOutput = JSON.stringify({
 });
 
 const stubLlm = (over: Partial<LlmClient> = {}): LlmClient => ({
-  modelId: 'gemini-2.5-flash',
+  modelId: 'gemini-3.5-flash-lite',
   generate: vi.fn(async () => goodOutput),
   ...over,
 });
@@ -51,7 +51,7 @@ describe('Diagnostician', () => {
   it('returns validated model output, tagged with the model that wrote it', async () => {
     const result = await new Diagnostician({ llm: stubLlm(), now: () => T0 }).diagnose(incident());
     expect(result.source).toBe('model');
-    expect(result.rca.model).toBe('gemini-2.5-flash');
+    expect(result.rca.model).toBe('gemini-3.5-flash-lite');
     expect(result.rca.promptVersion).toBe(PROMPT_VERSION);
     expect(result.rca.summary).toContain('Nonce 47');
     expect(rootCauseAnalysisSchema.safeParse(result.rca).success).toBe(true);
@@ -60,7 +60,7 @@ describe('Diagnostician', () => {
   it('falls back to the template when the model errors, and says why', async () => {
     const llm = stubLlm({
       generate: vi.fn(async () => {
-        throw new VertexError('Vertex gemini-2.5-flash returned 429: quota', 429, true);
+        throw new VertexError('Vertex gemini-3.5-flash-lite returned 429: quota', 429, true);
       }),
     });
     const result = await new Diagnostician({ llm, now: () => T0, attempts: 2 }).diagnose(incident());
@@ -218,7 +218,7 @@ describe('VertexGemini', () => {
     });
     await client.generate({ prompt: 'x' });
     expect(fetchImpl.mock.calls[0]?.[0]).toBe(
-      'https://aiplatform.googleapis.com/v1/projects/p/locations/global/publishers/google/models/gemini-2.5-flash:generateContent',
+      'https://aiplatform.googleapis.com/v1/projects/p/locations/global/publishers/google/models/gemini-3.5-flash-lite:generateContent',
     );
   });
 
