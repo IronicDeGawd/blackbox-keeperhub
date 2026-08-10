@@ -1,50 +1,158 @@
-# KeeperHub Onboarding Friction Log
+# Friction log — building Blackbox on KeeperHub
 
-Running record of every point of confusion, missing doc, and rough edge hit
-while integrating KeeperHub — each paired with a concrete proposed fix.
+Where a new builder got stuck, what it cost, and what would fix it.
 
-Kept from the first commit, per PRD §16. Reconstructing this from memory later
-produces a visibly weaker artefact, so log entries as they happen, not in
-batches.
+**Method.** Blackbox is an incident-detection and remediation tool built on
+KeeperHub over roughly two weeks. Everything below was hit while building it,
+against the live API and the hosted docs. Every claim was then re-verified on
+2026-08-10 against the `staging` branch of `KeeperHub/keeperhub` and against
+docs.keeperhub.com, and each entry carries a verdict.
 
-## How to add an entry
+**The most important thing in this document is section 2**, where several of our
+own complaints turned out to be wrong. We reported things as undocumented that
+are documented clearly, and we found by grepping the frontend bundle what was a
+docs page away. That is not a docs gap, it is a *discoverability* gap, and it is
+a more useful finding than any of the individual entries.
 
-Append to the table. One row per distinct friction point. Be specific enough
-that a KeeperHub engineer could act on the proposed fix without asking a
-follow-up question.
+---
 
-- **Severity** — `blocker` (could not proceed), `friction` (cost real time),
-  `polish` (noticed, minor).
-- **Area** — docs, SDK, API, CLI, dashboard, workflow builder, MCP, x402.
-- **Proposed fix** — the concrete change. "Improve the docs" is not a fix;
-  "add the audit-record JSON shape to the /audit endpoint reference page" is.
+## 1. Verified — still reproducible on 2026-08-10
 
-## Entries
+### 1.1 A completed contract-call returns no transaction hash
 
-| # | Date | Area | Severity | What happened | Time lost | Proposed fix |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | 2026-08-09 | API | blocker | No machine-readable API schema. `GET /api/openapi.json` and `/api/docs` both 404. Every endpoint had to be discovered by guessing paths and reading 404 bodies. | ~30 min | Serve an OpenAPI 3 document at a stable path and link it from the docs nav. It also unlocks generated clients in every language, which removes the "is there an official SDK?" question below. |
-| 2 | 2026-08-09 | docs | blocker | The audit-record schema is documented as eight field names in prose (`nodeId, nodeName, nodeType, status, input, output, duration, createdAt`) with no example payload and no statement of whether retries produce additional records. Retry behaviour is the single thing an observability integration needs to know, and it cannot be answered without running a live execution. | ~4 h, resolved only by executing a live transaction | Publish one full example response for `GET /api/workflows/executions/{id}/logs` covering an execution that retried at least once, and state explicitly in prose whether retry attempts append rows or mutate one row. |
-| 3 | 2026-08-09 | docs | friction | "Retry logic with exponential backoff", "gas optimization", "private routing", and "nonce management and transaction ordering" are listed as platform capabilities but none maps to a documented field, parameter, or endpoint. They read as marketing, so a caller cannot tell whether they are observable, configurable, or neither. | ~20 min | For each capability bullet, link to the field or config that exposes it — or mark it explicitly as internal-only behaviour with no API surface. |
-| 4 | 2026-08-09 | docs | friction | `usePrivateMempoolRpc` is a per-chain boolean returned by `GET /api/chains`, and it is `false` for Base and Base Sepolia while `true` for Ethereum. This means private routing simply does not exist on some supported chains. Nothing in the docs says so; it was found by diffing the chains response. A build that assumed private routing was universally available would have been designed wrong. | ~25 min | Add a chain-capability matrix to the docs (chain × private mempool × gas sponsorship × any other per-chain feature). Call out in the private-routing section that availability is chain-dependent, and name the field. |
-| 5 | 2026-08-09 | API | friction | The org key (`kh_`) returns 401 on `/api/organizations`, `/api/keys`, and `/api/user` with a bare `{"error":"Unauthorized"}`. No scope list, no hint at which key type is required, no docs page describing key scopes. Indistinguishable from an expired key at first glance. | ~15 min | Return a scoped error body (`{"error":"insufficient_scope","required":"...","granted":[...]}`) and document the key types and their scopes in one table. |
-| 6 | 2026-08-09 | API | polish | Two different 404 shapes from the same API: unknown routes return `{"error":"not_found","detail":"Route GET /api/x not found","request_id":"..."}` while unknown sub-resources return `{"error":"Workflow not found"}` with no `request_id`. Inconsistent error envelopes make client-side error handling guesswork. | ~5 min | Use one error envelope everywhere: `error`, `detail`, `request_id`. The `request_id` in particular should never be dropped — it is the only thing that makes a support conversation tractable. |
-| 7 | 2026-08-09 | API | blocker | An org key that returns 200 on `GET /api/workflows` returns 401 on every Direct Execution endpoint, including a zero-gas read-only `contract-call`. Nothing in the response says the key is scope-limited, and the docs never enumerate key types or their scopes. Hours can go into debugging a request body that was never the problem. Compounding it: the docs say wallet-not-configured returns 422, so 401 was the only signal distinguishing "wrong key" from "wrong wallet" — and it is unlabelled. | ~40 min | Document the key types (`kh_`, `wfb_`, any others) in one table with the exact endpoint groups each unlocks. Return `insufficient_scope` with the required scope named, and make read-only Direct Execution calls usable by read-scoped keys, since they touch no funds. |
-| 8 | 2026-08-09 | API | friction | `POST /api/workflows` returns 405 Method Not Allowed, so programmatic workflow creation is not where a reader of the workflows API would look for it. The reference documents `duplicate`, `download`, `go-live`, and `claim` sub-resources but never the create call itself. | ~10 min | Document the create-workflow call explicitly next to the list call, or state plainly that workflows are created only via the UI/MCP and link to that path. |
-| 9 | 2026-08-09 | dashboard | friction | Signing in with a wallet silently **creates a brand new account and organization** rather than offering to link the wallet to an existing account. An operator who originally signed up with Google and later signs in with their wallet lands in an empty org with none of their workflows, keys, or wallets, and nothing on screen says a new org was created. | ~20 min | On wallet sign-in where the address is not yet linked, ask whether to create a new account or link the wallet to an existing one. At minimum, show a clear "new organization created" confirmation. |
-| 10 | 2026-08-09 | API | friction | Sensitive actions require a wallet signature over a server-issued challenge (`{"code":"signature_required","challenge":"...","required":["wallet"]}`), which is a genuinely good security control — but the return path is undocumented. Finding that the signature goes back as `signature` + `challenge` in the JSON body took five wrong guesses across headers and nested shapes. | ~35 min | Document the step-up signature flow: the challenge response, the exact field names to return, and where they go. Better still, name the expected fields in the challenge response itself, e.g. `"respondWith":["signature","challenge"]`. |
-| 11 | 2026-08-09 | API | friction | Every request to a protected endpoint mints a **fresh** challenge nonce, including the requests that are themselves attempts to answer a challenge. Answering the challenge you were just handed is therefore only valid if nothing else calls the endpoint in between — and probing a few candidate shapes invalidates the nonce you are holding and then trips the rate limiter (`{"code":"rate_limited"}`), which has no `Retry-After` header. | ~15 min | Keep an issued challenge valid for a short TTL rather than superseding it on the next request, and return `Retry-After` on 429 so a client can back off correctly instead of guessing. |
-| 12 | 2026-08-09 | docs | blocker | The two API key types are undocumented and behave completely differently. `POST /api/api-keys` mints a `wfb_` webhook key; `POST /api/keys` mints the `kh_` organisation key that Direct Execution requires. Both endpoints exist, both return 200, and the `wfb_` key even returns 200 on `GET /api/workflows` — so a caller who mints the wrong one gets a key that looks valid and 401s on every execution endpoint with no explanation. The distinction was only found by grepping the frontend JS bundle for `/api/` string literals. | ~50 min | Document both key types, what each unlocks, and which endpoint mints them. Name the key type in the create response. When an endpoint rejects a key of the wrong type, say so instead of returning a bare 401. |
-| 13 | 2026-08-09 | docs | friction | The execution status record returns five fields that appear in no documentation: `sponsored`, `receipts[]` (per-attempt hash, block, gasUsed, receiptStatus), `retryCount`, `gasPriceWei`, and `estimatedCostUsd`. These are precisely the fields an observability integration needs, and we only found them by executing a transaction and reading the response. | ~0, but it is why §3.1 stayed open for a whole session | Publish the full status-record schema with a real example. `receipts[]` and `retryCount` are the answer to "does the audit trail expose retries" and deserve to be called out explicitly. |
-| 14 | 2026-08-09 | API | polish | A pre-flight rejection and an onchain revert are both reported as `status: "failed"`. They are distinguishable only by `transactionHash` being null and `receipts[]` being empty. These are very different events: one cost nothing and never touched the chain, the other spent gas. | ~10 min | Add a discriminator, e.g. `failureStage: "preflight" \| "onchain"`. It is one field and it removes all ambiguity for any consumer doing failure analysis. |
-| 15 | 2026-08-10 | API | polish | KeeperHub picks gas parameters server-side and exposes no way to submit a deliberately underpriced or nonce-gapped transaction. That is correct behaviour for an execution layer, but it means a reliability tool cannot use KeeperHub to test its own detection of those failure modes, and has to submit raw transactions alongside it. | ~30 min | Consider an explicitly-flagged test or chaos mode on the Direct Execution API that permits caller-supplied gas parameters and nonces on testnet chains only. It would let anyone building reliability tooling on KeeperHub exercise failure paths through the same surface they use in production. |
+**Severity: blocker.** This contradicts KeeperHub's own documented behaviour and
+costs the caller their audit trail.
 
-| 16 | 2026-08-10 | API | blocker | `POST /api/execute/transfer` accepts `nonce`, `maxFeePerGas` and `maxPriorityFeePerGas` in the body, answers 202, and **silently ignores all three**. The resulting transaction is sent by a sponsor EOA calling a relayer contract at the sponsor's own nonce — requested nonce 1, actual 29367 — and the managed wallet's nonce never moves. So KeeperHub never signs as the caller's signer and cannot occupy a chosen nonce. Two of our five remediation playbooks are defined by occupying a specific nonce, and both had to be rerouted to a separate key-holding signer. The fact is discoverable only by pulling the resulting transaction off the chain and reading its `from` and `nonce`. | ~45 min, plus a design change | Reject unknown fields with 400 rather than accepting and dropping them — a silently ignored parameter is indistinguishable from an honoured one. Then state plainly in the execution docs that submissions are sponsored meta-transactions, that the managed wallet is not the onchain sender, and that per-transaction nonce and fee control is therefore not available. Anyone building nonce-level tooling needs that on page one. |
+`docs/api/direct-execution.md` states:
 
-| 17 | 2026-08-10 | API | blocker | The response to `POST /api/execute/contract-call` and the record from `GET /api/execute/{id}/status` are different shapes, and neither is documented as such. The submission response carries only `executionId`, `status`, `transactionHash` and `transactionLink` — and for a contract-call it omits `transactionHash` entirely, even when `status` is already `completed` and the transaction has landed. A transfer submission does include it. It also omits `createdAt`, which the status record always has. A client written against the documented status shape therefore throws on a submission that already succeeded: we recorded a working remediation as failed and discarded its hash, twice, before working out why. | ~35 min | Return the same shape from both, or document the submission response as its own schema. Most importantly, always return `transactionHash` once one exists — a caller that cannot name the transaction it just caused has no audit trail, which is the entire reason for using an execution API. |
-| 18 | 2026-08-10 | API | friction | Direct Execution exposes no way to associate several executions with one logical action. A retrying agent produces N independent execution records, and nothing in the API says they were N attempts at the same thing. `retryCount` covers KeeperHub's own internal retries, not a caller's. Any consumer doing failure analysis has to invent and thread its own correlation id. | ~20 min | Accept an optional caller-supplied `correlationId` on the execute endpoints and return it on the status record. It costs one nullable column and makes retry analysis possible for every consumer. |
+> `transactionHash` and `transactionLink` are present only when `status` is
+> `completed`.
 
-## Summary
+A `POST /api/execute/contract-call` that lands on chain returns:
 
-Fill in at the end: counts by severity and area, the three highest-impact
-fixes, and the starter template that would have prevented the most entries.
+```json
+{ "executionId": "4u327l4wep7q2hwrvqwf2", "status": "completed" }
+```
+
+No hash, no link, while the transaction executed — the target contract's state
+changed in the same request. `POST /api/execute/transfer` *does* return the hash
+inline, so the two execution endpoints disagree in the same API version.
+
+The hash exists and is retrievable from `GET /api/execute/{id}/status`
+(`0x487033142c19de9808e71cc15661f4b9ec6b364a29ecda90b6fc00fba3e546a5`, with a
+verified receipt). But a caller following the documented behaviour has no reason
+to poll: it was told the hash comes back when status is `completed`, and status
+*is* `completed`.
+
+Cost us roughly 35 minutes and, worse, a false negative: our remediator recorded
+a remediation that had actually succeeded as failed, and discarded the hash,
+because it refuses to claim a remediation it cannot point at.
+
+**Fix.** Either return `transactionHash` on the contract-call response when one
+exists, or amend that sentence to say the hash is only guaranteed on the status
+record and that contract-call callers must poll. One line of documentation
+prevents the wrong build; returning the field prevents the question.
+
+### 1.2 No machine-readable API schema
+
+`GET /api/openapi.json` is 404, and there is no OpenAPI document in the repo.
+Every endpoint was discovered by reading prose docs and, when that failed,
+guessing paths. **Fix:** publish an OpenAPI 3 document. It also removes most of
+section 2 below, because a generated client cannot miss a documented route.
+
+### 1.3 Direct Execution silently ignores unknown fields
+
+`POST /api/execute/transfer` accepts `nonce`, `maxFeePerGas` and
+`maxPriorityFeePerGas` in the body, answers `202`, and ignores all three. The
+resulting transaction was sent by a sponsor EOA calling a relayer at the
+sponsor's nonce — nonce 29367 against the 1 requested.
+
+The behaviour is correct; sponsored execution cannot honour a caller's nonce.
+The problem is silence. The workflow validator, by contrast, is strict and
+rejects unknown fields with a precise `UNKNOWN_FIELD` error naming the field —
+so the same product does both, and the stricter half is the better half.
+
+**Fix.** Reject unknown fields on the execution endpoints the way the workflow
+validator already does. A silently dropped parameter is indistinguishable from
+an honoured one, which is how we spent 45 minutes and a design decision on a
+capability that does not exist.
+
+### 1.4 Wallet sign-in silently creates a second account
+
+Signing in with a wallet whose address is not yet linked creates a brand new
+user and organization rather than offering to link it. An operator who signed up
+with Google and later signs in with their wallet lands in an empty org with none
+of their workflows, keys or wallets, and nothing on screen says a new
+organization was created. **Fix:** on wallet sign-in with an unlinked address,
+ask whether to create a new account or link to an existing one. At minimum,
+confirm on screen that a new organization was created.
+
+### 1.5 Rate-limited step-up challenges are single-use and self-invalidating
+
+Sensitive actions answer with `{"code":"signature_required","challenge":"…"}`.
+Every subsequent request to that endpoint mints a *fresh* challenge, including
+requests that are themselves attempts to answer one. Probing a few candidate
+response shapes therefore invalidates the challenge you are holding, and then
+trips a rate limiter that returns `{"code":"rate_limited"}` with no
+`Retry-After`. **Fix:** give an issued challenge a short TTL instead of
+superseding it on the next request, and send `Retry-After` on 429 — the
+quickstart tells clients to read that header, so the auth path should send it.
+
+### 1.6 Three fields on the status record are undocumented
+
+`retryCount`, `gasPriceWei` and `estimatedCostUsd` appear on
+`GET /api/execute/{id}/status` and in no documentation. `receipts` and
+`sponsored` are documented and were genuinely useful. **Fix:** add the three to
+the status schema reference. `retryCount` in particular is the answer to "does
+the audit trail expose retries", which is the first question an observability
+integration asks.
+
+---
+
+## 2. Withdrawn — documented, and we failed to find it
+
+These were in an earlier draft of this log as "undocumented". They are not. We
+report them anyway because *why* we missed them is the actionable part.
+
+| We claimed | Reality |
+| --- | --- |
+| The two API key types are undocumented | `docs/api/api-keys.md` opens with a table naming `kh_` and `wfb_`, the route that mints each, and what each unlocks |
+| `POST /api/workflows` is 405, so programmatic creation is not discoverable | `docs/api/workflows.md` documents `POST /api/workflows/create`. We guessed a REST-conventional path, got 405, and concluded the feature was missing |
+| Workflow action field names are undocumented | `docs/api/workflows.md` has a gotcha table for exactly this, and warns that the legacy `functionName`/`args` shape saves but fails at runtime |
+| Per-chain private mempool availability is undocumented | Documented, and further clarified by PR #1983 during this hackathon |
+
+**What actually went wrong.** We started from the API rather than the docs,
+and every time the API answered ambiguously we escalated to reading the
+frontend bundle instead of searching the documentation. The docs were good; our
+path into them was not. Two things would have caught every one of these:
+
+1. **An OpenAPI document** (see 1.2). We would have generated a client and never
+   guessed a route.
+2. **Error bodies that link to their own docs page.** The 405 on
+   `POST /api/workflows` is a dead end. `405, see /api/workflows#create-workflow`
+   would have ended that detour in seconds, and the same pattern would have
+   pointed us at the key-type table the first time a `wfb_` key returned 401.
+
+That second one is a small, mechanical change with a large effect on exactly the
+moment a new builder is most likely to give up.
+
+---
+
+## 3. What this cost us, and what it caught
+
+Following the documented sequence in `docs/api/direct-execution.md` — simulate,
+check `wouldRevert`, execute with an `Idempotency-Key`, poll on
+`X-Poll-Interval-Hint`, trust the verified receipt — turned out to matter more
+than any individual endpoint detail. We were not doing any of it, because we
+built from the API surface rather than the guide.
+
+Adopting it changed the product: remediations are now pre-flighted, so one that
+would revert is never broadcast; retries carry a derived idempotency key, so an
+interrupted client cannot double-spend; and the transaction hash comes from a
+verified receipt rather than a self-reported field.
+
+**Fix, and the highest-leverage one in this document.** That sequence is the
+single most valuable page in the docs and it is reachable only by already
+knowing to open Direct Execution. Put it in the quickstart, before the first
+`curl`. A builder who follows the quickstart today writes the naive version we
+wrote.
