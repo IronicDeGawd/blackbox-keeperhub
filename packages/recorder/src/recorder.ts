@@ -2,6 +2,7 @@ import {
   detectionFor,
   normaliseExecution,
   type BlackboxConfig,
+  type ExecutionEvent,
   type KeeperHubExecution,
 } from '@blackbox/core';
 import {
@@ -204,6 +205,7 @@ export class Recorder {
       signer: watched.signer as `0x${string}`,
       chainId: watched.chainId,
       label: watched.label,
+      simulation: deserialiseSimulation(watched.simulation),
       registeredAt: watched.registeredAt,
       now: at,
       makeId: this.options.makeId,
@@ -317,5 +319,28 @@ function reviveSubmitted(stored: unknown): {
     ...(s['route'] === 'public' || s['route'] === 'private'
       ? { route: s['route'] as 'public' | 'private' }
       : {}),
+  };
+}
+
+/**
+ * Rehydrate a simulation the submitter recorded when it registered the
+ * transaction. `gasEstimate` was stored as a decimal string, since JSONB has no
+ * bigint.
+ */
+function deserialiseSimulation(raw: unknown): ExecutionEvent['simulation'] | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const sim = raw as Record<string, unknown>;
+  return {
+    performed: Boolean(sim['performed']),
+    ...(sim['success'] !== undefined && sim['success'] !== null
+      ? { success: Boolean(sim['success']) }
+      : {}),
+    ...(sim['simulatedAtBlock'] !== undefined && sim['simulatedAtBlock'] !== null
+      ? { simulatedAtBlock: Number(sim['simulatedAtBlock']) }
+      : {}),
+    ...(sim['gasEstimate'] !== undefined && sim['gasEstimate'] !== null
+      ? { gasEstimate: BigInt(String(sim['gasEstimate'])) }
+      : {}),
+    ...(sim['revertReason'] ? { revertReason: String(sim['revertReason']) } : {}),
   };
 }

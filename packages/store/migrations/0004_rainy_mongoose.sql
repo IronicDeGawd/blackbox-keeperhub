@@ -1,0 +1,1 @@
+ALTER TABLE "watched_transactions" ADD COLUMN "simulation" jsonb;

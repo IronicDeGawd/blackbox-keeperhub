@@ -158,6 +158,14 @@ export const watchedTransactions = pgTable(
     chainId: integer('chain_id').notNull(),
     /** Free-form label, e.g. the chaos scenario that produced it. */
     label: text('label'),
+    /**
+     * What the submitter simulated before broadcasting, when it simulated at
+     * all. A raw transaction observed from the chain carries no simulation, and
+     * R4 requires one — so a submitter that did simulate has to be able to say
+     * so, or "simulation passed, execution reverted" is undetectable outside
+     * KeeperHub's own records.
+     */
+    simulation: jsonb('simulation'),
     registeredAt: timestamp('registered_at', { withTimezone: true }).notNull(),
     lastPolledAt: timestamp('last_polled_at', { withTimezone: true }),
     pollCount: integer('poll_count').notNull().default(0),

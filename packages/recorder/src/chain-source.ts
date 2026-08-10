@@ -9,10 +9,12 @@ import type { ExecutionEvent } from '@blackbox/core';
  * are still genuine transactions with genuine hashes, and the rules should see
  * them.
  *
- * `simulation.performed` is false here, and that is meaningful rather than a
- * gap: nothing pre-flighted these, so R4 must never fire on them. R4 requires a
- * simulation that passed, and a transaction nobody simulated cannot be evidence
- * of state drift.
+ * `simulation.performed` is false unless the submitter recorded a simulation
+ * when it registered the transaction, and that default is meaningful rather
+ * than a gap: R4 requires a simulation that passed, and a transaction nobody
+ * pre-flighted cannot be evidence of state drift. A submitter that did simulate
+ * — the chaos harness does — passes the real result through, so R4 stays
+ * reachable for agents that never touch KeeperHub.
  */
 
 export type ChainTransaction = {
@@ -46,6 +48,8 @@ export type BuildParams = {
   signer: `0x${string}`;
   chainId: number;
   label?: string | null;
+  /** What the submitter simulated before broadcasting, if anything. */
+  simulation?: ExecutionEvent['simulation'] | null;
   registeredAt: Date;
   now: Date;
   makeId: () => string;
@@ -86,8 +90,10 @@ export async function buildEventFromChain(
       kind: 'manual',
       detail: { source: 'chain', ...(params.label ? { label: params.label } : {}) },
     },
-    // Nothing simulated this; saying otherwise would make R4 reachable.
-    simulation: { performed: false },
+    // Only what the submitter actually recorded. Absent it, nothing simulated
+    // this transaction, and claiming otherwise would make R4 reachable on
+    // evidence that does not exist.
+    simulation: params.simulation ?? { performed: false },
     submission: {
       txHash: tx.hash,
       nonce: tx.nonce,

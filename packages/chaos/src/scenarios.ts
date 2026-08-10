@@ -23,7 +23,21 @@ import { watchTransaction, type Database } from '@blackbox/store';
  * registered for observation so the recorder picks them up.
  */
 
-export type ScenarioId = 'C1' | 'C2';
+export type ScenarioId = 'C1' | 'C2' | 'C3' | 'C4' | 'C5';
+
+/**
+ * Calldata for ChaosTarget, written out rather than encoded from an ABI.
+ *
+ * All four take no arguments, so the selector is the entire calldata and an ABI
+ * would add a dependency for nothing. Kept next to the scenarios that use them
+ * so a rename in the contract shows up here.
+ */
+export const SELECTORS = {
+  armTrap: '0x27eab502',
+  disarm: '0x83985082',
+  work: '0x322e9f04',
+  alwaysRevert: '0x9fb37853',
+} as const satisfies Record<string, `0x${string}`>;
 
 export type ChaosOptions = {
   db: Database;
@@ -34,6 +48,10 @@ export type ChaosOptions = {
   now?: () => Date;
   publicClient?: PublicClient;
   walletClient?: WalletClient;
+  /** Deployed ChaosTarget. Required by C3 and C4. */
+  chaosTarget?: `0x${string}`;
+  /** Where C5 sweeps the signer's balance to. */
+  sweepTo?: `0x${string}`;
 };
 
 export type ScenarioResult = {
@@ -194,7 +212,215 @@ export class ChaosHarness {
     return hash;
   }
 
-  private async register(txHash: `0x${string}`, label: string): Promise<void> {
+  private get target(): `0x${string}` {
+    const target = this.options.chaosTarget;
+    if (!target) {
+      throw new Error(
+        'This scenario needs a deployed ChaosTarget. Set CHAOS_TARGET_ADDRESS and pass it as ' +
+          '`chaosTarget`; there is no way to induce a contract-level failure without one.',
+      );
+    }
+    return target;
+  }
+
+  /**
+   * C3 — simulation passes, execution reverts.
+   *
+   * Two transactions, and the order is the whole scenario. The first arms a
+   * trap on the target; the second calls `work()`. The node simulates `work()`
+   * against the block the trap was armed in, where it still succeeds, and by
+   * the time the transaction is mined a block has passed and the same call
+   * reverts.
+   *
+   * This is the honest reproduction of R4: nothing about the call changed,
+   * only the chain state underneath it. Faking it by calling a function that
+   * always reverts would produce a failure the simulator would have caught,
+   * which is a different — and far less interesting — bug.
+   */
+  async c3SimPassExecRevert(): Promise<ScenarioResult> {
+    assertChaosAllowed(this.options.chainId);
+    const target = this.target;
+
+    const armHash = await this.wallet.sendTransaction({
+      account: this.options.account,
+      chain: null,
+      to: target,
+      value: 0n,
+      data: SELECTORS.armTrap,
+    });
+    // The trap must be *mined* before work() is submitted. Arming and calling
+    // in the same block leaves work() succeeding, since the trap deliberately
+    // does not spring in the block it was armed in.
+    const armReceipt = await this.pub.waitForTransactionReceipt({ hash: armHash });
+
+    // Simulate exactly as a submitter would, at the block the trap was armed
+    // in, where it still passes. This result is *measured*, not assumed — and
+    // recording it is what lets R4 fire on a transaction that never went
+    // through KeeperHub. Without it, "simulation passed, execution reverted"
+    // is only detectable inside KeeperHub's own audit trail.
+    const simulatedAtBlock = Number(armReceipt.blockNumber);
+    let simulation: {
+      performed: boolean;
+      success: boolean;
+      simulatedAtBlock: number;
+      revertReason?: string;
+    };
+    try {
+      await this.pub.call({
+        account: this.options.account.address,
+        to: target,
+        data: SELECTORS.work,
+      });
+      simulation = { performed: true, success: true, simulatedAtBlock };
+    } catch (error) {
+      // The trap already sprang before the call — the scenario has missed its
+      // window. Say so rather than submitting and reporting a false R4.
+      simulation = {
+        performed: true,
+        success: false,
+        simulatedAtBlock,
+        revertReason: (error as Error).message.slice(0, 200),
+      };
+    }
+
+    const workHash = await this.wallet.sendTransaction({
+      account: this.options.account,
+      chain: null,
+      to: target,
+      value: 0n,
+      data: SELECTORS.work,
+      // Gas must be supplied explicitly: estimation runs the same simulation
+      // that passes, then the transaction reverts and consumes it.
+      gas: 100_000n,
+    });
+
+    await this.register(armHash, 'C3-arm');
+    await this.register(workHash, 'C3-work', simulation);
+    return {
+      scenario: 'C3',
+      txHashes: [armHash, workHash],
+      detail: {
+        target,
+        armedAtBlock: Number(armReceipt.blockNumber),
+        simulationPassed: simulation.success,
+        note: simulation.success
+          ? 'work() simulated clean at the armed block and reverts once mined a block later'
+          : 'the trap sprang before simulation — this run will not demonstrate R4',
+      },
+    };
+  }
+
+  /** Undo C3, so the target is usable by later scenarios. */
+  async disarmTrap(): Promise<`0x${string}`> {
+    assertChaosAllowed(this.options.chainId);
+    const hash = await this.wallet.sendTransaction({
+      account: this.options.account,
+      chain: null,
+      to: this.target,
+      value: 0n,
+      data: SELECTORS.disarm,
+    });
+    await this.register(hash, 'disarm');
+    return hash;
+  }
+
+  /**
+   * C4 — retry storm.
+   *
+   * Repeated attempts at an action that cannot succeed. Each attempt is a
+   * separate transaction against `alwaysRevert()`, sharing one logical action
+   * label so the detector can see them as retries of the same thing rather
+   * than unrelated failures.
+   *
+   * Every attempt costs real gas, which is the point: a retry storm is
+   * expensive, and R5 exists to stop it.
+   */
+  async c4RetryStorm(attempts = 4): Promise<ScenarioResult> {
+    assertChaosAllowed(this.options.chainId);
+    const target = this.target;
+    const hashes: `0x${string}`[] = [];
+
+    for (let i = 0; i < attempts; i++) {
+      const hash = await this.wallet.sendTransaction({
+        account: this.options.account,
+        chain: null,
+        to: target,
+        value: 0n,
+        data: SELECTORS.alwaysRevert,
+        gas: 60_000n,
+      });
+      hashes.push(hash);
+      await this.register(hash, `C4-attempt-${i}`);
+      // Serialised deliberately: parallel submissions would race on nonce and
+      // produce a nonce gap, which is a different incident entirely.
+      await this.pub.waitForTransactionReceipt({ hash });
+    }
+
+    return {
+      scenario: 'C4',
+      txHashes: hashes,
+      detail: { target, attempts, note: 'every attempt reverts on chain and burns gas' },
+    };
+  }
+
+  /**
+   * C5 — gas starvation.
+   *
+   * Sweeps the signer down to just under one action's cost. Deliberately not
+   * to zero: a signer at zero cannot even submit the transaction that would
+   * demonstrate the problem, and R6 is about runway, not emptiness.
+   */
+  async c5GasStarve(params: { keepWei?: bigint } = {}): Promise<ScenarioResult> {
+    assertChaosAllowed(this.options.chainId);
+    const sweepTo = this.options.sweepTo;
+    if (!sweepTo) {
+      throw new Error('C5 needs `sweepTo` — an address to move the signer\'s balance to');
+    }
+
+    const address = this.options.account.address;
+    const balance = await this.pub.getBalance({ address });
+    const block = await this.pub.getBlock({ blockTag: 'latest' });
+    const baseFee = block.baseFeePerGas ?? 1_000_000_000n;
+    const maxFeePerGas = baseFee * 2n + 1_000_000_000n;
+    const sweepCost = maxFeePerGas * 21_000n;
+
+    // Leave under one action of runway, having paid for this transaction.
+    const keep = params.keepWei ?? sweepCost / 2n;
+    const value = balance - sweepCost - keep;
+    if (value <= 0n) {
+      throw new Error(
+        `Signer already holds too little to sweep: balance ${balance} wei does not cover ` +
+          `the sweep itself (${sweepCost} wei) plus the ${keep} wei to leave behind.`,
+      );
+    }
+
+    const hash = await this.wallet.sendTransaction({
+      account: this.options.account,
+      chain: null,
+      to: sweepTo,
+      value,
+      maxFeePerGas,
+      maxPriorityFeePerGas: 1_000_000_000n,
+    });
+    await this.register(hash, 'C5');
+
+    return {
+      scenario: 'C5',
+      txHashes: [hash],
+      detail: {
+        sweptWei: value.toString(),
+        keptWei: keep.toString(),
+        balanceBeforeWei: balance.toString(),
+        sweepTo,
+      },
+    };
+  }
+
+  private async register(
+    txHash: `0x${string}`,
+    label: string,
+    simulation?: { performed: boolean; success?: boolean; simulatedAtBlock?: number },
+  ): Promise<void> {
     await watchTransaction(this.options.db, {
       txHash,
       agentId: this.agentId,
@@ -202,6 +428,7 @@ export class ChaosHarness {
       chainId: this.options.chainId,
       label,
       at: this.now(),
+      ...(simulation ? { simulation } : {}),
     });
   }
 

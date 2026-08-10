@@ -332,6 +332,17 @@ export async function watchTransaction(
     chainId: number;
     label?: string;
     at: Date;
+    /**
+     * What the submitter simulated, if it did. Recorded verbatim so R4 can
+     * distinguish "simulated clean then reverted" from "nobody looked".
+     */
+    simulation?: {
+      performed: boolean;
+      success?: boolean;
+      simulatedAtBlock?: number;
+      gasEstimate?: bigint;
+      revertReason?: string;
+    };
   },
 ): Promise<void> {
   await db
@@ -342,6 +353,7 @@ export async function watchTransaction(
       signer: params.signer.toLowerCase(),
       chainId: params.chainId,
       label: params.label ?? null,
+      simulation: params.simulation ? jsonSafe(params.simulation) : null,
       registeredAt: params.at,
     })
     .onConflictDoNothing({ target: watchedTransactions.txHash });

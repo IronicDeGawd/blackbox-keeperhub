@@ -2,7 +2,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { privateKeyToAccount } from 'viem/accounts';
 import { CHAIN_IDS } from '@blackbox/core';
 import { createDb, watchedTransactions, type Database } from '@blackbox/store';
-import { ChaosHarness } from './scenarios.js';
+import { toFunctionSelector } from 'viem';
+import { ChaosHarness, SELECTORS } from './scenarios.js';
 
 const URL = process.env['DATABASE_URL'] ?? 'postgres://blackbox:blackbox@localhost:5433/blackbox';
 const T0 = new Date('2026-08-10T10:00:00.000Z');
@@ -184,5 +185,17 @@ describe('naming', () => {
   it('reports the chain it is pointed at, for the console warning banner', () => {
     expect(harness(CHAIN_IDS.sepolia).h.chainName).toBe('Ethereum Sepolia');
     expect(harness(CHAIN_IDS.baseSepolia).h.chainName).toBe('Base Sepolia');
+  });
+});
+
+describe('ChaosTarget selectors', () => {
+  it('match the deployed contract', () => {
+    // Computed with `cast sig`. A wrong selector is not a compile error and not
+    // a revert either — it hits the fallback and silently does nothing, so the
+    // scenario would appear to run and induce no incident at all.
+    expect(SELECTORS.armTrap).toBe(toFunctionSelector('armTrap()'));
+    expect(SELECTORS.disarm).toBe(toFunctionSelector('disarm()'));
+    expect(SELECTORS.work).toBe(toFunctionSelector('work()'));
+    expect(SELECTORS.alwaysRevert).toBe(toFunctionSelector('alwaysRevert()'));
   });
 });
