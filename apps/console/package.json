@@ -13,8 +13,7 @@
   "dependencies": {
     "@tanstack/react-router": "^1.95.1",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "viem": "^2.21.45"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.1",

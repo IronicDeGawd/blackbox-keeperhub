@@ -200,6 +200,23 @@
   font-size: 13px;
 }
 
+/* --- propose ------------------------------------------------------------- */
+
+.propose {
+  border-left: 3px solid var(--accent);
+}
+
+.paste {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.paste__input {
+  min-width: clamp(240px, 46vw, 560px);
+}
+
 /* --- root cause analysis -------------------------------------------------- */
 
 /*

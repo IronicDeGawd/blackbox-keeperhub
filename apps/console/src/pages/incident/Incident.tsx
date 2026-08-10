@@ -18,6 +18,7 @@ import {
 import { Actions } from './Actions';
 import { Evidence } from './Evidence';
 import { EventTimeline } from './EventTimeline';
+import { ProposePanel } from './ProposePanel';
 import { Rca } from './Rca';
 import { Remediation } from './Remediation';
 import './incident.css';
@@ -166,6 +167,11 @@ export function Incident(): React.JSX.Element {
         chains={chains}
         chainId={detail.chainId}
       />
+
+      {/* Absent unless this process can plan a fix for someone else to sign. */}
+      {config?.capabilities.proposeRemediation ? (
+        <ProposePanel incidentId={detail.id} chains={chains} />
+      ) : null}
     </section>
   );
 }
