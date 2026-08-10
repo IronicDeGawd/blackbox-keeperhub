@@ -43,6 +43,13 @@ function loadEnv(): Record<string, string | undefined> {
   } catch {
     // No file is a normal deployment; the environment carries everything.
   }
+  // An unset variable and one set to nothing must mean the same thing. Compose
+  // and most orchestrators pass an absent value through as an empty string, so
+  // without this a blank KEEPERHUB_ORG_KEY defeats its own default and a blank
+  // ALCHEMY_RPC_URL wins the fallback against a perfectly good SEPOLIA_RPC_URL.
+  for (const [key, value] of Object.entries(merged)) {
+    if (value !== undefined && value.trim() === '') delete merged[key];
+  }
   return merged;
 }
 

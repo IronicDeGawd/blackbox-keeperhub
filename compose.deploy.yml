@@ -32,7 +32,9 @@ services:
   # first request can never land on a database with no tables.
   migrate:
     build: .
-    command: ['pnpm', '--filter', '@blackbox/store', 'db:push']
+    # Applies the committed SQL migrations in order. `drizzle-kit push` diffs
+    # the schema and can stop to ask, which a deploy has nobody to answer.
+    command: ['sh', '-c', 'cd packages/store && ./node_modules/.bin/drizzle-kit migrate']
     environment:
       DATABASE_URL: postgres://blackbox:${POSTGRES_PASSWORD}@postgres:5432/blackbox
     depends_on:
