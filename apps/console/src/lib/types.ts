@@ -1,0 +1,312 @@
+/**
+ * The wire contract, mirroring packages/core/src/schemas.ts and the shapes
+ * packages/api/src/serialise.ts puts on them.
+ *
+ * Two things are deliberate here:
+ *
+ * - Every wei figure is `string`, never `number`. These values exceed
+ *   Number.MAX_SAFE_INTEGER and a JSON number would be silently wrong, so the
+ *   type refuses to let one become a number by accident.
+ * - Fields that one implementation sends and the other does not are optional
+ *   rather than assumed. The mock and the server disagree in three places
+ *   (noted below); the console reads whichever is present.
+ */
+
+export type IncidentClass =
+  | 'STUCK_TRANSACTION'
+  | 'NONCE_GAP'
+  | 'GAS_UNDERPRICED'
+  | 'SIM_PASS_EXEC_REVERT'
+  | 'RETRY_STORM'
+  | 'SIGNER_GAS_STARVED'
+  | 'ADVERSE_INCLUSION';
+
+export type Severity = 'critical' | 'warning' | 'info';
+
+export type IncidentStatus =
+  | 'open'
+  | 'diagnosing'
+  | 'remediating'
+  | 'resolved'
+  | 'failed'
+  | 'acknowledged';
+
+export type RuleId = 'R1' | 'R2' | 'R3' | 'R4' | 'R5' | 'R6' | 'R7';
+
+/**
+ * Who actually fixed it. `blackbox-proposed` means Blackbox planned the
+ * remediation and a human's wallet signed it — a materially weaker claim than
+ * `blackbox`, and the UI must never render one as the other.
+ */
+export type ResolvedBy = 'blackbox' | 'blackbox-proposed' | 'external' | 'unknown';
+
+/** Which path put the transaction on chain. */
+export type Executor = 'signer' | 'keeperhub' | 'keeperhub-workflow' | 'user-signed';
+
+export type FinalStatus = 'succeeded' | 'failed' | 'skipped_by_guard' | 'skipped_by_policy';
+
+/** The rule-ordered class list. Index + 1 is the rule number. */
+export const INCIDENT_CLASSES: readonly IncidentClass[] = [
+  'STUCK_TRANSACTION',
+  'NONCE_GAP',
+  'GAS_UNDERPRICED',
+  'SIM_PASS_EXEC_REVERT',
+  'RETRY_STORM',
+  'SIGNER_GAS_STARVED',
+  'ADVERSE_INCLUSION',
+];
+
+export const SEVERITIES: readonly Severity[] = ['critical', 'warning', 'info'];
+
+export const INCIDENT_STATUSES: readonly IncidentStatus[] = [
+  'open',
+  'diagnosing',
+  'remediating',
+  'resolved',
+  'failed',
+  'acknowledged',
+];
+
+/** The happy path, in order. `acknowledged` and `failed` sit outside it. */
+export const LIFECYCLE: readonly IncidentStatus[] = [
+  'open',
+  'diagnosing',
+  'remediating',
+  'resolved',
+];
+
+// ------------------------------------------------------------------ incidents
+
+export type IncidentSummary = {
+  id: string;
+  class: IncidentClass;
+  severity: Severity;
+  status: IncidentStatus;
+  agentId: string;
+  signer: string;
+  chainId: number;
+  /** Derived server-side by summarise(); the console renders, never recomputes. */
+  summary: string;
+  detectedAt: string;
+  lastSeenAt: string;
+  resolvedAt: string | null;
+  resolvedBy: ResolvedBy | null;
+  confidence: number;
+  ruleId: RuleId;
+  hasRca: boolean;
+  remediationStatus: FinalStatus | null;
+  remediationTxHash: string | null;
+  /** Sent by the server, absent from the mock — links are built from config. */
+  explorerUrl?: string | null;
+};
+
+export type Corroboration = {
+  latestNonce?: number;
+  pendingNonce?: number;
+  signerBalance?: string;
+  baseFeeAtDetection?: string;
+};
+
+export type Evidence = {
+  ruleId: RuleId;
+  eventIds?: string[];
+  /** Exactly what tripped the rule. Rendered verbatim, never renamed. */
+  facts: Record<string, unknown>;
+  corroboration?: Corroboration;
+  /** Rules that also fired but lost to a more specific one. */
+  suppressedRules?: RuleId[];
+};
+
+/**
+ * Field names follow rootCauseAnalysisSchema, not the prose in the spec's page
+ * 2.3, which calls these `narrative` and `prevention`. The schema is what the
+ * diagnostician actually emits.
+ */
+export type Rca = {
+  summary: string;
+  contributingFactors: string[];
+  timeline?: { at: string; what: string }[];
+  recommendation: string;
+  /** The literal "template" means the deterministic fallback wrote it. */
+  model: string;
+  generatedAt: string;
+  promptVersion?: string;
+};
+
+export type RemediationAttempt = {
+  attemptIndex: number;
+  startedAt: string;
+  completedAt?: string | null;
+  guardsPassed: string[];
+  guardsFailed: string[];
+  txHash?: string;
+  keeperHubActionId?: string;
+  executor?: Executor;
+  status: 'succeeded' | 'failed' | 'skipped';
+  failureReason?: string;
+  gasUsed?: string;
+  explorerUrl?: string;
+  description?: string;
+  route?: string;
+};
+
+export type Remediation = {
+  playbookId: string;
+  playbookName?: string;
+  finalStatus: FinalStatus | 'pending';
+  verifiedAt?: string | null;
+  attempts: RemediationAttempt[];
+};
+
+/**
+ * The server sends logicalActionId/nonce/simulationSuccess; the mock sends
+ * kind/label. Neither sends both, so both are optional and the console derives
+ * what is missing.
+ */
+export type IncidentEvent = {
+  id: string;
+  at: string;
+  txHash?: string | null;
+  blockNumber?: number | null;
+  status?: string;
+  kind?: 'submission' | 'detection' | 'rca' | 'remediation' | 'inclusion';
+  label?: string;
+  logicalActionId?: string;
+  nonce?: number | null;
+  simulationSuccess?: boolean | null;
+  explorerUrl?: string | null;
+};
+
+export type IncidentDetail = IncidentSummary & {
+  firstEventAt?: string;
+  evidence: Evidence;
+  rca: Rca | null;
+  remediation: Remediation | null;
+  events: IncidentEvent[];
+  explorerUrls?: string[];
+};
+
+export type IncidentList = {
+  items: IncidentSummary[];
+  nextCursor: string | null;
+  total: number;
+};
+
+// ------------------------------------------------------------------- console
+
+export type Stats = {
+  openBySeverity: Record<Severity, number>;
+  remediations: {
+    total: number;
+    succeeded: number;
+    skipped: number;
+    failed: number;
+    gasWei: string;
+  };
+  /** null is "nothing qualified", not "instant". Renders as an em dash. */
+  meanTimeToDetectionMs: number | null;
+  meanTimeToRemediationMs: number | null;
+  updatedAt: string;
+};
+
+export type ChainConfig = {
+  chainId: number;
+  name: string;
+  testnet: boolean;
+  privateMempool: boolean;
+  /** A template containing {hash}. */
+  explorerTxUrl: string;
+};
+
+export type Capabilities = {
+  remediate: boolean;
+  chaos: boolean;
+  diagnose: boolean;
+  signerHealth: boolean;
+  proposeRemediation: boolean;
+};
+
+export type AppConfig = {
+  chains: ChainConfig[];
+  remediation: {
+    dryRun: boolean;
+    minConfidence: number;
+    maxAttempts: number;
+    signerAllowlist: string[];
+    chainAllowlist: number[];
+    budget: { maxRemediationsPerHour: number; maxGasWeiPerHour: string };
+  };
+  capabilities: Capabilities;
+};
+
+// ---------------------------------------------------------------- remediation
+
+export type GuardFailure = { guard: string; reason: string };
+
+/** 202 accepted, or 200 with the guards that refused. Both are normal. */
+export type RemediateResponse = {
+  incidentId: string;
+  accepted: boolean;
+  playbookId?: string;
+  attemptId?: string;
+  finalStatus?: string;
+  guardsFailed?: GuardFailure[];
+};
+
+export type PlannedTransaction = {
+  to: string;
+  value: string;
+  data: string | null;
+  nonce: number;
+  maxFeePerGas: string;
+  maxPriorityFeePerGas: string;
+  chainId: number;
+  description: string;
+  route?: string;
+};
+
+export type RemediationPlan = {
+  incidentId: string;
+  playbookId: string;
+  /** false means Blackbox's own guards would block it. A human still may not. */
+  actionable: boolean;
+  signerRequired: string;
+  chainId: number;
+  guards: { passed: string[]; failed: string[] };
+  transaction: PlannedTransaction | null;
+  declined: { policy: string; reason: string } | null;
+};
+
+export type RemediationTxResult = {
+  accepted: boolean;
+  included: boolean;
+  gasUsed: string;
+  explorerUrl: string;
+};
+
+// ------------------------------------------------------------------------ sse
+
+export type ScanProgress = {
+  fromBlock: number;
+  toBlock: number;
+  blocksScanned: number;
+  matched: number;
+  watching: number;
+};
+
+export type StreamEvent =
+  | { type: 'hello'; data: { at: string; chainId: number } }
+  | { type: 'incident.created'; data: IncidentSummary }
+  | { type: 'incident.updated'; data: IncidentSummary }
+  | { type: 'remediation.started'; data: { incidentId: string; playbookId: string } }
+  | {
+      type: 'remediation.succeeded';
+      data: { incidentId: string; txHash: string; explorerUrl?: string };
+    }
+  | { type: 'remediation.failed'; data: { incidentId: string; reason: string } }
+  | { type: 'chaos.started'; data: { runId: string; scenario: string; at: string } }
+  | { type: 'chaos.completed'; data: { runId: string; scenario: string; incidentIds: string[] } }
+  | { type: 'scan.progress'; data: ScanProgress }
+  | { type: 'stats.updated'; data: Stats };
+
+export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
