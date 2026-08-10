@@ -114,6 +114,29 @@ button {
   border-left: 3px solid var(--accent);
 }
 
+/* Every page is a single column of stacked sections at the design width. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  max-width: 1180px;
+}
+
+.notice {
+  padding: var(--s4);
+}
+
+.notice__lead {
+  margin: 0 0 var(--s1);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.notice p:last-child {
+  margin-bottom: 0;
+}
+
 .num {
   font-variant-numeric: tabular-nums;
 }
