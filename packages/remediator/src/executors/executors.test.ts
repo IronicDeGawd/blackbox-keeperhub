@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CHAIN_IDS, type Incident } from '@blackbox/core';
 import { privateKeyToAccount } from 'viem/accounts';
+import { TransactionReceiptNotFoundError } from 'viem';
 import type { PlaybookPlan } from '../playbooks.js';
 import { KeeperHubExecutor, type KeeperHubSubmitter } from './keeperhub.js';
 import { SignerExecutor } from './signer.js';
@@ -254,13 +255,37 @@ describe('ReceiptVerifier', () => {
 
   it('gives up at the deadline rather than waiting forever', async () => {
     let t = 0;
+    // The node answering "there is no such receipt" is a real answer, so the
+    // verdict is a plain not-included with nothing uncertain about it.
     const verifier = build(
-      receiptClient([new Error('not found')]),
+      receiptClient([
+        new TransactionReceiptNotFoundError({ hash: TX }),
+        new TransactionReceiptNotFoundError({ hash: TX }),
+      ]),
       () => (t += 600),
     );
     await expect(
       verifier.waitForReceipt({ txHash: TX, chainId: CHAIN_IDS.sepolia, timeoutMs: 1000 }),
     ).resolves.toEqual({ included: false });
+  });
+
+  it('will not call a remediation failed when it never managed to ask', async () => {
+    // The dangerous case: the transaction may well have landed. Reporting a
+    // flat `included: false` here writes a successful remediation into the
+    // ledger as a failure, permanently.
+    let t = 0;
+    const verifier = build(
+      receiptClient([new Error('fetch failed: ECONNRESET')]),
+      () => (t += 600),
+    );
+    const result = await verifier.waitForReceipt({
+      txHash: TX,
+      chainId: CHAIN_IDS.sepolia,
+      timeoutMs: 1000,
+    });
+    expect(result.included).toBe(false);
+    expect(result.uncertain).toBe(true);
+    expect(result.detail).toMatch(/could not reach a node/i);
   });
 
   it('refuses to verify on a chain it has no RPC for', () => {

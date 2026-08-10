@@ -26,7 +26,7 @@ export type RemediationExecutor = {
     txHash: `0x${string}`;
     incident: Incident;
     timeoutMs: number;
-  }): Promise<{ included: boolean; gasUsed?: bigint }>;
+  }): Promise<{ included: boolean; gasUsed?: bigint; uncertain?: boolean; detail?: string }>;
 };
 
 export type MarketData = {
@@ -159,7 +159,16 @@ export class Remediator {
         });
         included = verified.included;
         gasUsed = verified.gasUsed;
-        if (!included) failureReason = 'submitted but not confirmed within the verify timeout';
+        if (!included) {
+          // Says which of the two happened. An operator deciding whether to
+          // resubmit needs to know the difference between "the chain did not
+          // include it" and "we never managed to ask", and resubmitting a
+          // transaction that actually landed is its own incident.
+          failureReason = verified.uncertain
+            ? `submitted, but inclusion could not be verified — ${verified.detail ?? 'no node answered'}. ` +
+              `This is not proof it failed; check the hash before resubmitting.`
+            : 'submitted but not confirmed within the verify timeout';
+        }
       } catch (error) {
         failureReason = `verification failed: ${(error as Error).message}`;
       }
