@@ -1,0 +1,75 @@
+/*
+ * Design tokens, taken unchanged from docs/console-spec.html so the console and
+ * its own spec are demonstrably the same object.
+ *
+ * The console commits to dark — index.html stamps data-theme="dark" — because
+ * it is a tool someone keeps open during an incident. Light is kept whole and
+ * working rather than deleted: the spec rules out a *toggle*, not a palette.
+ */
+
+:root {
+  --ground: #f6f7f9;
+  --surface: #ffffff;
+  --surface-sunk: #edeff3;
+  --ink: #14171d;
+  --ink-soft: #4a515e;
+  --ink-faint: #767e8c;
+  --rule: #dbdfe6;
+  --rule-strong: #c3c9d4;
+  --accent: #d24608;
+  --accent-soft: #fbede6;
+  --critical: #c22b2b;
+  --warning: #a66a00;
+  --ok: #1f7a4d;
+  --code-bg: #f1f3f7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --ground: #101317;
+    --surface: #171b21;
+    --surface-sunk: #1d222a;
+    --ink: #e7eaef;
+    --ink-soft: #a8b0bc;
+    --ink-faint: #7c8492;
+    --rule: #2a3039;
+    --rule-strong: #3a424e;
+    --accent: #ff7a3d;
+    --accent-soft: #2a1a12;
+    --critical: #f2685f;
+    --warning: #d9a036;
+    --ok: #4fbe87;
+    --code-bg: #1b2028;
+  }
+}
+
+:root[data-theme='dark'] {
+  --ground: #101317;
+  --surface: #171b21;
+  --surface-sunk: #1d222a;
+  --ink: #e7eaef;
+  --ink-soft: #a8b0bc;
+  --ink-faint: #7c8492;
+  --rule: #2a3039;
+  --rule-strong: #3a424e;
+  --accent: #ff7a3d;
+  --accent-soft: #2a1a12;
+  --critical: #f2685f;
+  --warning: #d9a036;
+  --ok: #4fbe87;
+  --code-bg: #1b2028;
+}
+
+:root {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  /* A 4px step. Density is the point, so the scale starts tight. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 22px;
+  --s6: 32px;
+  --s7: 48px;
+}
