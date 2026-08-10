@@ -1,33 +1,33 @@
-// Diagnose the incidents currently in the database with Gemini on Vertex,
+// Diagnose whatever incidents are in the database with Gemini on Vertex,
 // authenticated by Application Default Credentials. No API key involved.
-import { readFileSync } from 'node:fs';
-import { createDb, listIncidents, saveIncident } from '../store/dist/index.js';
-import { Diagnostician, VertexGemini } from '../diagnostician/dist/index.js';
+// Writes each analysis back onto its incident.
+import { listIncidents, saveIncident } from '../../store/dist/index.js';
+import { Diagnostician, VertexGemini } from '../../diagnostician/dist/index.js';
+import { setup, env } from './harness.mjs';
 
-const env = Object.fromEntries(
-  readFileSync('/project/blackbox/.env.local', 'utf8').split('\n')
-    .filter((l) => l.includes('=') && !l.trim().startsWith('#'))
-    .map((l) => { const i = l.indexOf('='); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; }),
-);
+const { db, close } = await setup();
 
-const DB = 'postgres://blackbox:blackbox@localhost:5433/blackbox';
 const PROJECT = env.GOOGLE_CLOUD_PROJECT ?? 'somniaforge-unified';
-const { db, close } = createDb(DB);
-
-const llm = new VertexGemini({ projectId: PROJECT, model: env.GEMINI_MODEL ?? 'gemini-2.5-flash' });
+const llm = new VertexGemini({
+  projectId: PROJECT,
+  ...(env.GEMINI_MODEL ? { model: env.GEMINI_MODEL } : {}),
+});
 const diagnostician = new Diagnostician({
   llm,
-  logger: { info: () => {}, error: (m, d) => console.log('  [dx]', m, d?.error?.message?.slice(0, 160) ?? '') },
+  logger: {
+    info: () => {},
+    error: (m, d) => console.log('  [dx]', m, d?.error?.message?.slice(0, 160) ?? ''),
+  },
 });
 
 const rows = await listIncidents(db, { limit: 5 });
 if (rows.length === 0) {
-  console.log('no incidents to diagnose — run e2e-c4.mjs or e2e-c2.mjs first');
+  console.log('\nno incidents to diagnose — run c4-retry-storm.mjs or c2-nonce-gap.mjs first');
   await close();
   process.exit(1);
 }
 
-console.log(`project ${PROJECT} · model ${llm.modelId} · ${rows.length} incident(s)\n`);
+console.log(`\nproject ${PROJECT} · model ${llm.modelId} · ${rows.length} incident(s)\n`);
 
 for (const row of rows) {
   const incident = {
@@ -55,9 +55,9 @@ for (const row of rows) {
   console.log(`source: ${source}${fallbackReason ? ` (${fallbackReason})` : ''}  ·  ${ms}ms  ·  model ${rca.model}`);
   console.log('\nSUMMARY\n' + rca.summary);
   console.log('\nCONTRIBUTING FACTORS');
-  for (const f of rca.contributingFactors) console.log('  - ' + f);
+  for (const factor of rca.contributingFactors) console.log('  - ' + factor);
   console.log('\nTIMELINE');
-  for (const t of rca.timeline) console.log(`  ${new Date(t.at).toISOString()}  ${t.what}`);
+  for (const entry of rca.timeline) console.log(`  ${new Date(entry.at).toISOString()}  ${entry.what}`);
   console.log('\nRECOMMENDATION\n' + rca.recommendation + '\n');
 
   await saveIncident(db, { ...row, rca });
