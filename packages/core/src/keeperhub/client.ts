@@ -61,11 +61,13 @@ export class KeeperHubClient {
 
   private async request<T = unknown>(
     path: string,
-    init: { method?: string; body?: unknown } = {},
+    init: { method?: string; body?: unknown; idempotencyKey?: string } = {},
   ): Promise<{ status: number; body: T; headers: Headers }> {
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method: init.method ?? 'GET',
-      headers: this.headers(),
+      headers: this.headers(
+        init.idempotencyKey ? { 'Idempotency-Key': init.idempotencyKey } : {},
+      ),
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
     });
     const text = await res.text();
@@ -204,8 +206,47 @@ export class KeeperHubClient {
     amount: string;
     tokenAddress?: string;
     gasLimitMultiplier?: string;
+    /**
+     * Safe to retry with. Must identify the work rather than the attempt, so a
+     * reconstructed retry sends the same key and replays instead of spending
+     * twice. Replay lasts 24 hours.
+     */
+    idempotencyKey?: string;
   }): Promise<KeeperHubExecution> {
-    return this.execute('/execute/transfer', params);
+    const { idempotencyKey, ...body } = params;
+    return this.execute('/execute/transfer', body, idempotencyKey);
+  }
+
+  /**
+   * Pre-flight a write without signing or sending anything.
+   *
+   * The documented sequence is simulate, check, then execute with the same
+   * body — it catches bad addresses, ABI mistakes, insufficient balance and
+   * reverts before any gas is spent. A simulation that would revert answers
+   * HTTP 400 with `wouldRevert: true`, which is a result rather than an error.
+   */
+  async simulate(
+    path: '/execute/transfer' | '/execute/contract-call',
+    params: Record<string, unknown>,
+  ): Promise<{ success: boolean; wouldRevert: boolean; detail?: string }> {
+    const res = await this.request<Record<string, unknown>>(path, {
+      method: 'POST',
+      body: { ...params, simulate: true },
+    });
+    const body = res.body ?? {};
+    // The reason is on `revertReason` for a simulated revert; `error` carries a
+    // transport or validation failure. Either is worth passing on verbatim.
+    const detail =
+      typeof body['revertReason'] === 'string'
+        ? body['revertReason']
+        : typeof body['error'] === 'string'
+          ? body['error']
+          : undefined;
+    return {
+      success: body['success'] === true,
+      wouldRevert: body['wouldRevert'] === true,
+      ...(detail ? { detail } : {}),
+    };
   }
 
   /**
@@ -224,10 +265,13 @@ export class KeeperHubClient {
     abi?: string;
     value?: string;
     gasLimitMultiplier?: string;
+    idempotencyKey?: string;
   }): Promise<ContractCallResult> {
+    const { idempotencyKey, ...body } = params;
     const res = await this.request<Record<string, unknown>>('/execute/contract-call', {
       method: 'POST',
-      body: params,
+      body,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
     });
     if (res.status >= 400 && !isExecutionShaped(res.body)) {
       throw new KeeperHubError('Execution at /execute/contract-call failed', res.status, res.body);
@@ -269,8 +313,13 @@ export class KeeperHubClient {
   private async execute(
     path: string,
     params: Record<string, unknown>,
+    idempotencyKey?: string,
   ): Promise<KeeperHubExecution> {
-    const res = await this.request<Record<string, unknown>>(path, { method: 'POST', body: params });
+    const res = await this.request<Record<string, unknown>>(path, {
+      method: 'POST',
+      body: params,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
     // A reverting call is a legitimate result, not a transport error: it comes
     // back 200 with status "failed" and a decoded reason. Only a genuine
     // transport or auth failure should throw.
@@ -362,11 +411,43 @@ export class KeeperHubClient {
   }
 
   async getExecutionStatus(executionId: string): Promise<KeeperHubExecution> {
+    return (await this.getExecutionStatusWithHint(executionId)).execution;
+  }
+
+  /**
+   * Status, plus how long the server wants you to wait before asking again.
+   *
+   * `X-Poll-Interval-Hint` is in seconds and `0` means the execution is
+   * terminal. Honouring it beats picking an interval: too fast wastes rate
+   * limit, too slow makes every remediation look slower than it was.
+   */
+  async getExecutionStatusWithHint(
+    executionId: string,
+  ): Promise<{ execution: KeeperHubExecution; pollAfterMs: number | null }> {
     const res = await this.request<unknown>(`/execute/${executionId}/status`);
     if (res.status !== 200) {
       throw new KeeperHubError('getExecutionStatus failed', res.status, res.body);
     }
-    return this.parseExecution(res.body);
+    const hint = res.headers.get('X-Poll-Interval-Hint');
+    const seconds = hint === null ? null : Number(hint);
+    return {
+      execution: this.parseExecution(res.body),
+      pollAfterMs:
+        seconds === null || Number.isNaN(seconds) ? null : seconds === 0 ? 0 : seconds * 1000,
+    };
+  }
+
+  /**
+   * The transaction hash a caller can trust.
+   *
+   * `receipts` are re-fetched from the chain, so `verified` and `receiptStatus`
+   * describe what actually happened; `transactionHash` on the record is
+   * self-reported by the write path. Prefer a verified receipt, and fall back
+   * only when there is none.
+   */
+  static verifiedHash(execution: KeeperHubExecution): string | null {
+    const verified = (execution.receipts ?? []).find((r) => r.verified && r.hash);
+    return verified?.hash ?? execution.transactionHash ?? null;
   }
 
   private parseExecution(body: unknown): KeeperHubExecution {

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { privateKeyToAccount } from 'viem/accounts';
-import { blackboxConfigSchema, getChain } from '@blackbox/core';
+import { blackboxConfigSchema, getChain, KeeperHubClient } from '@blackbox/core';
 import { ChaosHarness } from '@blackbox/chaos';
 import {
   KeeperHubExecutor,
@@ -114,10 +114,17 @@ const keeperHubExecutor = keeperHub
             ...(execution.transactionHash ? { transactionHash: execution.transactionHash } : {}),
           };
         },
-        // A contract-call submission answers without a hash even once mined.
+        // Pre-flight with the same body that will be sent, per their
+        // documented sequence: it catches a bad address, a wrong ABI or an
+        // insufficient balance before any gas is spent.
+        simulate: (path, params) => keeperHub.simulate(path, params),
+        // A contract-call submission answers without a hash even once mined, so
+        // the hash is read from the status record — preferring a verified
+        // receipt, which is re-fetched from the chain, over the self-reported
+        // field on the write path.
         getExecutionStatus: async (id) => {
           const execution = await keeperHub.getExecutionStatus(id);
-          return { transactionHash: execution.transactionHash ?? null };
+          return { transactionHash: KeeperHubClient.verifiedHash(execution) };
         },
       },
       verifier,

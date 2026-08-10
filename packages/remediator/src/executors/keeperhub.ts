@@ -33,7 +33,17 @@ export type KeeperHubSubmitter = {
     network: string;
     recipientAddress: string;
     amount: string;
+    idempotencyKey?: string;
   }): Promise<{ executionId: string; transactionHash?: string }>;
+  /**
+   * Pre-flight without signing. Their documented sequence is simulate, check
+   * `wouldRevert`, then execute the same body — it catches a bad address, a
+   * wrong ABI or an insufficient balance before any gas is spent.
+   */
+  simulate?(
+    path: '/execute/transfer' | '/execute/contract-call',
+    params: Record<string, unknown>,
+  ): Promise<{ success: boolean; wouldRevert: boolean; detail?: string }>;
   writeContract(params: {
     network: string;
     contractAddress: string;
@@ -41,6 +51,7 @@ export type KeeperHubSubmitter = {
     functionArgs: string;
     abi?: string;
     value?: string;
+    idempotencyKey?: string;
   }): Promise<{ executionId: string; transactionHash?: string }>;
   /**
    * Fetch an execution by id.
@@ -102,19 +113,45 @@ export class KeeperHubExecutor implements RemediationExecutor {
     }
 
     const network = getChain(incident.chainId).keeperHubNetwork;
-    const result = plan.call
-      ? await this.client.writeContract({
+
+    // Identifies the work, not the attempt: a retry of the same remediation
+    // must send the same key so it replays instead of spending twice. Derived
+    // rather than random for exactly that reason — a reconstructed retry has
+    // no memory of a random one.
+    const idempotencyKey = `blackbox:${incident.id}:${plan.description}`.slice(0, 200);
+
+    const body = plan.call
+      ? {
           network,
           contractAddress: plan.to,
           functionName: plan.call.functionName,
           functionArgs: JSON.stringify(plan.call.args),
           ...(plan.call.abi ? { abi: plan.call.abi } : {}),
           ...(plan.value > 0n ? { value: formatEther(plan.value) } : {}),
+        }
+      : { network, recipientAddress: plan.to, amount: formatEther(plan.value) };
+
+    // Pre-flight. A remediation that would revert costs gas and fixes nothing,
+    // and finding that out before broadcasting is free.
+    if (this.client.simulate) {
+      const path = plan.call ? '/execute/contract-call' : '/execute/transfer';
+      const preflight = await this.client.simulate(path, body);
+      if (!preflight.success || preflight.wouldRevert) {
+        throw new Error(
+          `Pre-flight says this remediation would fail, so it was not broadcast: ` +
+            `${preflight.detail ?? (preflight.wouldRevert ? 'the call would revert' : 'simulation did not succeed')}`,
+        );
+      }
+    }
+
+    const result = plan.call
+      ? await this.client.writeContract({
+          ...(body as Parameters<KeeperHubSubmitter['writeContract']>[0]),
+          idempotencyKey,
         })
       : await this.client.transfer({
-          network,
-          recipientAddress: plan.to,
-          amount: formatEther(plan.value),
+          ...(body as Parameters<KeeperHubSubmitter['transfer']>[0]),
+          idempotencyKey,
         });
 
     const txHash = result.transactionHash ?? (await this.lookupHash(result.executionId));

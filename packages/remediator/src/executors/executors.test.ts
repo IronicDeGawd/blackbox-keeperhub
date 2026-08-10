@@ -71,11 +71,9 @@ describe('KeeperHubExecutor', () => {
       plan: submitPlan({ value: 1_000_000_000_000_000_000n }),
       incident: incident(),
     });
-    expect(client.transfer).toHaveBeenCalledWith({
-      network: 'sepolia',
-      recipientAddress: OTHER,
-      amount: '1',
-    });
+    expect(client.transfer).toHaveBeenCalledWith(
+      expect.objectContaining({ network: 'sepolia', recipientAddress: OTHER, amount: '1' }),
+    );
     expect(result).toMatchObject({ txHash: TX, keeperHubActionId: 'exec-1', executor: 'keeperhub' });
   });
 
@@ -86,12 +84,14 @@ describe('KeeperHubExecutor', () => {
       plan: submitPlan({ data: '0x8456cb59', call: { functionName: 'pause', args: [] } }),
       incident: incident(),
     });
-    expect(client.writeContract).toHaveBeenCalledWith({
-      network: 'sepolia',
-      contractAddress: OTHER,
-      functionName: 'pause',
-      functionArgs: '[]',
-    });
+    expect(client.writeContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        network: 'sepolia',
+        contractAddress: OTHER,
+        functionName: 'pause',
+        functionArgs: '[]',
+      }),
+    );
   });
 
   it('throws rather than reporting a remediation when no hash can be obtained', async () => {
@@ -451,5 +451,64 @@ describe('RoutingExecutor with workflows', () => {
   it('falls back to direct execution when no workflow client exists', () => {
     const router = new RoutingExecutor({ keeperHub: kh, signer });
     expect(router.route(submitPlan(), incident())).toBe(kh);
+  });
+});
+
+describe('following the documented safe execution sequence', () => {
+  const withSim = (over: Partial<KeeperHubSubmitter> = {}): KeeperHubSubmitter => ({
+    transfer: vi.fn(async () => ({ executionId: 'exec-1', transactionHash: TX })),
+    writeContract: vi.fn(async () => ({ executionId: 'exec-2', transactionHash: TX })),
+    simulate: vi.fn(async () => ({ success: true, wouldRevert: false })),
+    ...over,
+  });
+
+  it('pre-flights before broadcasting, with the same body it will send', async () => {
+    const client = withSim();
+    const executor = new KeeperHubExecutor(client, verifier());
+    await executor.submit({
+      plan: submitPlan({ call: { functionName: 'pause', args: [] } }),
+      incident: incident(),
+    });
+
+    const [path, body] = (client.simulate as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(path).toBe('/execute/contract-call');
+    expect(body).toMatchObject({ contractAddress: OTHER, functionName: 'pause' });
+    expect(client.writeContract).toHaveBeenCalled();
+  });
+
+  it('does not broadcast when the pre-flight says it would revert', async () => {
+    // Gas spent on a remediation that cannot work is worse than no remediation.
+    const client = withSim({
+      simulate: vi.fn(async () => ({ success: true, wouldRevert: true, detail: 'NotOwner()' })),
+    });
+    const executor = new KeeperHubExecutor(client, verifier());
+
+    await expect(
+      executor.submit({ plan: submitPlan(), incident: incident() }),
+    ).rejects.toThrow(/would fail, so it was not broadcast[\s\S]*NotOwner/);
+    expect(client.transfer).not.toHaveBeenCalled();
+  });
+
+  it('sends an idempotency key that identifies the work, not the attempt', async () => {
+    // A reconstructed retry has no memory of a random key, so it must derive
+    // the same one or it spends twice.
+    const client = withSim();
+    const executor = new KeeperHubExecutor(client, verifier());
+    const plan = submitPlan({ description: 'fill missing nonce 47' });
+
+    await executor.submit({ plan, incident: incident() });
+    await executor.submit({ plan, incident: incident() });
+
+    const calls = (client.transfer as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0][0].idempotencyKey).toBe(calls[1][0].idempotencyKey);
+    expect(calls[0][0].idempotencyKey).toContain('inc-1');
+  });
+
+  it('still works against a client that cannot simulate', async () => {
+    const client = withSim({ simulate: undefined });
+    const executor = new KeeperHubExecutor(client, verifier());
+    await expect(
+      executor.submit({ plan: submitPlan(), incident: incident() }),
+    ).resolves.toMatchObject({ txHash: TX });
   });
 });
