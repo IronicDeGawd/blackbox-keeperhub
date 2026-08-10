@@ -57,28 +57,30 @@ exists, or amend that sentence to say the hash is only guaranteed on the status
 record and that contract-call callers must poll. One line of documentation
 prevents the wrong build; returning the field prevents the question.
 
-### 1.2 The OpenAPI document covers marketplace workflows, not the platform API
+### 1.2 Withdrawn — the OpenAPI document is exactly where it should be
 
-**Re-verified 2026-08-10** by fetching the document and listing its paths.
+**Re-verified 2026-08-10, and this entry does not survive.**
 
-An earlier draft of this entry said there was no machine-readable schema at all.
-That was wrong, and wrong in an instructive way: we tested
-`GET /api/openapi.json`, got a 404, and stopped. The document is served at
-`GET /api/openapi` — 100KB of OpenAPI 3.1, and good.
+Two earlier drafts of this entry were wrong in two different directions. The
+first said there was no machine-readable schema. The second said one existed but
+only at an unguessable path, `/api/openapi`.
 
-What it describes is 111 marketplace workflow endpoints
-(`/api/mcp/workflows/{slug}/call`), so an agent can discover callable
-workflows. It contains no path for the platform API a builder integrates
-against: no `/api/execute/*`, no `/api/workflows/create`, no `/api/keys`.
+Both wrong. `https://app.keeperhub.com/openapi.json` returns the full 103KB
+OpenAPI 3.1 document, at the conventional path, and it is referenced from three
+separate docs pages (`workflows/marketplace.md`, `ai-tools/agentic-wallet.md`
+twice) plus `llms.txt`. Nothing about it is hidden.
 
-So the real gap is narrower than we first claimed and still real: the endpoints
-you must call to *build on* KeeperHub have no machine-readable schema, and the
-one that exists is at a path a caller is unlikely to guess.
+We tested `/api/openapi.json`, because every other endpoint we had touched lived
+under `/api`, and read the 404 as an answer about the product rather than about
+our guess. There is no fix to propose here; the failure was ours.
 
-**Fix.** Extend the document to cover the platform API, and serve it from
-`/api/openapi.json` as well — that is the path convention every tool tries
-first. A generated client cannot miss a documented route, which removes most of
-section 2 below.
+The one narrow observation left is that `llms.txt` calls it the "machine-readable
+schema for the REST API", while its 111 paths are all
+`/api/mcp/workflows/{slug}/call` — callable workflows rather than the platform
+endpoints (`/api/execute/*`, `/api/workflows/create`, `/api/keys`) a builder
+integrates against. That is a one-word description mismatch, not a gap, and we
+raise it only because someone reading `llms.txt` to find the execute API will not
+find it there.
 
 ### 1.3 Direct Execution silently ignores unknown fields
 
