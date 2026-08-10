@@ -158,23 +158,46 @@ export async function loadSignerWindow(
 
 export type IncidentRow = typeof incidents.$inferInsert;
 
+/**
+ * Make a value safe for a JSONB column.
+ *
+ * Gas figures and fees are bigints, and the driver's JSON serialiser throws
+ * `Do not know how to serialize a BigInt` on them. That throw happened deep in
+ * the recorder's persistence path, where it was caught as a generic evaluation
+ * error, so the visible symptom was an incident that simply never resolved.
+ * Converting here means every writer of these columns is covered rather than
+ * each one remembering.
+ */
+export function jsonSafe<T>(value: T): T {
+  if (value === null || value === undefined) return value;
+  return JSON.parse(
+    JSON.stringify(value, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
+  ) as T;
+}
+
 /** Upsert by id so a tracked incident's evidence and status stay current. */
 export async function saveIncident(db: Database, incident: IncidentRow): Promise<void> {
+  const row = {
+    ...incident,
+    evidence: jsonSafe(incident.evidence),
+    rca: jsonSafe(incident.rca) ?? null,
+    remediation: jsonSafe(incident.remediation) ?? null,
+  };
   await db
     .insert(incidents)
-    .values(incident)
+    .values(row)
     .onConflictDoUpdate({
       target: incidents.id,
       set: {
-        severity: incident.severity,
-        status: incident.status,
-        lastSeenAt: incident.lastSeenAt,
-        resolvedAt: incident.resolvedAt ?? null,
-        resolvedBy: incident.resolvedBy ?? null,
-        confidence: incident.confidence,
-        evidence: incident.evidence,
-        rca: incident.rca ?? null,
-        remediation: incident.remediation ?? null,
+        severity: row.severity,
+        status: row.status,
+        lastSeenAt: row.lastSeenAt,
+        resolvedAt: row.resolvedAt ?? null,
+        resolvedBy: row.resolvedBy ?? null,
+        confidence: row.confidence,
+        evidence: row.evidence,
+        rca: row.rca,
+        remediation: row.remediation,
       },
     });
 }

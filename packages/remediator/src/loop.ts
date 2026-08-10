@@ -17,6 +17,12 @@ export type RemediationLoopOptions = {
   remediator: Remediator;
   /** Cap per pass, so one wedged signer cannot monopolise a tick. */
   limit?: number;
+  /**
+   * Told what Blackbox did to each incident. The incident tracker needs this to
+   * attribute the resolution: an incident that Blackbox fixed and that the
+   * tracker never heard about resolves as `external`.
+   */
+  onRemediated?: (incidentId: string, outcome: RemediationOutcome) => void;
   logger?: { info: (m: string, d?: unknown) => void; error: (m: string, d?: unknown) => void };
 };
 
@@ -63,8 +69,9 @@ export class RemediationLoop {
 
         await saveIncident(this.options.db, {
           ...row,
-          remediation: serialiseRemediation(outcome.record),
+          remediation: outcome.record,
         });
+        this.options.onRemediated?.(incident.id, outcome);
       } catch (error) {
         // A remediator that throws is a bug, not an expected outcome — but one
         // incident must not stop the rest of the pass.
@@ -120,9 +127,3 @@ export function toIncident(row: IncidentRowLike): Incident {
   });
 }
 
-/** bigint gas figures cannot go into JSONB; they are stored as decimal strings. */
-function serialiseRemediation(record: RemediationOutcome['record']): unknown {
-  return JSON.parse(
-    JSON.stringify(record, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
-  );
-}

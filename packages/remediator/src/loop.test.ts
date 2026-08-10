@@ -171,3 +171,25 @@ describe('toIncident', () => {
     ).toThrow();
   });
 });
+
+describe('remediation attribution', () => {
+  it('tells the caller what it did, so the tracker can attribute the resolution', async () => {
+    await openIncident();
+    const seen: { id: string; status: string }[] = [];
+    const loop = new RemediationLoop({
+      db,
+      remediator: new Remediator({
+        db,
+        config: config(),
+        executor: executor(),
+        market: async () => ({ baseFee: 1_000_000_000n, suggestedPriorityFee: 1_000_000_000n }),
+        makeId: () => 'rem-1',
+        now: () => T0,
+      }),
+      onRemediated: (id, outcome) => seen.push({ id, status: outcome.record.finalStatus }),
+    });
+
+    await loop.tick();
+    expect(seen).toEqual([{ id: 'inc-1', status: 'succeeded' }]);
+  });
+});

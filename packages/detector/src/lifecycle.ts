@@ -66,6 +66,26 @@ export class IncidentTracker {
   }
 
   /**
+   * Record what the remediator did to an incident this tracker is holding.
+   *
+   * Without this the tracker never learns that Blackbox acted, and a gap that
+   * Blackbox itself filled resolves as `external` — the product understating
+   * its own work, which is the one direction the attribution must never err in.
+   *
+   * Returns false when the incident is no longer open, so a caller can tell the
+   * difference between "recorded" and "silently dropped".
+   */
+  attachRemediation(incidentId: string, remediation: Incident['remediation']): boolean {
+    for (const incident of this.open.values()) {
+      if (incident.id === incidentId) {
+        incident.remediation = remediation;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Fold this evaluation's drafts into the open set, then test every open
    * incident for resolution.
    *

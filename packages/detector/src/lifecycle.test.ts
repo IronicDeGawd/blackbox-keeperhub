@@ -316,3 +316,33 @@ describe('a rule and its resolution predicate disagreeing', () => {
     expect(res.resolved).toHaveLength(1);
   });
 });
+
+describe('attachRemediation', () => {
+  it('makes a Blackbox-fixed incident resolve as blackbox rather than external', () => {
+    const t = tracker();
+    const created = t.ingest([stuckDraft()], [evt({ status: 'pending', nonce: 5 })], ctx()).created[0]!;
+
+    expect(
+      t.attachRemediation(created.id, {
+        playbookId: 'P1',
+        attempts: [],
+        finalStatus: 'succeeded',
+      }),
+    ).toBe(true);
+
+    // Stops firing, and the stuck transaction is now confirmed.
+    const resolved = t.ingest(
+      [],
+      [evt({ status: 'included', nonce: 5 })],
+      ctx({ now: at(320_000) }),
+    ).resolved;
+    expect(resolved[0]?.resolvedBy).toBe('blackbox');
+  });
+
+  it('reports false for an incident it is no longer holding', () => {
+    const t = tracker();
+    expect(
+      t.attachRemediation('nope', { playbookId: 'P1', attempts: [], finalStatus: 'succeeded' }),
+    ).toBe(false);
+  });
+});

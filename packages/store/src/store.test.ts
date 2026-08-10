@@ -256,3 +256,38 @@ describe('gap observation counter', () => {
     await close2();
   });
 });
+
+describe('saveIncident with bigint payloads', () => {
+  it('stores a remediation record containing bigint gas figures', async () => {
+    // Attaching a remediation record put a bigint on the incident, and the
+    // driver threw `Do not know how to serialize a BigInt` inside the
+    // recorder's persist path — where it surfaced only as an incident that
+    // never resolved. Live Sepolia found this; no unit test did.
+    await saveIncident(db, {
+      id: 'inc-bigint',
+      key: 'k',
+      class: 'NONCE_GAP',
+      severity: 'critical',
+      status: 'open',
+      agentId: 'chaos',
+      signer: '0x01cc313321eb09c51f5b649f2bbd578ee32750a5',
+      chainId: 11155111,
+      detectedAt: new Date(),
+      firstEventAt: new Date(),
+      lastSeenAt: new Date(),
+      ruleId: 'R2',
+      confidence: 0.9,
+      evidence: { eventIds: ['e0'], ruleId: 'R2', facts: {} },
+      remediation: {
+        playbookId: 'P2',
+        finalStatus: 'succeeded',
+        attempts: [{ attemptIndex: 0, gasUsed: 21_000n, status: 'succeeded' }],
+      },
+    } as never);
+
+    const [stored] = await listIncidents(db, { limit: 1 });
+    expect((stored?.remediation as { attempts: { gasUsed: unknown }[] }).attempts[0]?.gasUsed).toBe(
+      '21000',
+    );
+  });
+});
