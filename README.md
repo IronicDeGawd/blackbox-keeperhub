@@ -24,6 +24,7 @@ Real transactions on Ethereum Sepolia, produced by the system end to end.
 | A user's wallet signed a fix Blackbox planned, which Blackbox then verified | [`0x59563255…`](https://sepolia.etherscan.io/tx/0x5956325573c201d473812a08d0b0aeb96d2c3bace24954835bfda62e0e08d22e) |
 | Chaos: a call that simulated clean and reverted one block later | [`0xa0dbdb74…`](https://sepolia.etherscan.io/tx/0xa0dbdb74dc0f19bdcfb6a8cc983b36a9fdbc548af0c716d363500befb45901c6) |
 | An agent paid Blackbox over x402 for a diagnosis — USDC settled on Base | [`0x8cd8d6ac…`](https://basescan.org/tx/0x8cd8d6ac5dae125e5f3cf039db1ffb7f6b7dafa44243396d00e30074a93a51f9) |
+| A watched wallet ran itself down to no runway, and was told so | [`0x5aa0a47c…`](https://sepolia.etherscan.io/tx/0x5aa0a47c64c7030e3e72dbc5a114cd3ff3c2161c6042ac9aefbe573aa1852070) |
 
 The first one is the interesting one. Blackbox detected a retry storm, decided
 to halt the agent, **created a KeeperHub workflow over the API, enabled it, and
@@ -162,7 +163,7 @@ chaos ──▶ chain ──▶ recorder ──▶ rules ──▶ incident ─�
 | `api` | Fastify REST + SSE, and the long-running detection loop |
 | `mcp` | MCP server exposing Blackbox to other agents |
 
-397 TypeScript tests and 19 Foundry tests.
+401 TypeScript tests and 19 Foundry tests.
 
 ---
 
@@ -211,7 +212,9 @@ Or run the arcs directly — each spends real testnet gas:
 cd packages/chaos
 node e2e/c4-retry-storm.mjs          # induce, detect, explain
 node e2e/p4-keeperhub-breaker.mjs    # detect, then halt via a KeeperHub workflow
+node e2e/c5-gas-starved.mjs          # starve a throwaway wallet until R6 fires
 node e2e/zero-integration.mjs        # watch an address that registered nothing
+node e2e/x402-pay.mjs                # pay for a listed workflow over x402
 ```
 
 See `packages/chaos/e2e/README.md` — one of them deliberately leaves the
@@ -275,7 +278,7 @@ Hard-restricted to testnets in code, with no runtime override.
 | C2 | `NONCE_GAP` | deterministic |
 | C3 | `SIM_PASS_EXEC_REVERT` | deterministic |
 | C4 | `RETRY_STORM` | deterministic |
-| C5 | `SIGNER_GAS_STARVED` | written, unrun — it drains the signer |
+| C5 | `SIGNER_GAS_STARVED` | deterministic — starves a throwaway wallet, not the chaos signer |
 | C6 | `ADVERSE_INCLUSION` | needs a local fork |
 
 C3 is the one worth reading: `armTrap()` records a block number, and `work()`
