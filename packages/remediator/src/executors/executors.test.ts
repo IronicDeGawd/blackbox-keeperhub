@@ -512,3 +512,77 @@ describe('following the documented safe execution sequence', () => {
     ).resolves.toMatchObject({ txHash: TX });
   });
 });
+
+describe('KeeperHub workflow validation', () => {
+  const stub = (over = {}) => ({
+    listWorkflows: vi.fn(async () => []),
+    createWorkflow: vi.fn(async () => ({ id: 'wf-1' })),
+    patchWorkflow: vi.fn(async () => {}),
+    executeWorkflow: vi.fn(async () => ({ executionId: 'exec-1' })),
+    getWorkflowExecution: vi.fn(async () => ({
+      status: 'success',
+      error: null,
+      logs: [{ nodeType: 'web3/write-contract', status: 'success', output: { transactionHash: TX } }],
+    })),
+    ...over,
+  });
+
+  const pausePlan = submitPlan({ call: { functionName: 'pause', args: [] } });
+
+  it('checks the workflow before running it', async () => {
+    const validator = { validateWorkflow: vi.fn(async () => ({ valid: true, detail: '' })) };
+    const client = stub();
+    await new WorkflowExecutor(client, verifier(), { sleep: async () => {}, validator }).submit({
+      plan: pausePlan,
+      incident: incident(),
+    });
+    expect(validator.validateWorkflow).toHaveBeenCalledWith('wf-1');
+  });
+
+  it('still runs when validation says the workflow is invalid', async () => {
+    // Their validator reports a templated `network` as an unknown chain id, and
+    // our live marketplace workflow fails validation while executing correctly
+    // and settling real payments. Blocking on the verdict would break working
+    // remediations.
+    const logged: unknown[] = [];
+    const validator = {
+      validateWorkflow: vi.fn(async () => ({
+        valid: false,
+        detail: 'unknown-chain-id: nodes[1].config.network is not a numeric chain ID string',
+      })),
+    };
+    const result = await new WorkflowExecutor(stub(), verifier(), {
+      sleep: async () => {},
+      validator,
+      logger: { info: (_m, d) => logged.push(d), error: () => {} },
+    }).submit({ plan: pausePlan, incident: incident() });
+
+    expect(result.txHash).toBe(TX);
+    expect(JSON.stringify(logged)).toContain('unknown-chain-id');
+  });
+
+  it('runs when the validator is unreachable', async () => {
+    const validator = {
+      validateWorkflow: vi.fn(async () => {
+        throw new Error('MCP session refused');
+      }),
+    };
+    await expect(
+      new WorkflowExecutor(stub(), verifier(), {
+        sleep: async () => {},
+        validator,
+        logger: { info: () => {}, error: () => {} },
+      }).submit({ plan: pausePlan, incident: incident() }),
+    ).resolves.toMatchObject({ txHash: TX });
+  });
+
+  it('does not call a validator that was not configured', async () => {
+    const client = stub();
+    await expect(
+      new WorkflowExecutor(client, verifier(), { sleep: async () => {} }).submit({
+        plan: pausePlan,
+        incident: incident(),
+      }),
+    ).resolves.toMatchObject({ txHash: TX });
+  });
+});

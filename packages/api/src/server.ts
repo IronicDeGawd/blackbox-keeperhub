@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { privateKeyToAccount } from 'viem/accounts';
-import { blackboxConfigSchema, getChain, KeeperHubClient } from '@blackbox/core';
+import { blackboxConfigSchema, getChain, KeeperHubClient, KeeperHubMcp } from '@blackbox/core';
 import { ChaosHarness } from '@blackbox/chaos';
 import {
   KeeperHubExecutor,
@@ -133,7 +133,16 @@ const keeperHubExecutor = keeperHub
 
 // Workflows are the preferred path: the remediation becomes a run in the
 // operator's own KeeperHub dashboard rather than a call only Blackbox can see.
-const workflowExecutor = keeperHub ? new WorkflowExecutor(keeperHub, verifier) : undefined;
+// KeeperHub's own MCP server checks the workflow first — advisory only, since
+// its validator currently rejects templated `network` fields that execute fine.
+const orgKey = env['KEEPERHUB_ORG_KEY'];
+const validator = orgKey?.startsWith('kh_') ? new KeeperHubMcp({ orgKey }) : undefined;
+const workflowExecutor = keeperHub
+  ? new WorkflowExecutor(keeperHub, verifier, {
+      ...(validator ? { validator } : {}),
+      logger,
+    })
+  : undefined;
 
 const signerExecutor = signerAccount
   ? new SignerExecutor([signerAccount], { [chainId]: rpcUrl }, verifier)

@@ -51,6 +51,18 @@ export type WorkflowExecutorOptions = {
   pollAttempts?: number;
   pollIntervalMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * KeeperHub's own MCP server, used only to check a provisioned workflow
+   * before it is run.
+   *
+   * Advisory on purpose. Their validator reports a workflow whose `network`
+   * comes from a template reference as having an unknown chain id — our live,
+   * paid marketplace workflow fails validation and executes correctly. Refusing
+   * to run on a failed verdict would break working remediations, so the verdict
+   * is logged and execution continues.
+   */
+  validator?: { validateWorkflow(id: string): Promise<{ valid: boolean; detail: string }> };
+  logger?: { info: (m: string, d?: unknown) => void; error: (m: string, d?: unknown) => void };
 };
 
 export class WorkflowExecutor implements RemediationExecutor {
@@ -191,6 +203,8 @@ export class WorkflowExecutor implements RemediationExecutor {
       nodes: [trigger, step],
     });
 
+    await this.validate(workflowId);
+
     const { executionId } = await this.client.executeWorkflow(workflowId, {
       incidentId: incident.id,
       incidentClass: incident.class,
@@ -205,6 +219,29 @@ export class WorkflowExecutor implements RemediationExecutor {
       );
     }
     return { txHash, keeperHubActionId: executionId, executor: 'keeperhub-workflow' };
+  }
+
+  /**
+   * Ask KeeperHub whether the workflow it holds is well-formed.
+   *
+   * Never throws and never blocks. A validator that is down, slow or wrong must
+   * not stop a remediation an incident is waiting on — and this one is wrong
+   * about template references today.
+   */
+  private async validate(workflowId: string): Promise<void> {
+    const validator = this.options.validator;
+    if (!validator) return;
+    try {
+      const verdict = await validator.validateWorkflow(workflowId);
+      if (!verdict.valid) {
+        this.options.logger?.info('KeeperHub validation flagged this workflow', {
+          workflowId,
+          detail: verdict.detail,
+        });
+      }
+    } catch (error) {
+      this.options.logger?.error('KeeperHub validation unavailable', { workflowId, error });
+    }
   }
 
   /**
