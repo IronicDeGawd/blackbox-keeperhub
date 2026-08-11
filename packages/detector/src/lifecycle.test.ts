@@ -397,7 +397,7 @@ describe('surviving a restart', () => {
     expect(opened.created).toHaveLength(1);
 
     const afterRestart = tracker();
-    expect(afterRestart.hydrate(opened.created)).toBe(1);
+    expect(afterRestart.hydrate(opened.created, at(200_000))).toBe(1);
 
     const again = afterRestart.ingest([stuckDraft()], [], ctx());
     expect(again.created).toEqual([]);
@@ -409,15 +409,50 @@ describe('surviving a restart', () => {
     const t = tracker();
     const opened = t.ingest([stuckDraft()], [], ctx()).created[0]!;
     const fresh = tracker();
-    expect(fresh.hydrate([{ ...opened, status: 'resolved' as const }])).toBe(0);
+    expect(fresh.hydrate([{ ...opened, status: 'resolved' as const }], at(200_000))).toBe(0);
     expect(fresh.openIncidents()).toEqual([]);
   });
 
   it('does not overwrite what a running tracker already holds', () => {
     const t = tracker();
     const opened = t.ingest([stuckDraft()], [], ctx()).created[0]!;
-    expect(t.hydrate([{ ...opened, id: 'inc-from-disk' }])).toBe(0);
+    expect(t.hydrate([{ ...opened, id: 'inc-from-disk' }], at(200_000))).toBe(0);
     expect(t.openIncidents()[0]!.id).toBe(opened.id);
+  });
+
+  /**
+   * The bug the first attempt at this still had: a restart more than one
+   * causal window after the last evaluation replaced every open incident with
+   * a fresh copy, because downtime looks exactly like a rule that stopped
+   * firing. Two redeploys produced two duplicates on the live deployment.
+   */
+  it('continues the same incident after a long gap, rather than replacing it', () => {
+    const first = tracker();
+    const opened = first.ingest([stuckDraft()], [], ctx()).created[0]!;
+
+    const afterRestart = tracker();
+    const muchLater = at(200_000 + 60 * 60_000);
+    afterRestart.hydrate([opened], muchLater);
+    const again = afterRestart.ingest([stuckDraft()], [], ctx({ now: muchLater }));
+
+    expect(again.created).toEqual([]);
+    expect(again.updated[0]!.id).toBe(opened.id);
+  });
+
+  /**
+   * When a fresh occurrence genuinely does replace a stale one, the old
+   * incident has to be reported so the caller can persist it — closing it only
+   * in memory left the stored row `open` for ever with nothing left to close.
+   */
+  it('reports the incident a fresh occurrence replaced', () => {
+    const t = tracker();
+    const opened = t.ingest([stuckDraft()], [], ctx()).created[0]!;
+    const muchLater = at(200_000 + 60 * 60_000);
+    const again = t.ingest([stuckDraft()], [], ctx({ now: muchLater }));
+
+    expect(again.created).toHaveLength(1);
+    expect(again.resolved.map((i) => i.id)).toContain(opened.id);
+    expect(again.resolved[0]!.status).toBe('resolved');
   });
 
   /** The key is recomputed when a stored row does not carry one. */
@@ -425,7 +460,7 @@ describe('surviving a restart', () => {
     const opened = tracker().ingest([stuckDraft()], [], ctx()).created[0]!;
     const { key: _key, ...withoutKey } = opened;
     const fresh = tracker();
-    expect(fresh.hydrate([withoutKey])).toBe(1);
+    expect(fresh.hydrate([withoutKey], at(200_000))).toBe(1);
     expect(fresh.openIncidents()[0]!.key).toBe(
       incidentKey('chaos', SIGNER, CHAIN_IDS.sepolia, 'STUCK_TRANSACTION'),
     );

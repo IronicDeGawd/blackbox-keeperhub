@@ -209,16 +209,101 @@ describe('list_incidents', () => {
 });
 
 describe('errors from the API', () => {
-  it('surfaces the detail rather than a bare status code', async () => {
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ error: 'not_found', detail: 'Incident inc-9 not found' }), {
-          status: 404,
-        }),
-    );
-    await expect(
-      callTool(client(fetchImpl as never), 'get_remediation_plan', { incidentId: 'inc-9' }),
-    ).rejects.toThrow('Incident inc-9 not found');
+  const refusing = (status: number, body: Record<string, unknown>) =>
+    vi.fn(async () => new Response(JSON.stringify(body), { status }));
+
+  /**
+   * Answered, not thrown. A thrown error ends the agent's turn; a result it
+   * can read lets it explain itself or try something else — which is the same
+   * reasoning that already applied to argument validation.
+   */
+  it('returns the API detail as a readable result', async () => {
+    const fetchImpl = refusing(404, { error: 'not_found', detail: 'Incident inc-9 not found' });
+    const result = await callTool(client(fetchImpl as never), 'get_remediation_plan', {
+      incidentId: 'inc-9',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('Incident inc-9 not found');
+    expect(result.data).toMatchObject({ status: 404 });
+  });
+
+  /** The refusal an unauthenticated agent will actually meet. */
+  it('tells an unauthenticated agent what it is missing', async () => {
+    const fetchImpl = refusing(401, {
+      error: 'unauthorized',
+      detail: 'Sign in to watch an address. Reading incidents needs no account.',
+    });
+    const result = await callTool(client(fetchImpl as never), 'watch_address', {
+      signer: '0x000000000000000000000000000000000000dEaD',
+      chainId: 11155111,
+      agentId: 'demo',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('Sign in to watch an address');
+    expect(result.text).toContain('BLACKBOX_TOKEN');
+  });
+
+  it('does not offer that hint to an agent that already has a token', async () => {
+    const fetchImpl = refusing(403, { error: 'forbidden', detail: 'Agent belongs to another org.' });
+    const signedIn = new BlackboxClient({
+      baseUrl: 'http://api.test',
+      token: 'bb_test',
+      fetchImpl: fetchImpl as never,
+    });
+    const result = await callTool(signedIn, 'watch_address', {
+      signer: '0x000000000000000000000000000000000000dEaD',
+      chainId: 11155111,
+      agentId: 'demo',
+    });
+
+    expect(result.text).toContain('another org');
+    expect(result.text).not.toContain('BLACKBOX_TOKEN');
+  });
+
+  it('answers rather than throwing when the transport itself fails', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('connect ECONNREFUSED');
+    });
+    const result = await callTool(client(fetchImpl as never), 'list_incidents', {});
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('ECONNREFUSED');
+  });
+});
+
+describe('acting as an account', () => {
+  it('sends the token when it has one, and nothing when it does not', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ watching: true }), { status: 201 }));
+    const anonymous = new BlackboxClient({ baseUrl: 'http://api.test', fetchImpl: fetchImpl as never });
+    expect(anonymous.authenticated).toBe(false);
+
+    const signedIn = new BlackboxClient({
+      baseUrl: 'http://api.test',
+      token: 'bb_secret',
+      fetchImpl: fetchImpl as never,
+    });
+    expect(signedIn.authenticated).toBe(true);
+
+    await callTool(anonymous, 'watch_address', {
+      signer: '0x000000000000000000000000000000000000dEaD',
+      chainId: 11155111,
+      agentId: 'demo',
+    });
+    await callTool(signedIn, 'watch_address', {
+      signer: '0x000000000000000000000000000000000000dEaD',
+      chainId: 11155111,
+      agentId: 'demo',
+    });
+
+    const headersOf = (i: number) =>
+      (fetchImpl.mock.calls[i]?.[1] as { headers: Record<string, string> }).headers;
+    expect(headersOf(0)['Authorization']).toBeUndefined();
+    expect(headersOf(1)['Authorization']).toBe('Bearer bb_secret');
+  });
+
+  it('treats a blank token as no token, rather than sending "Bearer "', () => {
+    expect(new BlackboxClient({ token: '   ' }).authenticated).toBe(false);
   });
 });
 

@@ -317,8 +317,20 @@ export class Runtime {
    * spend-cap warning, which is how this was found.
    */
   async restoreOpenIncidents(): Promise<number> {
-    const rows = await listIncidents(this.options.db, { status: 'open' });
-    const restored = this.tracker.hydrate(rows as unknown as Incident[]);
+    /**
+     * Every incident that has not finished, not only the `open` ones.
+     *
+     * An acknowledged incident is still live — somebody has seen it, not fixed
+     * it — so leaving it out meant the first evaluation after a restart filed a
+     * duplicate for a condition already on the board.
+     */
+    const rows = [
+      ...(await listIncidents(this.options.db, { status: 'open' })),
+      ...(await listIncidents(this.options.db, { status: 'acknowledged' })),
+      ...(await listIncidents(this.options.db, { status: 'diagnosing' })),
+      ...(await listIncidents(this.options.db, { status: 'remediating' })),
+    ];
+    const restored = this.tracker.hydrate(rows as unknown as Incident[], new Date());
     if (restored > 0) {
       this.options.logger?.info('restored open incidents after restart', { restored });
     }

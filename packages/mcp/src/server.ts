@@ -17,12 +17,18 @@ import { callTool, toolDescriptions, toolSchemas, type ToolName } from './tools.
 
 export type ServerOptions = {
   baseUrl?: string;
+  /**
+   * A Blackbox session token. Reading needs none; watching an address or
+   * requesting a remediation needs the account that owns the agent.
+   */
+  token?: string;
   fetchImpl?: typeof fetch;
 };
 
 export function buildMcpServer(options: ServerOptions = {}): McpServer {
   const client = new BlackboxClient({
     ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
+    ...(options.token ? { token: options.token } : {}),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
   });
 

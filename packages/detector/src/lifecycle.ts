@@ -73,7 +73,7 @@ export class IncidentTracker {
    * Incidents already in the open set are left alone: a running tracker's own
    * state is more current than the row it wrote.
    */
-  hydrate(incidents: readonly (Incident & { key?: string })[]): number {
+  hydrate(incidents: readonly (Incident & { key?: string })[], now: Date): number {
     let restored = 0;
     for (const incident of incidents) {
       if (incident.status === 'resolved') continue;
@@ -84,10 +84,19 @@ export class IncidentTracker {
       this.open.set(key, {
         ...incident,
         key,
-        // Nothing has re-confirmed it since the restart, so the causal window
-        // runs from when it was detected — not from now, which would keep a
-        // long-dead incident absorbing new evidence.
-        lastSeenAt: incident.detectedAt,
+        /**
+         * Counted as re-confirmed at the moment of restore, not at whatever
+         * the stored `lastSeenAt` says.
+         *
+         * The causal window exists to tell two *occurrences* apart: a rule
+         * stopped firing, then started again. Downtime looks identical from
+         * the outside, and treating it as a lapse means any restart more than
+         * fifteen minutes after the last evaluation replaces every open
+         * incident with a fresh copy — which is the duplication this whole
+         * method exists to prevent. A condition that has genuinely gone away
+         * resolves on the first evaluation instead, which is the honest test.
+         */
+        lastSeenAt: now,
       } as TrackedIncident);
       restored += 1;
     }
@@ -133,6 +142,8 @@ export class IncidentTracker {
   ): IngestResult {
     const created: TrackedIncident[] = [];
     const updated: TrackedIncident[] = [];
+    /** Closed because a fresh occurrence replaced them; still need persisting. */
+    const superseded: TrackedIncident[] = [];
     /** Keys a rule confirmed this evaluation. */
     const firedThisRound = new Set<IncidentKey>();
 
@@ -152,14 +163,19 @@ export class IncidentTracker {
         // Stale and no longer being re-confirmed: close it as unresolved
         // observation and start a fresh incident, so the two occurrences stay
         // distinguishable in the timeline.
+        //
+        // Reported as resolved rather than merely dropped from the open set:
+        // the caller is what persists a status, so closing it only in memory
+        // left the stored row `open` for ever with nothing left to close it.
         this.finish(existing, ctx.now, 'unknown', 'resolved');
+        superseded.push(existing);
       }
       const incident = this.create(draft, ctx, key);
       this.open.set(key, incident);
       created.push(incident);
     }
 
-    const resolved: TrackedIncident[] = [];
+    const resolved: TrackedIncident[] = [...superseded];
     for (const incident of [...this.open.values()]) {
       if (incident.status === 'remediating' || incident.status === 'diagnosing') continue;
       // A rule asserted this condition holds moments ago. Resolving it in the

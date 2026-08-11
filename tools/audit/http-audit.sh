@@ -112,9 +112,11 @@ c=$(code -X POST "$H/api/watched" -H "Authorization: Bearer $TOKEN" -H 'Content-
     -d "{\"signer\":\"$BURN\",\"chainId\":11155111,\"agentId\":\"audit-owned\"}")
 v=$(jqf "d.get('owned')")
 res "watched.register+claim" "201 owned=true" "$c owned=$v" "$([ "$c" = 201 ] && echo 1)"
+# Anonymously: refused before ownership is even consulted, since registering
+# needs an account at all now.
 c=$(code -X POST "$H/api/watched" -H 'Content-Type: application/json' \
     -d "{\"signer\":\"0x1111111111111111111111111111111111111111\",\"chainId\":11155111,\"agentId\":\"audit-owned\"}")
-res "watched.claim.enforced" "403 for another caller" "$c" "$([ "$c" = 403 ] && echo 1)"
+res "watched.claim.anon" "401 — registration needs an account" "$c" "$([ "$c" = 401 ] && echo 1)"
 c=$(code -X DELETE "$H/api/watched/$BURN?chainId=11155111" -H "Authorization: Bearer $TOKEN")
 res "watched.unwatch" "200 owner may remove" "$c" "$([ "$c" = 200 ] && echo 1)"
 

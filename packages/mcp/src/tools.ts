@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { BlackboxClient } from './client.js';
+import { BlackboxApiError, type BlackboxClient } from './client.js';
 
 /**
  * The tools Blackbox exposes to other agents.
@@ -92,7 +92,44 @@ export type ToolResult = { text: string; data: unknown; isError?: boolean };
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2);
 
+/**
+ * Run a tool, and answer with words rather than an exception.
+ *
+ * Argument validation was already returned as a result for a stated reason —
+ * an agent can read it and fix its call, where a thrown error just ends the
+ * turn. Everything the API itself refused was escaping anyway: a 401 from
+ * `watch_address` killed the agent's turn instead of telling it to sign in.
+ * The same reasoning covers both, so the same treatment does.
+ */
 export async function callTool(
+  client: BlackboxClient,
+  name: ToolName,
+  rawArgs: unknown,
+): Promise<ToolResult> {
+  try {
+    return await runTool(client, name, rawArgs);
+  } catch (error) {
+    if (error instanceof BlackboxApiError) {
+      const hint =
+        (error.status === 401 || error.status === 403) && !client.authenticated
+          ? ' This tool acts on an agent, so it needs a Blackbox session token; set BLACKBOX_TOKEN for this MCP server.'
+          : '';
+      return {
+        text: `${name} was refused: ${error.message}${hint}`,
+        data: { error: error.message, status: error.status },
+        isError: true,
+      };
+    }
+    // Anything else is ours, not theirs, and still worth saying out loud.
+    return {
+      text: `${name} failed: ${String((error as Error)?.message ?? error)}`,
+      data: { error: String((error as Error)?.message ?? error) },
+      isError: true,
+    };
+  }
+}
+
+async function runTool(
   client: BlackboxClient,
   name: ToolName,
   rawArgs: unknown,
