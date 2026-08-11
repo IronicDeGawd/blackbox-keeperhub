@@ -465,20 +465,26 @@ the deployment lives.
 caller; an owned one still answers only to its owner; an anonymous caller still
 cannot. Verified live on the orphaned `0x…dEaD` row.
 
-### 18. One organisation, two identities *(open)*
+### 18. One organisation, two identities
 
-**Severity: high, not yet fixed.** Signing in with an organisation key gives an
-org id derived from the *lowest key id*; signing in through OAuth gives
-KeeperHub's own `org` claim. The same operator is therefore two tenants
-depending on which door they used, and an agent claimed through one is
-invisible to the other.
+**Severity: high.** Signing in with an organisation key gave an org id derived
+from the *lowest key id*; signing in through OAuth gave KeeperHub's own `org`
+claim. The same operator was two tenants depending on which door they used, and
+an agent claimed through one was invisible from the other — which made every
+ownership rule only as good as how somebody happened to sign in.
 
-Confirmed against the live API that the key path cannot resolve the real id:
-`GET /api/keys` carries no organisation field, and `GET /api/organizations`
-refuses an organisation key (it wants a browser session). The likely fix is to
-derive one identity from both — deriving the same lowest-key-id from an OAuth
-token, if `/api/keys` accepts `mcp:read` — or to record an alias linking the
-two the first time an operator uses both.
+`GET /api/keys` carries no organisation field and `GET /api/organizations`
+refuses an organisation key, but **a workflow record carries
+`organizationId`** — and it is the same value the OAuth claim holds, checked
+against both live.
+
+**Fixed.** A key sign-in reads it, the key list still proves the key and still
+supplies the identity for an organisation with no workflows to read one from,
+and what was filed under the old derived id moves across on the next sign-in.
+Verified live: `POST /api/auth/keeperhub` now answers
+`orgId: 4f512248-f339-46c6-969f-768fc157bd9e`, the same id the OAuth claim
+gave; all three of this deployment's agents moved, and no session remains under
+the old one.
 
 ### 13. An open incident was filed again on every restart
 
