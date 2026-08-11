@@ -82,12 +82,35 @@ sudo docker compose -f compose.deploy.yml up -d --build
 The schema is applied by the `migrate` service, which must exit successfully
 before the API starts, so a request cannot land on a database with no tables.
 
+## Connecting operator accounts
+
+The deployment can hold an operator's read-only KeeperHub refresh token, which
+is what makes Blackbox read *their* workflows rather than only its own. That
+needs a key it is encrypted with, and the key belongs on the machine and
+nowhere else:
+
+```bash
+# On the VM, not on a laptop, and not in the repo.
+echo "BLACKBOX_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> ~/app/.env
+```
+
+Without it, `POST /api/auth/keeperhub/start?connect=1` answers **501** naming
+the variable and `/api/config` reports `connections.available: false`. Signing
+in still works; it simply grants identity and no ingestion.
+
+**Do not rotate this key casually.** It decrypts credentials already stored, so
+a new one turns every existing connection into `needs_reauth` and every
+operator has to authorise again.
+
 ## Verifying a deploy
 
 ```bash
 H=https://blackbox.<ip-with-dashes>.sslip.io
 curl -s $H/api/health
 curl -s $H/api/config | jq .capabilities        # chaos and remediate must be false
+curl -s $H/api/config | jq .connections        # available:true once the key is set
+curl -s "$H/api/auth/keeperhub/start?connect=1&days=30" | jq -r .url \
+  | grep -o 'redirect_uri=[^&]*'               # must be this deployment's own URL
 curl -s -o /dev/null -w '%{http_code}\n' -X POST $H/api/chaos/run -d '{}'   # 404
 curl -s -X POST $H/api/chaos/plan -H 'content-type: application/json' \
   -d '{"scenario":"C2","signer":"0x…"}' | jq '.induces, .steps[0].transaction.nonce'
