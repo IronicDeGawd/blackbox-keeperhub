@@ -73,6 +73,34 @@ Cross-cutting behaviour:
 | `resolveNetwork` both forms | ✅ `11155111` → 11155111, `sepolia` → 11155111, `solana` → null |
 | Chain scanning for signer-kind agents | ✅ **live** — the block scanner watches 2 registered signers |
 
+### Connecting an operator's own account
+
+Built after the audit, and proven against the live provider on 2026-08-11.
+
+| Feature | Result |
+| --- | --- |
+| Dynamic client registration, live | ✅ registered as `Blackbox`, client id `18bc7077…` |
+| Consent page asks for reading only | ✅ **live** — only "Read your workflows, executions, and plugin schemas" was ticked; write and full-access were not |
+| Refresh token stored encrypted | ✅ row holds `v1.…` ciphertext; the token appears nowhere in it |
+| Lifetime the operator chose | ✅ asked for 14 days, stamped 14 days, never extended by a refresh |
+| Rotation survived | ✅ **live** — three exchanges, each token used once; the stored ciphertext changed every time |
+| Rotation survived a restart | ✅ cold cache, refreshed from the stored token, worked |
+| Their workflow list read with the OAuth token | ✅ **live** — 8 workflows; `/api/workflows` accepts `mcp:read` |
+| The address the organisation executes as | ✅ **live** — read from `GET /api/user` as `0x01cc3133…`, which is the managed wallet |
+| Picking workflows claims their agents | ✅ session then owned `kh:2sv4uyij…` and `kh:xyrw2r4k…` |
+| Ingestion filtered to the picked workflows | ✅ **live** — 4 events stored under `kh:s40v8zk9rdbzhda1qpgzm`, with the discovered signer |
+| Second tenant isolation | ✅ another organisation sees no connection and cannot stop the first one's workflows |
+| Deployment with no encryption key | ✅ connecting returns 501 naming `BLACKBOX_ENCRYPTION_KEY`; sign-in still works |
+
+Two limits worth stating plainly rather than hiding:
+
+- **Disconnect is local only.** KeeperHub exposes no revocation endpoint, so
+  Blackbox deletes its copy and cannot invalidate the grant on their side. The
+  API says `revocation: "local_only"` rather than implying more.
+- **Filtering is client-side.** Their runs endpoint takes no workflow filter, so
+  an organisation with one watched workflow among fifty still pages through all
+  fifty.
+
 ## 3. Remediation
 
 | Feature | Result |
@@ -351,6 +379,18 @@ reading a top-level `conditionMet`. A condition that *held* would therefore have
 been reported as not held whenever no execution record came back — which is
 every simulation. **Fixed**, and the observed value is now carried through as
 evidence.
+
+### 12. Two sources of the same organisation shared one position
+
+**Severity: medium.** Found by connecting a real account to a deployment that
+was already sweeping that same organisation from its environment. Both used the
+cursor `keeperhub:{orgId}`, so whichever swept first moved the mark past runs
+the other had never seen — and the connection, which keeps only the operator's
+chosen workflows, would silently miss them.
+
+**Fixed.** A connection reads at `keeperhub:conn:{orgId}`, kept apart from the
+environment-based sweep. Covered by a test that asserts the two positions do
+not touch.
 
 ### Not a finding, but worth recording
 
