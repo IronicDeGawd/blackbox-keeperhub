@@ -4,6 +4,9 @@ import type {
   ChaosContext,
   ChaosPlan,
   ChaosRun,
+  Connection,
+  OfferedWorkflow,
+  WatchedWorkflow,
   DiagnoseResult,
   IncidentDetail,
   IncidentList,
@@ -215,15 +218,13 @@ export const api = {
     return result;
   },
 
-  /** Sign in by pasting an organisation key. Suits a script; a person connects. */
-  signInWithKey: async (orgKey: string): Promise<Session> => {
-    const result = await request<{ token: string; orgId: string }>('/api/auth/keeperhub', {
-      method: 'POST',
-      body: JSON.stringify({ orgKey }),
-    });
-    setSession(result);
-    return result;
-  },
+  /*
+   * There is deliberately no key sign-in here. `POST /api/auth/keeperhub`
+   * exists for a script, and pasting an organisation key into a website means
+   * handing a third party a credential that can execute transactions — which
+   * is the thing the OAuth flow was built to avoid. A method left in the
+   * client is an invitation to wire a field to it.
+   */
 
   session: (init?: RequestInit): Promise<{ orgId: string; agents: string[] }> =>
     request('/api/auth/session', init),
@@ -239,6 +240,42 @@ export const api = {
   },
 
   // --- the public demo ------------------------------------------------------
+
+  /**
+   * The connection this organisation holds, and what it watches.
+   *
+   * Answers for an organisation that has never connected as well as one that
+   * disconnected — both are `connected: false`, because from here they are the
+   * same situation.
+   */
+  connection: (init?: RequestInit): Promise<Connection> =>
+    request<Connection>('/api/connections/keeperhub', init),
+
+  /** Their workflows, to pick from. Costs a call to KeeperHub, so not on a timer. */
+  offeredWorkflows: (init?: RequestInit): Promise<{ workflows: OfferedWorkflow[] }> =>
+    request('/api/connections/keeperhub/workflows', init),
+
+  /**
+   * Pick what to watch. The server re-checks every id against the account's own
+   * workflows, so a workflow that belongs to somebody else is refused here
+   * rather than believed.
+   */
+  watchWorkflows: (
+    workflows: { id: string; name?: string }[],
+  ): Promise<{ watching: WatchedWorkflow[]; contested?: string[] }> =>
+    request('/api/connections/keeperhub/workflows', {
+      method: 'POST',
+      body: JSON.stringify({ workflows }),
+    }),
+
+  unwatchWorkflow: (workflowId: string): Promise<{ stopped: string }> =>
+    request(`/api/connections/keeperhub/workflows/${encodeURIComponent(workflowId)}`, {
+      method: 'DELETE',
+    }),
+
+  /** Deletes our copy of the credential. KeeperHub exposes no way to revoke it there. */
+  disconnect: (): Promise<{ disconnected: boolean; note: string }> =>
+    request('/api/connections/keeperhub', { method: 'DELETE' }),
 
   demoState: (init?: RequestInit): Promise<{
     available: boolean;

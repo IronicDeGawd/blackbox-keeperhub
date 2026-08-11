@@ -251,6 +251,46 @@ export type ConnectionsConfig = {
   mine?: { status: string; expiresAt: string; watching: number } | null;
 };
 
+/** A KeeperHub workflow this organisation has picked. Their name, not ours. */
+export type WatchedWorkflow = {
+  orgId: string;
+  workflowId: string;
+  name: string | null;
+  active: boolean;
+  connectedAt: string;
+  lastRunAt: string | null;
+};
+
+/**
+ * The state of one organisation's connection.
+ *
+ * `connected: false` with nothing else is the answer for an organisation that
+ * has never connected as well as one that disconnected — from here they are the
+ * same thing, which is why the shape is the same.
+ */
+export type Connection = {
+  connected: boolean;
+  orgId: string;
+  status?: string;
+  scope?: string;
+  connectedAt?: string;
+  expiresAt?: string;
+  lastRefreshedAt?: string | null;
+  lastSweptAt?: string | null;
+  lastError?: string | null;
+  watching: WatchedWorkflow[];
+  /** `local_only`: disconnecting deletes our copy and cannot revoke theirs. */
+  revocation?: string;
+};
+
+/** One of the account's own workflows, flagged with whether we watch it. */
+export type OfferedWorkflow = {
+  id: string;
+  name: string;
+  enabled: boolean | null;
+  watched: boolean;
+};
+
 export type AppConfig = {
   chains: ChainConfig[];
   remediation: {

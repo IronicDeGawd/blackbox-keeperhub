@@ -1,0 +1,159 @@
+/* The connection page. Same parts as everywhere else: hairlines, mono facts. */
+
+.connections__lead {
+  margin: 0;
+  max-width: 78ch;
+  font-size: var(--t-base);
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+.connections__quiet {
+  margin: var(--s3) 0 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  font-size: var(--t-body);
+  color: var(--ink-soft);
+}
+
+.connections__aside {
+  font-size: var(--t-small);
+  color: var(--ink-faint);
+  max-width: 62ch;
+}
+
+.connections__error {
+  color: var(--critical);
+}
+
+.connections__none p:last-child {
+  margin-bottom: 0;
+}
+
+/* --- state --------------------------------------------------------------- */
+
+.connections__state {
+  padding: var(--s4);
+}
+
+.connections__facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--s4);
+}
+
+.connections__facts dt {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 2px;
+}
+
+.connections__facts dd {
+  margin: 0;
+  font-size: var(--t-body);
+  color: var(--ink);
+}
+
+.connections__lasterror {
+  margin: var(--s4) 0 0;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--rule);
+  font-size: var(--t-body);
+  color: var(--critical);
+}
+
+/* --- workflows ----------------------------------------------------------- */
+
+.connections__workflows {
+  list-style: none;
+  margin: var(--s4) 0 0;
+  padding: 0;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.connections__workflow {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.connections__workflow:last-child {
+  border-bottom: none;
+}
+
+/* The whole label is the target, so the box is never the only thing to hit. */
+.connections__pick {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-height: 32px;
+  cursor: pointer;
+}
+
+.connections__pick input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.connections__name {
+  font-size: var(--t-body);
+  color: var(--ink);
+}
+
+.connections__id {
+  font-size: var(--t-small);
+  color: var(--ink-faint);
+}
+
+.connections__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  margin-top: var(--s4);
+}
+
+/* --- disconnect ---------------------------------------------------------- */
+
+.connections__danger {
+  margin-top: var(--s5);
+}
+
+.connections__danger .connections__quiet {
+  max-width: 78ch;
+  margin-bottom: var(--s3);
+}
+
+.connections__confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--critical);
+  border-left-width: 3px;
+  background: var(--surface);
+  font-size: var(--t-body);
+}
+
+@media (pointer: coarse) {
+  .connections__pick input {
+    width: 22px;
+    height: 22px;
+  }
+  .connections__pick {
+    min-height: 44px;
+  }
+}

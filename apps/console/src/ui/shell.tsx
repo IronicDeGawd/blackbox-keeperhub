@@ -152,6 +152,7 @@ const DESTINATIONS: Destination[] = [
    * what `signChaos` reports.
    */
   { to: '/chaos', label: 'Chaos', needs: 'signChaos' },
+  { to: '/connections', label: 'Connections', needs: 'connectKeeperHub' },
 ];
 
 /**

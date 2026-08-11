@@ -39,7 +39,13 @@ export function SessionControl({
     setBusy('keeperhub');
     setError(null);
     try {
-      const started = await api.connectUrl({ returnTo: window.location.pathname });
+      /**
+       * Back to /connections rather than to wherever they were standing.
+       * Connecting watches nothing on its own, so the moment they return is
+       * exactly when picking a workflow is due — and that page is the only
+       * place it can be done.
+       */
+      const started = await api.connectUrl({ returnTo: '/connections' });
       // Their page, not ours: the operator's credential never touches Blackbox.
       window.location.assign(started.url);
     } catch (cause) {
