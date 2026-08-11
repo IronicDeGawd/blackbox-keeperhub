@@ -692,6 +692,9 @@ const app = await buildApp({
 
 const port = Number(env['PORT'] ?? 4000);
 await app.listen({ port, host: '0.0.0.0' });
+// Before the first tick, so the first evaluation knows which incidents are
+// already open rather than filing duplicates for them.
+await runtime.restoreOpenIncidents();
 runtime.start();
 
 console.log(`blackbox api on http://localhost:${port}`);

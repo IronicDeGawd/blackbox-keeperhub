@@ -307,6 +307,24 @@ export class Runtime {
     return `${prefix}-${Date.now()}-${this.seq++}`;
   }
 
+  /**
+   * Pick up where the last process left off.
+   *
+   * The tracker holds open incidents in memory, so without this a restart
+   * starts blind: the first evaluation cannot see that an incident for a key
+   * is already open and files a second one for a condition that never went
+   * away. Three redeploys in an afternoon produced three copies of the same
+   * spend-cap warning, which is how this was found.
+   */
+  async restoreOpenIncidents(): Promise<number> {
+    const rows = await listIncidents(this.options.db, { status: 'open' });
+    const restored = this.tracker.hydrate(rows as unknown as Incident[]);
+    if (restored > 0) {
+      this.options.logger?.info('restored open incidents after restart', { restored });
+    }
+    return restored;
+  }
+
   start(): void {
     if (this.timer) return;
     const interval = this.options.intervalMs ?? 15_000;
