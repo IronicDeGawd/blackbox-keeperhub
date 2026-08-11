@@ -47,20 +47,26 @@ describe('the one button a visitor may press', () => {
   const demo = (c: ReturnType<typeof client>, sweep?: () => Promise<unknown>) =>
     new Demo({ db, client: c, chainId: 11155111, now: () => now, ...(sweep ? { sweep } : {}) });
 
-  it('starts a real KeeperHub run', async () => {
+  /**
+   * Three, not one: a single rejection is a blip and R10 is right to ignore
+   * it, but then pressing the button would produce no incident at all — and
+   * watching one appear is the whole point.
+   */
+  it('runs it three times, so the rule that needs three can fire', async () => {
     const c = client();
     const result = await demo(c).run();
 
-    expect(result).toMatchObject({ ran: true, executionId: 'exec-1', workflowId: 'wf-demo' });
-    expect(c.executed).toEqual(['wf-demo']);
+    expect(result).toMatchObject({ ran: true, workflowId: 'wf-demo' });
+    expect((result as { executionIds: string[] }).executionIds).toHaveLength(3);
+    expect(c.executed).toEqual(['wf-demo', 'wf-demo', 'wf-demo']);
   });
 
   /**
-   * The failure has to cost nothing: the transfer asks for more than the
-   * wallet holds, so KeeperHub refuses it in pre-flight and no transaction is
-   * ever submitted.
+   * The failure has to cost nothing. The transfer asks for far beyond the
+   * organisation's daily spending cap, so KeeperHub's own spend controls
+   * refuse it and no transaction is ever submitted.
    */
-  it('asks for more than any wallet holds, so it is refused before submission', async () => {
+  it('asks for far beyond any cap, so it is refused before any chain is involved', async () => {
     const c = client();
     await demo(c).run();
 
@@ -77,7 +83,7 @@ describe('the one button a visitor may press', () => {
     await demo(c).run();
 
     expect(c.created).toHaveLength(1);
-    expect(c.executed).toEqual(['wf-demo', 'wf-demo']);
+    expect(c.executed).toHaveLength(6);
   });
 
   it('adopts the workflow already there after a restart', async () => {
@@ -86,7 +92,7 @@ describe('the one button a visitor may press', () => {
     await demo(c).run();
 
     expect(c.created).toEqual([]);
-    expect(c.executed).toEqual(['wf-existing']);
+    expect(new Set(c.executed)).toEqual(new Set(['wf-existing']));
   });
 
   /** The cooldown is what bounds our execution quota, so it is not per caller. */

@@ -1357,7 +1357,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       return reply.code(202).send({
         ...result,
         detail:
-          'A KeeperHub run was started that asks to transfer more than the wallet holds. It will be refused before submission, and Blackbox reads the refusal from the audit trail.',
+          'Three KeeperHub runs were started, each asking to transfer far beyond this organisation’s daily spending cap. Their own spend controls refuse all three before any chain is involved, and Blackbox reads those refusals from the audit trail — which is what raises WORKFLOW_MISCONFIGURED.',
       });
     });
 

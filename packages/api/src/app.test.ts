@@ -1057,7 +1057,7 @@ describe('the public demo button', () => {
     const executed: string[] = [];
     return {
       executed,
-      listWorkflows: async () => [{ id: 'wf-demo', name: 'blackbox/demo/insufficient-funds' }],
+      listWorkflows: async () => [{ id: 'wf-demo', name: 'blackbox/demo/refused-transfer' }],
       createWorkflow: async () => ({ id: 'wf-demo' }),
       executeWorkflow: async (id: string) => {
         executed.push(id);
@@ -1081,7 +1081,8 @@ describe('the public demo button', () => {
     const res = await (await instance(client)).inject({ method: 'POST', url: '/api/demo/run' });
     expect(res.statusCode).toBe(202);
     expect(res.json()).toMatchObject({ ran: true, workflowId: 'wf-demo' });
-    expect(client.executed).toEqual(['wf-demo']);
+    // Three runs, because that is what the rule needs before it will fire.
+    expect(client.executed).toHaveLength(3);
   });
 
   it('refuses the next press for everybody, not per caller', async () => {

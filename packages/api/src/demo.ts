@@ -13,9 +13,12 @@ import { getCursor, setCursor, type Database } from '@blackbox/store';
  *
  * - It never touches anyone else's organisation. The only thing it can break
  *   is ours.
- * - It spends no gas. The transfer asks for more than the wallet holds, so
- *   KeeperHub refuses it in pre-flight — which is itself one of the failure
- *   modes Blackbox exists to explain.
+ * - It spends no gas and moves no value. The transfer asks for far more than
+ *   the organisation's daily spending cap allows, so KeeperHub's own spend
+ *   controls refuse it before it reaches a chain — which is itself one of the
+ *   failure modes Blackbox exists to explain. Verified live: the run is
+ *   recorded as an error, the daily used figure does not move, and no gas
+ *   credits are consumed.
  * - It cannot be pressed in a loop. One call every thirty minutes, for
  *   everybody, because the limit exists to bound our execution quota and a
  *   per-caller limit would not do that.
@@ -29,10 +32,21 @@ export const DEMO_COOLDOWN_MS = 30 * 60_000;
 /** A hole nothing can fall into, and a recipient nobody can mistake for real. */
 const BURN_ADDRESS = '0x000000000000000000000000000000000000dEaD';
 
-/** Far more than any testnet wallet holds, so the estimate always refuses. */
+/** Far beyond any daily cap or testnet balance, so it is always refused. */
 const UNAFFORDABLE_WEI = '1000000000000000000000';
 
-export const DEMO_WORKFLOW_NAME = 'blackbox/demo/insufficient-funds';
+/**
+ * How many times one press runs it.
+ *
+ * Three because that is what `workflowNodeFailures` requires before R10 calls
+ * a workflow misconfigured. A single rejection is a blip and the rule is right
+ * to ignore it — but then one press would produce no incident, and watching an
+ * incident appear is the entire point of the button. Three costs three
+ * executions of a five-thousand-a-month allowance and still no gas.
+ */
+export const DEMO_RUNS_PER_PRESS = 3;
+
+export const DEMO_WORKFLOW_NAME = 'blackbox/demo/refused-transfer';
 
 export type DemoClient = {
   listWorkflows(): Promise<{ id: string; name: string }[]>;
@@ -56,14 +70,14 @@ export type DemoOptions = {
 };
 
 export type DemoResult =
-  | { ran: true; executionId: string; workflowId: string; nextAllowedAt: string }
+  | { ran: true; executionIds: string[]; workflowId: string; nextAllowedAt: string }
   | { ran: false; reason: 'cooling_down'; retryAfterSeconds: number; nextAllowedAt: string };
 
 function definition(chainId: number) {
   return {
     name: DEMO_WORKFLOW_NAME,
     description:
-      'Blackbox demo: a transfer larger than the wallet holds, so it is refused before submission.',
+      'Blackbox demo: a transfer far beyond the daily spending cap, refused before it reaches a chain.',
     nodes: [
       {
         id: 'trigger-1',
@@ -79,7 +93,7 @@ function definition(chainId: number) {
         position: { x: 0, y: 150 },
         data: {
           type: 'action',
-          label: 'Transfer more than we have',
+          label: 'Transfer far beyond the spending cap',
           config: {
             actionType: 'web3/transfer-funds',
             network: String(chainId),
@@ -131,7 +145,14 @@ export class Demo {
     await setCursor(this.options.db, LAST_RUN_KEY, at.toISOString());
 
     const workflowId = await this.ensureWorkflow();
-    const execution = await this.options.client.executeWorkflow(workflowId);
+
+    // Sequentially, so the runs are distinct attempts of one workflow rather
+    // than one attempt their side might coalesce.
+    const executionIds: string[] = [];
+    for (let i = 0; i < DEMO_RUNS_PER_PRESS; i += 1) {
+      const execution = await this.options.client.executeWorkflow(workflowId);
+      executionIds.push(execution.executionId);
+    }
 
     // Read it now rather than at the next tick, so the incident appears while
     // whoever pressed the button is still looking at the page.
@@ -139,7 +160,7 @@ export class Demo {
 
     return {
       ran: true,
-      executionId: execution.executionId,
+      executionIds,
       workflowId,
       nextAllowedAt: new Date(at.getTime() + DEMO_COOLDOWN_MS).toISOString(),
     };
