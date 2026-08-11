@@ -207,13 +207,13 @@
 /* --- the one thing a visitor can cause ----------------------------------- */
 
 .demo {
-  margin-top: 1.25rem;
+  margin-top: var(--s5);
 }
 
 .demo__note,
 .demo__message {
-  margin: 0.5rem 0 0;
-  font-size: 0.875rem;
+  margin: var(--s2) 0 0;
+  font-size: var(--t-body);
   color: var(--ink-soft);
   max-width: 68ch;
 }

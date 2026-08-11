@@ -315,6 +315,20 @@
   .rail__note {
     display: none;
   }
+
+  /*
+   * The strip wraps here, and a right-hand rule on a cell that is no longer
+   * followed by anything hangs in the middle of a row. Below the design width
+   * the cells are separated by the line under them instead.
+   */
+  .stat {
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+    flex: 1 1 auto;
+  }
+  .stat:last-child {
+    border-bottom: none;
+  }
 }
 
 /* --- who is signed in ---------------------------------------------------- */
@@ -322,31 +336,18 @@
 .session {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--s2);
 }
 
 /* The organisation id is a fact, not a heading: quiet, monospaced, truncated. */
 .session__org {
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: var(--t-small);
   color: var(--ink-faint);
 }
 
 .session__error {
-  font-size: 0.8125rem;
+  font-size: var(--t-small);
   color: var(--critical);
   max-width: 28ch;
-}
-
-.button--quiet {
-  background: transparent;
-  border: 1px solid var(--rule);
-  color: var(--ink-soft);
-  padding: 0.25rem 0.625rem;
-  font-size: 0.8125rem;
-}
-
-.button--quiet:hover:not(:disabled) {
-  color: var(--ink);
-  border-color: var(--ink-faint);
 }

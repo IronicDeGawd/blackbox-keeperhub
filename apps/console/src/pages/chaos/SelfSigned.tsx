@@ -128,7 +128,11 @@ export function SelfSigned({
         </p>
       )}
 
-      {error ? <p className="selfsigned__error">{error}</p> : null}
+      {error ? (
+        <p className="selfsigned__error" role="alert">
+          {error}
+        </p>
+      ) : null}
 
       <ul className="selfsigned__list">
         {scenarios.map((scenario) => (
@@ -143,6 +147,14 @@ export function SelfSigned({
               className="button"
               disabled={!wallet || busy !== null || !scenario.signable}
               onClick={() => void planFor(scenario.id)}
+              // A disabled control with no stated reason reads as a broken one.
+              title={
+                !scenario.signable
+                  ? 'This scenario needs a key the deployment holds itself — a wallet cannot produce it.'
+                  : !wallet
+                    ? 'Connect a wallet first: the plan is written for one address.'
+                    : undefined
+              }
             >
               {busy === scenario.id ? 'Planning…' : 'Plan it'}
             </button>
@@ -201,7 +213,11 @@ export function SelfSigned({
             </ul>
           ) : null}
 
-          {reported ? <p className="selfsigned__note">{reported}</p> : null}
+          {reported ? (
+            <p className="selfsigned__note" role="status">
+              {reported}
+            </p>
+          ) : null}
         </section>
       ) : null}
     </div>

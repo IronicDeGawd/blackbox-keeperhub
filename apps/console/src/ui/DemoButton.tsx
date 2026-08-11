@@ -74,12 +74,19 @@ export function DemoButton(): React.JSX.Element | null {
       >
         {busy ? 'Breaking something…' : 'Break something now'}
       </button>
-      <p className="demo__note">
+      {/* Pressing this starts work somewhere else, and the only sign it worked
+          is this text changing. Announced, or a screen reader gets silence from
+          the one control on the page that does anything. */}
+      <p className="demo__note" aria-live="polite">
         {state.ready
           ? 'Runs a workflow that asks to spend beyond this organisation’s daily cap. KeeperHub refuses it before any chain is involved, so it costs no gas — and Blackbox reads the refusal from the audit trail.'
           : `Already run. Available again in about ${waitMinutes} minute${waitMinutes === 1 ? '' : 's'} — the limit is shared by everyone, because it bounds a real execution quota.`}
       </p>
-      {message ? <p className="demo__message">{message}</p> : null}
+      {message ? (
+        <p className="demo__message" role="status">
+          {message}
+        </p>
+      ) : null}
     </div>
   );
 }

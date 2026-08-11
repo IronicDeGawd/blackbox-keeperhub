@@ -165,11 +165,6 @@
   color: var(--ink);
 }
 
-.button--go {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 /*
  * A refusal is an outcome. It gets a bordered panel of its own rather than a
  * red toast, because the reason is the content.

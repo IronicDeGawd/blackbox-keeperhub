@@ -24,7 +24,9 @@ export function SessionControl({
   capabilities: Capabilities | null;
 }): React.JSX.Element | null {
   const [live, setLive] = useState<Session | null>(session());
-  const [busy, setBusy] = useState(false);
+  // Which door is being held open, not merely that one is: the two sign-ins sit
+  // side by side, and a single flag makes both of them claim to be working.
+  const [busy, setBusy] = useState<'keeperhub' | 'wallet' | 'out' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => onSession(setLive), []);
@@ -34,7 +36,7 @@ export function SessionControl({
   if (live === null && capabilities?.connectKeeperHub !== true && !walletAvailable()) return null;
 
   const connect = async (): Promise<void> => {
-    setBusy(true);
+    setBusy('keeperhub');
     setError(null);
     try {
       const started = await api.connectUrl({ returnTo: window.location.pathname });
@@ -46,7 +48,7 @@ export function SessionControl({
           ? cause.detail
           : `Could not reach ${API_URL}. Is the API running?`,
       );
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -60,7 +62,7 @@ export function SessionControl({
    * halfway.
    */
   const signInWithWallet = async (): Promise<void> => {
-    setBusy(true);
+    setBusy('wallet');
     setError(null);
     try {
       const wallet = await connectWallet();
@@ -70,17 +72,17 @@ export function SessionControl({
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.detail : (cause as Error).message);
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
   const signOut = async (): Promise<void> => {
-    setBusy(true);
+    setBusy('out');
     try {
       await api.signOut();
     } finally {
       setSession(null);
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -90,8 +92,13 @@ export function SessionControl({
         <span className="session__org" title={`Signed in as organisation ${live.orgId}`}>
           {live.orgId.slice(0, 8)}…
         </span>
-        <button type="button" className="button button--quiet" onClick={signOut} disabled={busy}>
-          Sign out
+        <button
+          type="button"
+          className="button button--quiet"
+          onClick={() => void signOut()}
+          disabled={busy !== null}
+        >
+          {busy === 'out' ? 'Signing out…' : 'Sign out'}
         </button>
       </span>
     );
@@ -99,10 +106,19 @@ export function SessionControl({
 
   return (
     <span className="session">
-      {error ? <span className="session__error">{error}</span> : null}
+      {error ? (
+        <span className="session__error" role="alert">
+          {error}
+        </span>
+      ) : null}
       {capabilities?.connectKeeperHub === true ? (
-        <button type="button" className="button button--quiet" onClick={connect} disabled={busy}>
-          {busy ? 'Opening KeeperHub…' : 'Connect KeeperHub'}
+        <button
+          type="button"
+          className="button button--quiet"
+          onClick={() => void connect()}
+          disabled={busy !== null}
+        >
+          {busy === 'keeperhub' ? 'Opening KeeperHub…' : 'Connect KeeperHub'}
         </button>
       ) : null}
       {walletAvailable() ? (
@@ -110,10 +126,10 @@ export function SessionControl({
           type="button"
           className="button button--quiet"
           onClick={() => void signInWithWallet()}
-          disabled={busy}
+          disabled={busy !== null}
           title="Prove an address by signing a message. Nothing is sent to a chain."
         >
-          Sign in with wallet
+          {busy === 'wallet' ? 'Waiting for signature…' : 'Sign in with wallet'}
         </button>
       ) : null}
     </span>
