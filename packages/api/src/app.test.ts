@@ -1261,3 +1261,96 @@ describe('signing in with a wallet', () => {
     ).toBe(403);
   });
 });
+
+describe('audit finding 2 — claiming an address someone already watches', () => {
+  const signedIn = async (orgKeyId: string) => {
+    const identity = new Identity(db, { listKeys: async () => [{ id: orgKeyId }] });
+    const result = await identity.signIn('kh_x');
+    if (!result.ok) throw new Error('fixture sign-in failed');
+    return { identity, token: result.token };
+  };
+
+  /**
+   * The hole the audit found: an anonymous visitor watches an address first,
+   * and its owner can then never take ownership of their own agent.
+   */
+  it('claims the agent even when the row already exists', async () => {
+    const mine = await signedIn('org-a');
+    const server = await app({ identity: mine.identity });
+
+    // Anonymous first, exactly as a wallet-signed chaos run registers.
+    await server.inject({
+      method: 'POST',
+      url: '/api/watched',
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'already-there' },
+    });
+
+    const second = await server.inject({
+      method: 'POST',
+      url: '/api/watched',
+      headers: { authorization: `Bearer ${mine.token}` },
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'already-there' },
+    });
+    expect(second.statusCode).toBe(201);
+    expect(second.json().owned).toBe(true);
+
+    // And the claim is real: a stranger is now refused.
+    const theirs = await signedIn('org-b');
+    const stranger = await server.inject({
+      method: 'POST',
+      url: '/api/watched',
+      headers: { authorization: `Bearer ${theirs.token}` },
+      payload: {
+        signer: '0x2222222222222222222222222222222222222222',
+        chainId: CHAIN_IDS.sepolia,
+        agentId: 'already-there',
+      },
+    });
+    expect(stranger.statusCode).toBe(403);
+  });
+
+  it('still refuses to rewrite the existing row', async () => {
+    const mine = await signedIn('org-a');
+    const server = await app({ identity: mine.identity });
+    await server.inject({
+      method: 'POST',
+      url: '/api/watched',
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'first', label: 'original' },
+    });
+    await server.inject({
+      method: 'POST',
+      url: '/api/watched',
+      headers: { authorization: `Bearer ${mine.token}` },
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'first', label: 'rewritten' },
+    });
+    const rows = await db.select().from(watchedSigners);
+    expect(rows[0]?.label).toBe('original');
+  });
+});
+
+describe('audit findings 1 and 7', () => {
+  const chaosPlan = {
+    plan: async () => ({ scenario: 'C2', steps: [] }),
+    observe: async () => ({ observed: [] }),
+  };
+
+  /** A deployment that can plan chaos must be able to list it. */
+  it('serves the catalogue when only wallet-signed chaos is on', async () => {
+    const res = await (await app({ chaosPlan })).inject({ url: '/api/chaos/scenarios' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items.map((i: { id: string }) => i.id)).toEqual([
+      'C1',
+      'C2',
+      'C3',
+      'C4',
+      'C5',
+      'C6',
+    ]);
+    // And it says which of them a wallet can actually sign.
+    expect(res.json().items.filter((i: { signable: boolean }) => i.signable)).toHaveLength(4);
+  });
+
+  it('has no catalogue at all when neither is configured', async () => {
+    expect((await (await app({})).inject({ url: '/api/chaos/scenarios' })).statusCode).toBe(404);
+  });
+});

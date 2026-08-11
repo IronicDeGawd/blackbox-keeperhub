@@ -39,7 +39,17 @@ export type ProposalDeps = {
 export type Proposal = {
   incidentId: string;
   playbookId: string | null;
+  /**
+   * Whether Blackbox could carry this out *itself*.
+   *
+   * Not the same question as whether there is anything to do: a plan whose
+   * guards blocked autonomous action still carries a transaction for the
+   * owner's wallet to sign, and a console reading only this field would hide
+   * the button that is the entire point of the propose-and-verify path.
+   */
   actionable: boolean;
+  /** Whether a wallet has something to sign. Read this to show the button. */
+  signable: boolean;
   /** Who must sign. A wallet connected as anyone else cannot help. */
   signerRequired: string;
   chainId: number;
@@ -78,6 +88,7 @@ export async function buildProposal(
     incidentId: incident.id,
     playbookId: playbook?.id ?? null,
     actionable: false,
+    signable: false,
     signerRequired: incident.signer,
     chainId: incident.chainId,
     guards: { passed: [], failed: [] },
@@ -129,6 +140,9 @@ export async function buildProposal(
     ...base,
     playbookId: playbook.id,
     actionable: failed.length === 0,
+    // There is a transaction, so somebody can act — whatever the guards said
+    // about Blackbox acting unattended.
+    signable: true,
     guards: guardReport,
     transaction: {
       to: plan.to,
@@ -155,7 +169,9 @@ export type SubmittedTransaction = {
 export type VerifyDeps = {
   db: Database;
   getTransaction: (hash: `0x${string}`) => Promise<SubmittedTransaction | null>;
-  waitForReceipt: (hash: `0x${string}`) => Promise<{ included: boolean; gasUsed?: bigint }>;
+  waitForReceipt: (
+    hash: `0x${string}`,
+  ) => Promise<{ included: boolean; gasUsed?: bigint; effectiveGasPrice?: bigint }>;
   makeId: () => string;
   now?: () => Date;
 };
@@ -216,7 +232,11 @@ export async function verifyUserSubmission(
     signer: incident.signer,
     chainId: incident.chainId,
     attemptedAt: at,
-    ...(receipt.gasUsed !== undefined ? { gasSpentWei: receipt.gasUsed } : {}),
+    // The cost, not the gas count. Recording units in a column named for wei
+    // is what made the ledger report 21,000 wei for a real transaction.
+    ...(receipt.gasUsed !== undefined && receipt.effectiveGasPrice !== undefined
+      ? { gasSpentWei: receipt.gasUsed * receipt.effectiveGasPrice }
+      : {}),
     status: receipt.included ? 'succeeded' : 'failed',
     txHash,
     executor: 'user-signed',
@@ -243,6 +263,15 @@ export async function recordUserRemediation(
 ): Promise<void> {
   await saveIncident(db, {
     ...row,
+    /**
+     * Blackbox planned this and a wallet signed it through Blackbox's own
+     * route, so calling it `external` understates what happened — `external`
+     * is for a fix that arrived without us. The distinction matters because
+     * mean-time-to-remediation counts our work and not the world's.
+     */
+    ...(result.included
+      ? { resolvedAt: at, resolvedBy: 'blackbox-proposed', status: 'resolved' }
+      : {}),
     remediation: {
       playbookId: proposal.playbookId ?? 'unknown',
       finalStatus: result.included ? 'succeeded' : 'failed',

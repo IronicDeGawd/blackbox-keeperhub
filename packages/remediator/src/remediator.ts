@@ -32,7 +32,13 @@ export type RemediationExecutor = {
     txHash: `0x${string}`;
     incident: Incident;
     timeoutMs: number;
-  }): Promise<{ included: boolean; gasUsed?: bigint; uncertain?: boolean; detail?: string }>;
+  }): Promise<{
+    included: boolean;
+    gasUsed?: bigint;
+    effectiveGasPrice?: bigint;
+    uncertain?: boolean;
+    detail?: string;
+  }>;
 };
 
 export type MarketData = {
@@ -187,6 +193,7 @@ export class Remediator {
       });
       let included = false;
       let gasUsed: bigint | undefined;
+      let gasSpentWei: bigint | undefined;
       let failureReason: string | undefined;
 
       try {
@@ -197,6 +204,13 @@ export class Remediator {
         });
         included = verified.included;
         gasUsed = verified.gasUsed;
+        // What it cost, rather than how much gas it burned. Without the price
+        // the ledger records a count of gas in a column named for wei, which
+        // understates every remediation by roughly nine orders of magnitude.
+        gasSpentWei =
+          verified.gasUsed !== undefined && verified.effectiveGasPrice !== undefined
+            ? verified.gasUsed * verified.effectiveGasPrice
+            : undefined;
         if (!included) {
           // Says which of the two happened. An operator deciding whether to
           // resubmit needs to know the difference between "the chain did not
@@ -216,7 +230,7 @@ export class Remediator {
         playbook.id,
         startedAt,
         included ? 'succeeded' : 'failed',
-        gasUsed,
+        gasSpentWei,
         txHash,
         executor,
       );
@@ -282,7 +296,7 @@ export class Remediator {
     playbookId: string,
     at: Date,
     status: string,
-    gasUsed?: bigint,
+    gasSpentWei?: bigint,
     txHash?: string,
     executor?: string,
   ): Promise<void> {
@@ -295,7 +309,9 @@ export class Remediator {
       signer: incident.signer,
       chainId: incident.chainId,
       attemptedAt: at,
-      ...(gasUsed !== undefined ? { gasSpentWei: gasUsed } : {}),
+      // Cost, not units. `gasUsed` is a count of gas; what the budget guard
+      // and the ledger care about is what it was bought for.
+      ...(gasSpentWei !== undefined ? { gasSpentWei } : {}),
       status,
       ...(txHash ? { txHash } : {}),
       ...(executor ? { executor } : {}),

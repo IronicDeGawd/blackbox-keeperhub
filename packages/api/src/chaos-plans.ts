@@ -258,3 +258,57 @@ export function planChaos(scenario: string, ctx: PlanContext): ChaosPlan {
       };
   }
 }
+
+/**
+ * What a visitor can ask for, without needing a signer key on this deployment.
+ *
+ * The full catalogue lives with the chaos harness, which only exists on a
+ * process that holds a key. A deployment offering only wallet-signed chaos was
+ * therefore able to *plan* a scenario it could not *list* — so this is the
+ * catalogue for the path that is actually open here.
+ */
+export function plannableScenarios(): {
+  id: string;
+  induces: string;
+  summary: string;
+  signable: boolean;
+}[] {
+  return [
+    {
+      id: 'C1',
+      induces: 'GAS_UNDERPRICED',
+      summary: 'Bids far under the market, so the transaction sits unmined.',
+      signable: true,
+    },
+    {
+      id: 'C2',
+      induces: 'NONCE_GAP',
+      summary: 'Sends above an unused nonce, queueing everything behind it.',
+      signable: true,
+    },
+    {
+      id: 'C3',
+      induces: 'SIM_PASS_EXEC_REVERT',
+      summary: 'Arms a trap that springs a block later, so a clean simulation reverts on chain.',
+      signable: true,
+    },
+    {
+      id: 'C4',
+      induces: 'RETRY_STORM',
+      summary: 'Repeats one failing action, burning gas on every attempt.',
+      signable: true,
+    },
+    {
+      id: 'C5',
+      induces: 'SIGNER_GAS_STARVED',
+      summary: 'Drains the signer. Not offered: it would leave your wallet unable to transact.',
+      signable: false,
+    },
+    {
+      id: 'C6',
+      induces: 'ADVERSE_INCLUSION',
+      summary: 'Needs control over block ordering, which no wallet has.',
+      signable: false,
+    },
+  ];
+}

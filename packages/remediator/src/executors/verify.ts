@@ -38,7 +38,14 @@ export class ReceiptVerifier {
     txHash: `0x${string}`;
     chainId: number;
     timeoutMs: number;
-  }): Promise<{ included: boolean; gasUsed?: bigint; uncertain?: boolean; detail?: string }> {
+  }): Promise<{
+    included: boolean;
+    gasUsed?: bigint;
+    /** Needed to turn gas *units* into what the remediation actually cost. */
+    effectiveGasPrice?: bigint;
+    uncertain?: boolean;
+    detail?: string;
+  }> {
     const deadline = this.clock() + params.timeoutMs;
     const client = this.client(params.chainId);
     // Remembers why the last attempt came back empty. "The node says there is
@@ -52,7 +59,13 @@ export class ReceiptVerifier {
         if (receipt) {
           // A reverted receipt is still an unsuccessful remediation. Included
           // is not the same as worked, and the caller is told which.
-          return { included: receipt.status === 'success', gasUsed: receipt.gasUsed };
+          return {
+            included: receipt.status === 'success',
+            gasUsed: receipt.gasUsed,
+            ...(receipt.effectiveGasPrice !== undefined
+              ? { effectiveGasPrice: receipt.effectiveGasPrice }
+              : {}),
+          };
         }
       } catch (error) {
         // viem throws rather than returning null when a receipt does not exist

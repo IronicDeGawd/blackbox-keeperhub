@@ -26,6 +26,7 @@ import {
   watchSigner,
   type Database,
 } from '@blackbox/store';
+import { PLANNABLE_SCENARIOS, plannableScenarios } from './chaos-plans.js';
 import { EventBus } from './bus.js';
 import { incidentDetail, incidentSummary, type IncidentRow } from './serialise.js';
 
@@ -940,11 +941,26 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     const already = rows.find(
       (row) => row.signer.toLowerCase() === params.signer.toLowerCase() && row.chainId === params.chainId,
     );
-    // Re-registering an address that is already watched is a no-op rather than
-    // an update. The upsert underneath would happily rewrite the label and
-    // agent of a row somebody else created, which is a free way to relabel
-    // another participant's demo — or ours.
-    if (already) return { registered: true };
+    /**
+     * Re-registering an address that is already watched does not rewrite the
+     * row. The upsert underneath would happily replace the label and agent of a
+     * row somebody else created, which is a free way to relabel another
+     * participant's demo — or ours.
+     *
+     * The *claim* still happens, though. It is about the agent id the caller
+     * named, not about the row: an operator registering an address that some
+     * earlier anonymous visitor already watched would otherwise never take
+     * ownership of their own agent, which was exactly the hole the audit found.
+     */
+    if (already) {
+      const claimed = params.caller
+        ? await claimAgent(db, { agentId: short(params.agentId), orgId: params.caller.orgId })
+        : undefined;
+      return {
+        registered: true,
+        ...(claimed ? { owned: claimed !== 'owned_by_another' } : {}),
+      };
+    }
     if (rows.length >= MAX_WATCHED) {
       return {
         registered: false,
@@ -1029,6 +1045,21 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   if (options.chaosPlan) {
     const chaosPlan = options.chaosPlan;
+
+    /**
+     * The catalogue, for a deployment that offers only wallet-signed chaos.
+     *
+     * Registered only when the harness itself is absent, so a process holding a
+     * key still serves its own fuller version above. Without this, a visitor
+     * could plan a scenario the API refused to list — which the audit caught.
+     */
+    if (!options.chaos) {
+      app.get('/api/chaos/scenarios', async () => ({
+        items: plannableScenarios(),
+        signable: PLANNABLE_SCENARIOS,
+        note: 'This deployment holds no key. You sign these with your own wallet.',
+      }));
+    }
 
     // Deliberately a sibling of /api/chaos/run rather than a mode of it. The
     // two differ in who pays and who signs, which is the whole distinction

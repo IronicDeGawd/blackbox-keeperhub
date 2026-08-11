@@ -371,7 +371,14 @@ export async function stats(
     .map((i) => i.detectedAt.getTime() - i.firstEventAt.getTime())
     .filter((ms) => ms >= 0);
 
-  const remediated = incidentRows.filter((i) => i.resolvedAt && i.resolvedBy === 'blackbox');
+  /**
+   * Both count as Blackbox remediating: one it signed itself, one it planned
+   * and an owner's wallet signed through its route. Counting only the first
+   * left the statistic null for a run that plainly was a remediation.
+   */
+  const remediated = incidentRows.filter(
+    (i) => i.resolvedAt && (i.resolvedBy === 'blackbox' || i.resolvedBy === 'blackbox-proposed'),
+  );
   const remediationLatencies = remediated
     .map((i) => i.resolvedAt!.getTime() - i.detectedAt.getTime())
     .filter((ms) => ms >= 0);

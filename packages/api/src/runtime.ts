@@ -521,10 +521,18 @@ export class Runtime {
   async waitForReceipt(
     hash: `0x${string}`,
     timeoutMs = 90_000,
-  ): Promise<{ included: boolean; gasUsed?: bigint }> {
+  ): Promise<{ included: boolean; gasUsed?: bigint; effectiveGasPrice?: bigint }> {
     try {
       const receipt = await this.client.waitForTransactionReceipt({ hash, timeout: timeoutMs });
-      return { included: receipt.status === 'success', gasUsed: receipt.gasUsed };
+      // The price comes back with the receipt, and without it the ledger can
+      // only record gas units.
+      return {
+        included: receipt.status === 'success',
+        gasUsed: receipt.gasUsed,
+        ...(receipt.effectiveGasPrice !== undefined
+          ? { effectiveGasPrice: receipt.effectiveGasPrice }
+          : {}),
+      };
     } catch {
       return { included: false };
     }

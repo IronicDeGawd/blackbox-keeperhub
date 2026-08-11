@@ -342,7 +342,7 @@ describe('P5 top-up', () => {
 
 const executor = (over: Partial<RemediationExecutor> = {}): RemediationExecutor => ({
   submit: async () => ({ txHash: TX }),
-  verify: async () => ({ included: true, gasUsed: 21_000n }),
+  verify: async () => ({ included: true, gasUsed: 21_000n, effectiveGasPrice: 2_000_000_000n }),
   ...over,
 });
 
@@ -415,7 +415,9 @@ describe('remediation outcomes', () => {
     await remediator().remediate(incident());
     const rows = await db.select().from(remediationLedger);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.gasSpentWei).toBe('21000');
+    // Cost, not gas units: 21,000 gas at 2 gwei. Recording the count here is
+    // what made /api/stats report a real remediation as 21,000 wei.
+    expect(rows[0]!.gasSpentWei).toBe('42000000000000');
     expect(rows[0]!.txHash).toBe(TX);
   });
 
@@ -435,7 +437,7 @@ describe('per-signer mutex', () => {
       executor: executor({
         verify: async () => {
           observedDuringVerify = r.busySigners;
-          return { included: true, gasUsed: 21_000n };
+          return { included: true, gasUsed: 21_000n, effectiveGasPrice: 2_000_000_000n };
         },
       }),
     });
