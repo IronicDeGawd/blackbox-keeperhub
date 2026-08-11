@@ -18,6 +18,7 @@ import {
   WorkflowExecutor,
 } from '@blackbox/remediator';
 import {
+  claimAgentForOrg,
   createDb,
   getIncident,
   recentAgentKinds,
@@ -692,6 +693,31 @@ const app = await buildApp({
 
 const port = Number(env['PORT'] ?? 4000);
 await app.listen({ port, host: '0.0.0.0' });
+/**
+ * Claim this deployment's own demo agents for the organisation that runs it.
+ *
+ * Acting requires ownership, and an agent nobody owns answers to nobody — so
+ * without this the deployment's own incidents cannot be remediated or even
+ * acknowledged, by us or by anyone. The demo would show a failure appearing
+ * and then refuse every fix for it.
+ *
+ * Claimed under the same organisation id a sign-in with this key produces, so
+ * the session an operator gets from `POST /api/auth/keeperhub` matches.
+ */
+if (keeperHubOrg && env['KEEPERHUB_ORG_KEY']) {
+  const ownOrgId = await identity.orgIdForKey(env['KEEPERHUB_ORG_KEY']);
+  if (ownOrgId) {
+    const outcome = await claimAgentForOrg(db, {
+      agentId: keeperHubOrg.agentId,
+      orgId: ownOrgId,
+      at: new Date(),
+    });
+    logger.info('demo agent ownership', { agentId: keeperHubOrg.agentId, orgId: ownOrgId, outcome });
+  } else {
+    logger.error('could not resolve this deployment’s own organisation; its demo agents stay unowned');
+  }
+}
+
 // Before the first tick, so the first evaluation knows which incidents are
 // already open rather than filing duplicates for them.
 await runtime.restoreOpenIncidents();

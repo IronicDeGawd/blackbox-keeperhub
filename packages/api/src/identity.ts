@@ -82,6 +82,21 @@ export class Identity {
   ) {}
 
   /**
+   * Which organisation a key belongs to, without minting a session.
+   *
+   * The deployment needs this for its own key: an agent nobody has claimed
+   * cannot be acted on, and its own demo agents are exactly that until it
+   * claims them for itself.
+   */
+  async orgIdForKey(orgKey: string): Promise<string | null> {
+    try {
+      return orgIdFrom(await this.verifier.listKeys(orgKey));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Exchange an organisation key for a session token.
    *
    * The key is used for exactly one request and never written anywhere. The

@@ -21,6 +21,16 @@ export class BlackboxApiError extends Error {
 
 export type BlackboxClientOptions = {
   baseUrl?: string;
+  /**
+   * A Blackbox session token, for the tools that do more than read.
+   *
+   * Reading needs no account, so this is optional and most agents will never
+   * set it. Watching an address or requesting a remediation needs the account
+   * that owns the agent, and without a token those tools can only be refused —
+   * so an agent expected to act must be given one, exactly as a person signing
+   * in to the console is.
+   */
+  token?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 };
@@ -29,11 +39,18 @@ export class BlackboxClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly token: string | undefined;
 
   constructor(options: BlackboxClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? 'http://localhost:4000').replace(/\/$/, '');
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 120_000;
+    this.token = options.token && options.token.trim() !== '' ? options.token.trim() : undefined;
+  }
+
+  /** Whether this client can do anything beyond reading. */
+  get authenticated(): boolean {
+    return this.token !== undefined;
   }
 
   private async request<T>(
@@ -42,7 +59,10 @@ export class BlackboxClient {
   ): Promise<T> {
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method: init.method ?? 'GET',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+      },
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });

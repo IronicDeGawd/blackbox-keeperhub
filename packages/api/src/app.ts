@@ -8,6 +8,7 @@ import {
   claimAgent,
   mayAct,
   mayRemediate,
+  ownerOf,
   type Caller,
   type Identity,
 } from './identity.js';
@@ -1660,12 +1661,32 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     const existing = (await activeSigners(db)).find(
       (r) => r.signer === signer.toLowerCase() && r.chainId === chainId,
     );
-    if (existing && !(await mayRemediateHere(existing.agentId, request))) {
-      return reply.code(403).send({
-        error: 'forbidden',
-        detail: `Agent ${existing.agentId} belongs to another organisation.`,
-        requestId: request.id,
-      });
+    /**
+     * Who may stop watching an address.
+     *
+     * Its owner, always. And any signed-in caller when the agent has no owner
+     * at all — those rows were registered anonymously before registration
+     * needed an account, and the ownership rule would otherwise strand them
+     * forever: nobody can claim them by unwatching, and every one costs a
+     * comparison against every transaction in every block, for as long as the
+     * deployment lives.
+     *
+     * Requiring a session is what keeps this from being a way for a passer-by
+     * to switch off somebody's detection.
+     */
+    if (existing) {
+      const caller = await callerOf(request);
+      const owner = options.identity ? await ownerOf(db, existing.agentId) : null;
+      const allowed = !options.identity || (owner ? caller?.orgId === owner : caller !== null);
+      if (!allowed) {
+        return reply.code(owner ? 403 : 401).send({
+          error: owner ? 'forbidden' : 'unauthorized',
+          detail: owner
+            ? `Agent ${existing.agentId} belongs to another organisation.`
+            : `Sign in to stop watching ${existing.agentId}; nobody has claimed it.`,
+          requestId: request.id,
+        });
+      }
     }
     await unwatchSigner(db, signer, chainId);
     return { signer: signer.toLowerCase(), chainId, watching: false };

@@ -9,7 +9,16 @@ import { buildMcpServer } from './server.js';
  * corrupts the stream, so status goes to stderr.
  */
 const baseUrl = process.env['BLACKBOX_API_URL'] ?? 'http://localhost:4000';
-const server = buildMcpServer({ baseUrl });
+/**
+ * Optional, because reading needs no account. Without it the tools that act —
+ * watching an address, requesting a remediation — can only be refused, and say
+ * so rather than failing obscurely.
+ */
+const token = process.env['BLACKBOX_TOKEN'];
+const server = buildMcpServer({ baseUrl, ...(token ? { token } : {}) });
 
 await server.connect(new StdioServerTransport());
-console.error(`blackbox mcp server ready, talking to ${baseUrl}`);
+console.error(
+  `blackbox mcp server ready, talking to ${baseUrl}` +
+    (token ? ' (signed in)' : ' (read-only: set BLACKBOX_TOKEN to act)'),
+);

@@ -2,8 +2,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type { FastifyInstance } from 'fastify';
 import { blackboxConfigSchema, CHAIN_IDS, type BlackboxConfig } from '@blackbox/core';
 import {
+  activeSigners,
+  claimAgentForOrg,
   createDb,
   getKeeperhubConnection,
+  watchSigner,
   ingestCursors,
   keeperhubConnections,
   listWatchedWorkflows,
@@ -1867,6 +1870,129 @@ describe('signing in with a wallet', () => {
     expect(
       (await server.inject({ method: 'POST', url: '/api/incidents/inc-1/remediate' })).statusCode,
     ).toBe(403);
+  });
+});
+
+describe('audit finding 1 — this deployment owning its own demo agents', () => {
+  /**
+   * Acting requires ownership, and an agent nobody owns answers to nobody — so
+   * a deployment that never claims its own demo agents shows a failure
+   * appearing and then refuses every fix for it, including its own.
+   */
+  it('resolves its own organisation from its own key', async () => {
+    const identity = new Identity(db, { listKeys: async () => [{ id: 'org-mine' }, { id: 'zz' }] });
+    expect(await identity.orgIdForKey('kh_x')).toBe('org-mine');
+  });
+
+  it('says so rather than guessing when the key cannot be resolved', async () => {
+    const identity = new Identity(db, {
+      listKeys: async () => {
+        throw new Error('their side is down');
+      },
+    });
+    expect(await identity.orgIdForKey('kh_x')).toBeNull();
+  });
+
+  /** Claimed, the deployment can act on its own incidents; a stranger cannot. */
+  it('lets the owning organisation act once the agent is claimed', async () => {
+    const identity = new Identity(db, { listKeys: async () => [{ id: 'org-mine' }] });
+    const orgId = (await identity.orgIdForKey('kh_x'))!;
+    await claimAgentForOrg(db, { agentId: 'keeperhub-org', orgId, at: new Date() });
+
+    const signIn = await identity.signIn('kh_x');
+    if (!signIn.ok) throw new Error('fixture sign-in failed');
+    await saveIncident(db, row({ agentId: 'keeperhub-org' }) as never);
+    const server = await app({
+      identity,
+      remediate: async () => ({ accepted: true, guards: [] }),
+    });
+
+    const mine = await server.inject({
+      method: 'POST',
+      url: '/api/incidents/inc-1/remediate',
+      headers: { authorization: `Bearer ${signIn.token}` },
+    });
+    expect(mine.statusCode).toBe(202);
+
+    const anonymous = await server.inject({ method: 'POST', url: '/api/incidents/inc-1/remediate' });
+    expect(anonymous.statusCode).toBe(403);
+  });
+});
+
+describe('audit finding 4 — a row nobody owns', () => {
+  const signedIn = async (orgKeyId: string) => {
+    const identity = new Identity(db, { listKeys: async () => [{ id: orgKeyId }] });
+    const result = await identity.signIn('kh_x');
+    if (!result.ok) throw new Error('fixture sign-in failed');
+    return { identity, token: result.token };
+  };
+
+  /**
+   * Rows registered anonymously, before registration needed an account, have
+   * no owner — and the ownership rule would strand them for ever: nobody can
+   * claim them, and each costs a comparison against every transaction in every
+   * block for as long as the deployment lives.
+   */
+  const orphan = async () => {
+    const mine = await signedIn('org-a');
+    const server = await app({ identity: mine.identity });
+    await watchSigner(db, {
+      signer: SIGNER,
+      chainId: CHAIN_IDS.sepolia,
+      agentId: 'orphaned',
+      label: 'from before',
+      at: new Date(),
+    });
+    return { server, token: mine.token };
+  };
+
+  it('may be removed by any signed-in caller', async () => {
+    const { server, token } = await orphan();
+    const res = await server.inject({
+      method: 'DELETE',
+      url: `/api/watched/${SIGNER}?chainId=${CHAIN_IDS.sepolia}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await activeSigners(db)).toEqual([]);
+  });
+
+  /** Still not a way for a passer-by to switch off somebody's detection. */
+  it('is not removable by an anonymous caller', async () => {
+    const { server } = await orphan();
+    const res = await server.inject({
+      method: 'DELETE',
+      url: `/api/watched/${SIGNER}?chainId=${CHAIN_IDS.sepolia}`,
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().detail).toContain('nobody has claimed it');
+    expect(await activeSigners(db)).toHaveLength(1);
+  });
+
+  it('an owned row still answers only to its owner', async () => {
+    const mine = await signedIn('org-a');
+    const theirs = await signedIn('org-b');
+    const server = await app({ identity: mine.identity });
+    await server.inject({
+      method: 'POST',
+      url: '/api/watched',
+      headers: { authorization: `Bearer ${mine.token}` },
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'mine' },
+    });
+
+    const stranger = await server.inject({
+      method: 'DELETE',
+      url: `/api/watched/${SIGNER}?chainId=${CHAIN_IDS.sepolia}`,
+      headers: { authorization: `Bearer ${theirs.token}` },
+    });
+    expect(stranger.statusCode).toBe(403);
+
+    const owner = await server.inject({
+      method: 'DELETE',
+      url: `/api/watched/${SIGNER}?chainId=${CHAIN_IDS.sepolia}`,
+      headers: { authorization: `Bearer ${mine.token}` },
+    });
+    expect(owner.statusCode).toBe(200);
   });
 });
 
