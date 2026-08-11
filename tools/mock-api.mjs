@@ -767,8 +767,11 @@ function readBody(req) {
   });
 }
 
-server.listen(PORT, () => {
-  console.log(`mock Blackbox API on http://localhost:${PORT}`);
+// Binding is explicit so this can be put on a tailnet address without also
+// appearing on every other interface the machine happens to have.
+const HOST = process.env.HOST ?? '0.0.0.0';
+server.listen(PORT, HOST, () => {
+  console.log(`mock Blackbox API on http://${HOST}:${PORT}`);
   console.log('  GET  /api/incidents            list + filters');
   console.log('  GET  /api/incidents/:id        detail with events');
   console.log('  POST /api/incidents/:id/remediate');
