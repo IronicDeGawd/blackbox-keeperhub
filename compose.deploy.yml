@@ -76,6 +76,11 @@ services:
       BLACKBOX_EVENT_WEBHOOK_URL: ${BLACKBOX_EVENT_WEBHOOK_URL:-}
       BLACKBOX_EVENT_WEBHOOK_SECRET: ${BLACKBOX_EVENT_WEBHOOK_SECRET:-}
       BLACKBOX_EVENT_WEBHOOK_TYPES: ${BLACKBOX_EVENT_WEBHOOK_TYPES:-}
+      # Encrypts the one credential Blackbox keeps that belongs to somebody
+      # else: an operator's read-only KeeperHub refresh token. Unset means
+      # connecting an account is refused outright rather than stored in the
+      # clear, and /api/config says so.
+      BLACKBOX_ENCRYPTION_KEY: ${BLACKBOX_ENCRYPTION_KEY:-}
       KH_MANAGED_WALLET_ADDRESS: ${KH_MANAGED_WALLET_ADDRESS:-}
       KH_ORG_ID: ${KH_ORG_ID:-}
       # Deliberately absent: CHAOS_SIGNER_PRIVATE_KEY. This deployment holds no
