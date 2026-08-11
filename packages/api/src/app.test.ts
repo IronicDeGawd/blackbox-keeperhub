@@ -6,11 +6,14 @@ import {
   incidents,
   recordRemediationAttempt,
   remediationLedger,
+  agentOwners,
+  orgSessions,
   saveIncident,
   watchedSigners,
   type Database,
 } from '@blackbox/store';
 import { buildApp } from './app.js';
+import { Identity } from './identity.js';
 import { EventBus } from './bus.js';
 import { summarise } from './serialise.js';
 
@@ -31,6 +34,8 @@ beforeEach(async () => {
   await db.delete(remediationLedger);
   await db.delete(incidents);
   await db.delete(watchedSigners);
+  await db.delete(agentOwners);
+  await db.delete(orgSessions);
 });
 
 const config = (): BlackboxConfig =>
@@ -600,5 +605,174 @@ describe('summary fact names match what the rules emit', () => {
     expect(line('RETRY_STORM', { attemptCount: 4, totalGasBurned: '89000000000000' })).toContain(
       '4 failed attempts',
     );
+  });
+});
+
+describe('ownership', () => {
+  const verifier = (keys: string[]) => ({ listKeys: async () => keys.map((id) => ({ id })) });
+  // Two organisations. Note the shared "k9": one org's key list is its own.
+  const identityFor = (keys: string[]) => new Identity(db, verifier(keys));
+
+  const signedIn = async (keys: string[]): Promise<{ identity: Identity; token: string }> => {
+    const identity = identityFor(keys);
+    const result = await identity.signIn('kh_test_key');
+    if (!result.ok) throw new Error('sign-in failed in fixture');
+    return { identity, token: result.token };
+  };
+
+  const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+
+  it('turns an organisation key into a session, and never stores the key', async () => {
+    const identity = identityFor(['k2', 'k1']);
+    const instance = await app({ identity });
+    const res = await instance.inject({
+      method: 'POST',
+      url: '/api/auth/keeperhub',
+      payload: { orgKey: 'kh_secret_value' },
+    });
+    expect(res.statusCode).toBe(201);
+    // The identity is the lowest key id, so a second key of the same org lands
+    // in the same tenant rather than a new one.
+    expect(res.json().orgId).toBe('k1');
+
+    const stored = await db.select().from(orgSessions);
+    const serialised = JSON.stringify(stored);
+    expect(serialised).not.toContain('kh_secret_value');
+    expect(serialised).not.toContain(res.json().token);
+  });
+
+  it('refuses a webhook key, which reads fine and executes nothing', async () => {
+    const res = await (await app({ identity: identityFor(['k1']) })).inject({
+      method: 'POST',
+      url: '/api/auth/keeperhub',
+      payload: { orgKey: 'wfb_webhook' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects a key KeeperHub does not accept', async () => {
+    const identity = new Identity(db, {
+      listKeys: async () => Promise.reject(new Error('401')),
+    });
+    const res = await (await app({ identity })).inject({
+      method: 'POST',
+      url: '/api/auth/keeperhub',
+      payload: { orgKey: 'kh_wrong' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  /** The point of all of it: another operator cannot spend gas on your agent. */
+  it('lets only the owner remediate a claimed agent', async () => {
+    const mine = await signedIn(['org-a']);
+    const theirs = await signedIn(['org-b']);
+    const instance = await app({
+      identity: mine.identity,
+      remediate: async () => ({ accepted: true, guards: [] }),
+    });
+
+    const registered = await instance.inject({
+      method: 'POST',
+      url: '/api/watched',
+      headers: bearer(mine.token),
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'mine' },
+    });
+    expect(registered.statusCode).toBe(201);
+    expect(registered.json().owned).toBe(true);
+    await saveIncident(db, row({ agentId: 'mine' }) as never);
+
+    const byOwner = await instance.inject({
+      method: 'POST',
+      url: '/api/incidents/inc-1/remediate',
+      headers: bearer(mine.token),
+    });
+    expect(byOwner.statusCode).toBe(202);
+
+    const byStranger = await instance.inject({
+      method: 'POST',
+      url: '/api/incidents/inc-1/remediate',
+      headers: bearer(theirs.token),
+    });
+    expect(byStranger.statusCode).toBe(403);
+
+    const byAnonymous = await instance.inject({
+      method: 'POST',
+      url: '/api/incidents/inc-1/remediate',
+    });
+    expect(byAnonymous.statusCode).toBe(403);
+  });
+
+  // An unclaimed agent stays open, which is what keeps the public demo working.
+  it('leaves an unclaimed agent actionable by anyone', async () => {
+    await saveIncident(db, row({ agentId: 'demo' }) as never);
+    const res = await (
+      await app({ identity: identityFor(['k1']), remediate: async () => ({ accepted: true, guards: [] }) })
+    ).inject({ method: 'POST', url: '/api/incidents/inc-1/remediate' });
+    expect(res.statusCode).toBe(202);
+  });
+
+  it('refuses to register an address under an agent id another organisation owns', async () => {
+    const mine = await signedIn(['org-a']);
+    const theirs = await signedIn(['org-b']);
+    const instance = await app({ identity: mine.identity });
+    await instance.inject({
+      method: 'POST',
+      url: '/api/watched',
+      headers: bearer(mine.token),
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'mine' },
+    });
+
+    const res = await instance.inject({
+      method: 'POST',
+      url: '/api/watched',
+      headers: bearer(theirs.token),
+      payload: {
+        signer: '0x1111111111111111111111111111111111111111',
+        chainId: CHAIN_IDS.sepolia,
+        agentId: 'mine',
+      },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().detail).toContain('another organisation');
+  });
+
+  it('shows a visitor the public agents and a signed-in operator their own too', async () => {
+    const mine = await signedIn(['org-a']);
+    const instance = await app({ identity: mine.identity, publicAgentIds: ['demo'] });
+    await instance.inject({
+      method: 'POST',
+      url: '/api/watched',
+      headers: bearer(mine.token),
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'mine' },
+    });
+    await saveIncident(db, row({ id: 'inc-demo', agentId: 'demo' }) as never);
+    await saveIncident(db, row({ id: 'inc-mine', agentId: 'mine', key: 'k2' }) as never);
+
+    const anon = await instance.inject({ method: 'GET', url: '/api/incidents' });
+    expect(anon.json().items.map((i: { id: string }) => i.id)).toEqual(['inc-demo']);
+
+    const owner = await instance.inject({
+      method: 'GET',
+      url: '/api/incidents',
+      headers: bearer(mine.token),
+    });
+    expect(owner.json().items.map((i: { id: string }) => i.id).sort()).toEqual([
+      'inc-demo',
+      'inc-mine',
+    ]);
+  });
+
+  it('stops honouring a revoked session', async () => {
+    const mine = await signedIn(['org-a']);
+    const instance = await app({ identity: mine.identity });
+    expect(
+      (await instance.inject({ method: 'GET', url: '/api/auth/session', headers: bearer(mine.token) }))
+        .statusCode,
+    ).toBe(200);
+    await instance.inject({ method: 'POST', url: '/api/auth/signout', headers: bearer(mine.token) });
+    expect(
+      (await instance.inject({ method: 'GET', url: '/api/auth/session', headers: bearer(mine.token) }))
+        .statusCode,
+    ).toBe(401);
   });
 });

@@ -272,3 +272,55 @@ export const remediationLedger = pgTable(
     byIncident: index('remediation_ledger_incident_idx').on(t.incidentId),
   }),
 );
+
+/**
+ * An operator's session, proved by a KeeperHub organisation key.
+ *
+ * The key itself is never stored — it is a bearer credential for someone
+ * else's account, and holding one would make this database worth stealing.
+ * What is stored is a hash of the session token we issued and a hash of the
+ * key, the latter only so the same key resolves to the same session rather
+ * than minting a new one on every sign-in.
+ */
+export const orgSessions = pgTable(
+  'org_sessions',
+  {
+    /** SHA-256 of the token handed to the caller. The token is never at rest. */
+    tokenHash: text('token_hash').primaryKey(),
+    /**
+     * Stable identity for the organisation: the lowest key id in the org's own
+     * key list, which every key belonging to that organisation can see. There
+     * is no endpoint that names an organisation — `/api/organizations` answers
+     * 401 and `/api/organization` and `/api/me` do not exist — so this is
+     * derived rather than read.
+     */
+    orgId: text('org_id').notNull(),
+    keyHash: text('key_hash').notNull(),
+    label: text('label'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull(),
+    /** Revocation is one update, and a revoked session is kept for the audit. */
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => ({
+    byKey: index('org_sessions_key_idx').on(t.keyHash),
+    byOrg: index('org_sessions_org_idx').on(t.orgId),
+  }),
+);
+
+/**
+ * Who owns an agent, and may therefore act on it.
+ *
+ * First registration claims it. A claim is not a security boundary against the
+ * chain — anyone can watch a public address — it is a boundary against acting:
+ * remediating, relabelling, or spending another operator's budget.
+ */
+export const agentOwners = pgTable(
+  'agent_owners',
+  {
+    agentId: text('agent_id').primaryKey(),
+    orgId: text('org_id').notNull(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }).notNull(),
+  },
+  (t) => ({ byOrg: index('agent_owners_org_idx').on(t.orgId) }),
+);

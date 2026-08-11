@@ -31,6 +31,7 @@ import {
   type Channel,
 } from '@blackbox/alerter';
 import { diagnosticianFromEnv, keeperHubFromEnv, Runtime } from './runtime.js';
+import { httpKeyVerifier, Identity } from './identity.js';
 
 /**
  * Composition root.
@@ -168,6 +169,23 @@ const alerter = new Alerter({
   },
   logger,
 });
+
+/**
+ * Sign-in with a KeeperHub organisation key.
+ *
+ * Always on: it costs nothing when nobody uses it, and without it every agent
+ * stays unowned and every action stays open to anyone who can reach the URL.
+ */
+const identity = new Identity(db, httpKeyVerifier(env['KEEPERHUB_API_URL']));
+
+/**
+ * Agents any visitor may read. Unset means all of them, which is right for a
+ * local run and for a deployment that hosts only its own demo agents. Set it
+ * once real operators are signing in.
+ */
+const publicAgentIds = env['BLACKBOX_PUBLIC_AGENTS']
+  ? env['BLACKBOX_PUBLIC_AGENTS'].split(',').map((a) => a.trim()).filter(Boolean)
+  : undefined;
 
 const runtime = new Runtime({
   db,
@@ -352,6 +370,8 @@ const app = await buildApp({
   db,
   config,
   bus,
+  identity,
+  ...(publicAgentIds ? { publicAgentIds } : {}),
   // Diagnosis spends a model call, and the route is open to anyone. The
   // background loop already refuses to explain the same incident twice for
   // this reason; the on-demand path needs the same memory, or the same hash

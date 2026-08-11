@@ -4,6 +4,13 @@ import rateLimit from '@fastify/rate-limit';
 import { CHAINS, getChain, type BlackboxConfig } from '@blackbox/core';
 import { rulesFor } from '@blackbox/detector';
 import {
+  agentsOwnedBy,
+  claimAgent,
+  mayAct,
+  type Caller,
+  type Identity,
+} from './identity.js';
+import {
   activeSigners,
   eventsByIds,
   getIncident,
@@ -130,6 +137,18 @@ export type AppOptions = {
   logger?: boolean;
   /** Request budget per caller. Absent means the defaults, which are not off. */
   rateLimits?: { perMinute?: number };
+  /**
+   * Sign-in with a KeeperHub organisation key. Absent leaves every agent
+   * unowned and every action open, which is the right default for a local run
+   * and the wrong one for a deployment.
+   */
+  identity?: Identity;
+  /**
+   * Agents any visitor may read. Unset means all of them, which keeps a local
+   * run and the public demo legible; set on a deployment that hosts more than
+   * its own demo agents.
+   */
+  publicAgentIds?: readonly string[];
 };
 
 const DEFAULT_CHAIN = 11155111;
@@ -239,6 +258,82 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     return { ...result, updatedAt: result.updatedAt.toISOString() };
   });
 
+  /**
+   * Who is asking. Absent for anyone who has not signed in, which is most
+   * callers and is fine — signing in is what makes an agent *yours*, not what
+   * makes the product usable.
+   */
+  const callerOf = async (request: { headers: Record<string, unknown> }): Promise<Caller | null> => {
+    if (!options.identity) return null;
+    const header = String(request.headers['authorization'] ?? '');
+    const token = header.startsWith('Bearer ') ? header.slice(7) : undefined;
+    return options.identity.caller(token);
+  };
+
+  /**
+   * Which agents this caller may read: the public set, plus anything they own.
+   * Null means no restriction at all — the local default.
+   */
+  const readableAgents = async (caller: Caller | null): Promise<string[] | null> => {
+    if (!options.publicAgentIds) return null;
+    const owned = caller ? await agentsOwnedBy(db, caller.orgId) : [];
+    return [...new Set([...options.publicAgentIds, ...owned])];
+  };
+
+  if (options.identity) {
+    const identity = options.identity;
+
+    /**
+     * Exchange an organisation key for a session token.
+     *
+     * The key is used for one verifying request and never stored. Rate-limited
+     * hard because it is the one route where guessing has a prize.
+     */
+    app.post('/api/auth/keeperhub', costly(5), async (request, reply) => {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const orgKey = typeof body['orgKey'] === 'string' ? body['orgKey'].trim() : '';
+      // A webhook key reads fine and executes nothing, so accepting one would
+      // hand back a session that cannot do what its holder expects.
+      if (!orgKey.startsWith('kh_')) {
+        return reply.code(400).send({
+          error: 'bad_request',
+          detail: 'A KeeperHub organisation key (kh_…) is required.',
+          requestId: request.id,
+        });
+      }
+      const label = typeof body['label'] === 'string' ? body['label'].slice(0, 64) : undefined;
+      const result = await identity.signIn(orgKey, label);
+      if (!result.ok) {
+        return reply.code(401).send({
+          error: 'unauthorized',
+          detail:
+            result.reason === 'no_keys'
+              ? 'That key is valid but names no organisation we can pin it to.'
+              : 'KeeperHub rejected that key.',
+          requestId: request.id,
+        });
+      }
+      return reply.code(201).send({ token: result.token, orgId: result.orgId });
+    });
+
+    app.post('/api/auth/signout', async (request) => {
+      const header = String(request.headers['authorization'] ?? '');
+      if (header.startsWith('Bearer ')) await identity.revoke(header.slice(7));
+      return { signedOut: true };
+    });
+
+    /** What this session is, and what it owns. */
+    app.get('/api/auth/session', async (request, reply) => {
+      const caller = await callerOf(request);
+      if (!caller) {
+        return reply
+          .code(401)
+          .send({ error: 'unauthorized', detail: 'No session.', requestId: request.id });
+      }
+      return { orgId: caller.orgId, agents: await agentsOwnedBy(db, caller.orgId) };
+    });
+  }
+
   app.get('/api/incidents', async (request) => {
     const q = request.query as Record<string, string | undefined>;
     const limit = q['limit'] ? Math.min(Number(q['limit']), 200) : 50;
@@ -252,10 +347,15 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       ...(q['chainId'] ? { chainId: Number(q['chainId']) } : {}),
       ...(q['since'] ? { since: new Date(q['since']) } : {}),
     });
+    // Filtered after the query rather than inside it: the visible set is small,
+    // and doing it here keeps one rule in one place instead of threading a
+    // tenant through every store function.
+    const readable = await readableAgents(await callerOf(request));
+    const visible = readable ? rows.filter((r) => readable.includes(r.agentId)) : rows;
     return {
-      items: rows.map((row) => incidentSummary(row as IncidentRow)),
+      items: visible.map((row) => incidentSummary(row as IncidentRow)),
       nextCursor: null,
-      total: rows.length,
+      total: visible.length,
     };
   });
 
@@ -298,6 +398,19 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         return reply
           .code(404)
           .send({ error: 'not_found', detail: `Incident ${id} not found`, requestId: request.id });
+      }
+
+      /**
+       * Remediation spends real gas on someone's agent. An unclaimed agent is
+       * open — that is what keeps the public demo working — but a claimed one
+       * answers only to the organisation that claimed it.
+       */
+      if (!(await mayAct(db, row.agentId, await callerOf(request)))) {
+        return reply.code(403).send({
+          error: 'forbidden',
+          detail: `Agent ${row.agentId} belongs to another organisation.`,
+          requestId: request.id,
+        });
       }
 
       const result = await remediate(id);
@@ -390,7 +503,27 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     chainId: number;
     agentId: string;
     label: string;
-  }): Promise<{ registered: boolean; reason?: string }> => {
+    caller?: Caller | null;
+  }): Promise<{
+    registered: boolean;
+    reason?: string;
+    /** Distinguishes "not yours" from "we are full"; they are different answers. */
+    code?: 'forbidden' | 'watch_limit';
+    owned?: boolean;
+  }> => {
+    /**
+     * Registering under an agent id someone else owns would put their incidents
+     * and this address in one bucket, and every ownership check downstream
+     * reads that bucket. Refused before anything is written.
+     */
+    if (!(await mayAct(db, params.agentId, params.caller ?? null))) {
+      return {
+        registered: false,
+        code: 'forbidden',
+        reason: `Agent ${params.agentId} belongs to another organisation.`,
+      };
+    }
+
     const rows = await activeSigners(db);
     const already = rows.find(
       (row) => row.signer.toLowerCase() === params.signer.toLowerCase() && row.chainId === params.chainId,
@@ -403,23 +536,33 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     if (rows.length >= MAX_WATCHED) {
       return {
         registered: false,
+        code: 'watch_limit',
         reason: `This deployment is already watching ${MAX_WATCHED} addresses, which is its ceiling`,
       };
     }
+    const agentId = short(params.agentId);
     await watchSigner(db, {
       signer: params.signer,
       chainId: params.chainId,
-      agentId: short(params.agentId),
+      agentId,
       label: short(params.label),
       at: new Date(),
     });
-    return { registered: true };
+    // Claimed on first registration by a signed-in caller. An anonymous
+    // registration leaves the agent unowned and open, which is what the demo
+    // relies on and what lets someone try this before signing in.
+    const claimed = params.caller
+      ? await claimAgent(db, { agentId, orgId: params.caller.orgId })
+      : undefined;
+    return { registered: true, ...(claimed ? { owned: claimed !== 'owned_by_another' } : {}) };
   };
 
-  app.get('/api/watched', async () => {
+  app.get('/api/watched', async (request) => {
     const rows = await activeSigners(db);
+    const readable = await readableAgents(await callerOf(request));
+    const visible = readable ? rows.filter((r) => readable.includes(r.agentId)) : rows;
     return {
-      items: rows.map((row) => ({
+      items: visible.map((row) => ({
         signer: row.signer,
         chainId: row.chainId,
         agentId: row.agentId,
@@ -455,11 +598,21 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       chainId,
       agentId: String(body['agentId'] ?? signer.slice(0, 10)),
       label: String(body['label'] ?? ''),
+      caller: await callerOf(request),
     });
     if (!result.registered) {
-      return reply.code(429).send({ error: 'watch_limit', detail: result.reason, requestId: request.id });
+      const forbidden = result.code === 'forbidden';
+      return reply
+        .code(forbidden ? 403 : 429)
+        .send({ error: result.code, detail: result.reason, requestId: request.id });
     }
-    return reply.code(201).send({ signer: signer.toLowerCase(), chainId, watching: true });
+    return reply.code(201).send({
+      signer: signer.toLowerCase(),
+      chainId,
+      watching: true,
+      // Present only for a signed-in caller: whether this agent is now theirs.
+      ...(result.owned !== undefined ? { owned: result.owned } : {}),
+    });
   });
 
   if (options.chaosPlan) {
@@ -514,6 +667,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
           chainId,
           agentId: String(body['agentId'] ?? signer.slice(0, 10)),
           label: String(body['label'] ?? 'self-signed chaos'),
+          caller: await callerOf(request),
         });
         watching = result.registered;
         // Worth saying out loud rather than handing back a plan that will be
@@ -558,10 +712,20 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     });
   }
 
-  app.delete('/api/watched/:signer', async (request) => {
+  app.delete('/api/watched/:signer', async (request, reply) => {
     const { signer } = request.params as { signer: string };
     const q = request.query as Record<string, string | undefined>;
     const chainId = Number(q['chainId'] ?? DEFAULT_CHAIN);
+    const existing = (await activeSigners(db)).find(
+      (r) => r.signer === signer.toLowerCase() && r.chainId === chainId,
+    );
+    if (existing && !(await mayAct(db, existing.agentId, await callerOf(request)))) {
+      return reply.code(403).send({
+        error: 'forbidden',
+        detail: `Agent ${existing.agentId} belongs to another organisation.`,
+        requestId: request.id,
+      });
+    }
     await unwatchSigner(db, signer, chainId);
     return { signer: signer.toLowerCase(), chainId, watching: false };
   });

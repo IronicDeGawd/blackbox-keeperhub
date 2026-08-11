@@ -5,7 +5,9 @@ import type { ExecutionEvent } from '@blackbox/core';
 import {
   executionEvents,
   incidents,
+  agentOwners,
   ingestCursors,
+  orgSessions,
   signerState,
   watchedExecutions,
   watchedSigners,
@@ -669,4 +671,68 @@ export async function activeSigners(db: Database, chainId?: number): Promise<Wat
     chainId !== undefined ? eq(watchedSigners.chainId, chainId) : undefined,
   ].filter((c): c is NonNullable<typeof c> => c !== undefined);
   return db.select().from(watchedSigners).where(and(...clauses));
+}
+
+// --- identity ---------------------------------------------------------------
+// A KeeperHub organisation key is a bearer credential for someone else's
+// account. None of these functions accept or return one: the API hashes before
+// it calls, so a key never reaches this layer and never reaches the disk.
+
+export async function createOrgSession(
+  db: Database,
+  params: { tokenHash: string; orgId: string; keyHash: string; label?: string | null; at: Date },
+): Promise<void> {
+  await db.insert(orgSessions).values({
+    tokenHash: params.tokenHash,
+    orgId: params.orgId,
+    keyHash: params.keyHash,
+    label: params.label ?? null,
+    createdAt: params.at,
+    lastSeenAt: params.at,
+  });
+}
+
+/** A revoked session resolves to nothing, and stays on the table for the audit. */
+export async function findOrgSession(
+  db: Database,
+  tokenHash: string,
+): Promise<{ orgId: string } | null> {
+  const [row] = await db
+    .select()
+    .from(orgSessions)
+    .where(and(eq(orgSessions.tokenHash, tokenHash), isNull(orgSessions.revokedAt)))
+    .limit(1);
+  return row ? { orgId: row.orgId } : null;
+}
+
+export async function touchOrgSession(db: Database, tokenHash: string, at: Date): Promise<void> {
+  await db.update(orgSessions).set({ lastSeenAt: at }).where(eq(orgSessions.tokenHash, tokenHash));
+}
+
+export async function revokeOrgSession(db: Database, tokenHash: string, at: Date): Promise<void> {
+  await db.update(orgSessions).set({ revokedAt: at }).where(eq(orgSessions.tokenHash, tokenHash));
+}
+
+export async function ownerOfAgent(db: Database, agentId: string): Promise<string | null> {
+  const [row] = await db.select().from(agentOwners).where(eq(agentOwners.agentId, agentId)).limit(1);
+  return row?.orgId ?? null;
+}
+
+export async function agentsOwnedByOrg(db: Database, orgId: string): Promise<string[]> {
+  const rows = await db.select().from(agentOwners).where(eq(agentOwners.orgId, orgId));
+  return rows.map((r) => r.agentId);
+}
+
+/** First registration wins; a second claim by the same org is not an error. */
+export async function claimAgentForOrg(
+  db: Database,
+  params: { agentId: string; orgId: string; at: Date },
+): Promise<'claimed' | 'already_yours' | 'owned_by_another'> {
+  const existing = await ownerOfAgent(db, params.agentId);
+  if (existing) return existing === params.orgId ? 'already_yours' : 'owned_by_another';
+  await db
+    .insert(agentOwners)
+    .values({ agentId: params.agentId, orgId: params.orgId, claimedAt: params.at })
+    .onConflictDoNothing({ target: agentOwners.agentId });
+  return 'claimed';
 }
