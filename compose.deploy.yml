@@ -59,6 +59,22 @@ services:
       # model needs no key in this file or in the image.
       GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
       BLACKBOX_TICK_MS: ${BLACKBOX_TICK_MS:-15000}
+      # What this deployment calls itself. OAuth registers a redirect built
+      # from it, and KeeperHub will refuse any other one — so without this the
+      # sign-in link points at the container's own loopback address and the
+      # operator lands nowhere.
+      BLACKBOX_PUBLIC_URL: ${BLACKBOX_PUBLIC_URL:-}
+      # Agents any visitor may read. Unset means all of them, which is correct
+      # while this hosts only demo agents and anyone may run wallet-signed
+      # chaos under an agent named after their own address. Set it once real
+      # operators sign in, or their incidents are readable by strangers.
+      BLACKBOX_PUBLIC_AGENTS: ${BLACKBOX_PUBLIC_AGENTS:-}
+      BLACKBOX_ALERT_WEBHOOK_URL: ${BLACKBOX_ALERT_WEBHOOK_URL:-}
+      BLACKBOX_ALERT_WEBHOOK_FORMAT: ${BLACKBOX_ALERT_WEBHOOK_FORMAT:-}
+      BLACKBOX_ALERT_MIN_SEVERITY: ${BLACKBOX_ALERT_MIN_SEVERITY:-critical}
+      BLACKBOX_ALERT_QUIET_HOURS: ${BLACKBOX_ALERT_QUIET_HOURS:-}
+      KH_MANAGED_WALLET_ADDRESS: ${KH_MANAGED_WALLET_ADDRESS:-}
+      KH_ORG_ID: ${KH_ORG_ID:-}
       # Deliberately absent: CHAOS_SIGNER_PRIVATE_KEY. This deployment holds no
       # key, so /api/chaos/run and server-signed remediation do not exist on it
       # — visitors sign their own chaos and their own fixes. Setting it here
