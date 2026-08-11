@@ -35,6 +35,7 @@ import { httpKeyVerifier, Identity } from './identity.js';
 import { KeeperHubOAuth } from './oauth.js';
 import { Webhooks } from './webhooks.js';
 import { installEventTrigger, installScheduledSweep } from './triggers.js';
+import { EventWebhook } from './event-webhook.js';
 
 /**
  * Composition root.
@@ -422,6 +423,25 @@ const triggers =
           }),
       }
     : undefined;
+
+/**
+ * Raw events out, for a system rather than a person. Distinct from alerting on
+ * purpose: an alert is deduplicated and severity-filtered because a human is
+ * reading it, and that editing is exactly wrong for a pipeline that wants
+ * everything.
+ */
+if (env['BLACKBOX_EVENT_WEBHOOK_URL']) {
+  new EventWebhook({
+    url: env['BLACKBOX_EVENT_WEBHOOK_URL'],
+    ...(env['BLACKBOX_EVENT_WEBHOOK_SECRET']
+      ? { secret: env['BLACKBOX_EVENT_WEBHOOK_SECRET'] }
+      : {}),
+    ...(env['BLACKBOX_EVENT_WEBHOOK_TYPES']
+      ? { types: env['BLACKBOX_EVENT_WEBHOOK_TYPES'].split(',').map((t) => t.trim()) }
+      : {}),
+    logger,
+  }).attach(bus);
+}
 
 const app = await buildApp({
   db,
