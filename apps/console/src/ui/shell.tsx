@@ -123,7 +123,8 @@ export function StatsStrip({ stats }: { stats: Stats | null }): React.JSX.Elemen
 type Destination = { to: string; label: string; needs?: keyof Capabilities };
 
 const DESTINATIONS: Destination[] = [
-  { to: '/', label: 'Timeline' },
+  { to: '/', label: 'Overview' },
+  { to: '/timeline', label: 'Timeline' },
   { to: '/incidents', label: 'Incidents' },
   { to: '/inspect', label: 'Inspect', needs: 'diagnose' },
   { to: '/watched', label: 'Watched' },
@@ -150,8 +151,9 @@ export function Rail({ capabilities }: { capabilities: Capabilities | null }): R
             className="rail__link"
             activeProps={{ className: 'rail__link rail__link--active' }}
             // Exact, or /incidents lights up while reading /incidents/inc-1,
-            // which is a different destination.
-            activeOptions={{ exact: true }}
+            // which is a different destination. Search is excluded, or a
+            // filtered timeline stops lighting up the link that leads to it.
+            activeOptions={{ exact: true, includeSearch: false }}
           >
             {destination.label}
           </Link>

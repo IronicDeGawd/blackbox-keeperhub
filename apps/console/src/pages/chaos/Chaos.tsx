@@ -205,11 +205,11 @@ export function Chaos(): React.JSX.Element {
                 {entry.expectedDetectionSeconds !== undefined ? (
                   <>
                     Expected to be detected within about {entry.expectedDetectionSeconds}s. Watch it
-                    arrive on the <Link to="/">timeline</Link>.
+                    arrive on the <Link to="/timeline">timeline</Link>.
                   </>
                 ) : (
                   <>
-                    Watch it arrive on the <Link to="/">timeline</Link>.
+                    Watch it arrive on the <Link to="/timeline">timeline</Link>.
                   </>
                 )}
               </p>

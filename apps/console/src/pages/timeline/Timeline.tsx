@@ -30,7 +30,7 @@ export function Timeline(): React.JSX.Element {
    */
   const update = (patch: TimelineSearchPatch): void => {
     void navigate({
-      to: '/',
+      to: '/timeline',
       search: (previous) => {
         const next: Record<string, unknown> = { ...previous };
         for (const [field, value] of Object.entries(patch)) {
@@ -44,7 +44,7 @@ export function Timeline(): React.JSX.Element {
   };
 
   const clear = (): void => {
-    void navigate({ to: '/', search: {}, replace: true });
+    void navigate({ to: '/timeline', search: {}, replace: true });
   };
 
   const filtered = activeFilterCount(search) > 0;

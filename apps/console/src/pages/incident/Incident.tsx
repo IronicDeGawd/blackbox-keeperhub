@@ -80,7 +80,7 @@ export function Incident(): React.JSX.Element {
         <div className="panel panel--accent state" role="alert">
           <p className="state__lead">Could not load {id}.</p>
           <p className="soft">{error.detail}</p>
-          <Link to="/" className="mono">
+          <Link to="/timeline" className="mono">
             ← back to the timeline
           </Link>
         </div>

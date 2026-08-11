@@ -60,7 +60,7 @@ export function validateSearch(search: Record<string, unknown>): TimelineSearch 
 
 export const timelineRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/',
+  path: '/timeline',
   component: Timeline,
   validateSearch,
 });

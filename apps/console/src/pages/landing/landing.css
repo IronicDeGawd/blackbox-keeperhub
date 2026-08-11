@@ -1,0 +1,196 @@
+/*
+ * The landing page. It is the only page allowed the display size, and it is
+ * still built from the same parts as everything else: hairlines, mono labels,
+ * one accent left-border for emphasis. No card, no shadow, no gradient — a
+ * marketing hero here would undercut the exact thing the page is claiming.
+ */
+
+.landing {
+  gap: var(--s7);
+  padding-bottom: var(--s7);
+}
+
+/* --- statement ----------------------------------------------------------- */
+
+.landing__statement {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  max-width: 74ch;
+}
+
+.landing__headline {
+  font-size: var(--t-display);
+  line-height: 1.18;
+  letter-spacing: -0.02em;
+  margin: var(--s2) 0 0;
+  color: var(--ink);
+}
+
+.landing__lead {
+  margin: 0;
+  font-size: var(--t-lead);
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+.landing__claim {
+  margin: 0;
+  padding: var(--s3) var(--s4);
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+/* --- how it works -------------------------------------------------------- */
+
+/* Four steps side by side at the design width, stacking before they crush. */
+.landing__steps {
+  list-style: none;
+  margin: var(--s4) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.landing__step {
+  padding: var(--s4);
+  border-right: 1px solid var(--rule);
+}
+
+.landing__step:last-child {
+  border-right: none;
+}
+
+.landing__step-n {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.14em;
+  color: var(--accent);
+}
+
+.landing__step-head {
+  font-size: var(--t-base);
+  margin: var(--s1) 0 var(--s2);
+  color: var(--ink);
+}
+
+.landing__step-body {
+  margin: 0;
+  font-size: var(--t-body);
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
+/* --- start here ---------------------------------------------------------- */
+
+.landing__destinations {
+  list-style: none;
+  margin: var(--s4) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--s4) var(--s6);
+}
+
+.landing__destination {
+  border-left: 1px solid var(--rule);
+  padding-left: var(--s4);
+}
+
+.landing__destination-link {
+  font-family: var(--font-mono);
+  font-size: var(--t-base);
+  font-weight: 600;
+}
+
+.landing__destination-line {
+  margin: var(--s1) 0 0;
+  font-size: var(--t-body);
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
+/* --- proof --------------------------------------------------------------- */
+
+.landing__note {
+  margin: var(--s3) 0 var(--s4);
+  font-size: var(--t-body);
+  color: var(--ink-faint);
+}
+
+.landing__proof {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.landing__proof th,
+.landing__proof td {
+  text-align: left;
+  padding: var(--s2) var(--s4);
+  border-bottom: 1px solid var(--rule);
+  vertical-align: baseline;
+}
+
+.landing__proof thead th {
+  font-size: var(--t-micro);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  background: var(--surface-sunk);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.landing__proof tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.landing__proof tbody tr:hover {
+  background: var(--surface-sunk);
+}
+
+/* The hash column never wraps; the description is the part that gives. */
+.landing__proof td:last-child {
+  white-space: nowrap;
+}
+
+.landing__proof-what {
+  color: var(--ink-soft);
+  font-family: var(--font-sans);
+  min-width: 32ch;
+}
+
+@media (max-width: 1000px) {
+  .landing__steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* On two columns the right-hand rule of the first column is wrong. */
+  .landing__step:nth-child(2n) {
+    border-right: none;
+  }
+  .landing__step:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--rule);
+  }
+}
+
+@media (max-width: 620px) {
+  .landing__steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .landing__step {
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+  }
+  .landing__step:last-child {
+    border-bottom: none;
+  }
+}

@@ -56,7 +56,7 @@ export function IncidentsTable(): React.JSX.Element {
             {filtered ? <span className="dim"> matching</span> : null}
           </h1>
           <span className="row__gap" />
-          <Link to="/" className="linkbutton">
+          <Link to="/timeline" className="linkbutton">
             open the timeline
           </Link>
         </div>
