@@ -335,11 +335,29 @@ export type Stats = {
  * detection" would read as instant detection rather than as no data, and this
  * number is one a viewer will quote.
  */
-export async function stats(db: Database, now: Date = new Date()): Promise<Stats> {
-  const [incidentRows, ledgerRows] = await Promise.all([
+export async function stats(
+  db: Database,
+  now: Date = new Date(),
+  /**
+   * Restrict to these agents. Undefined means every agent, which is right for a
+   * deployment that hosts only its own; a caller-scoped console must pass its
+   * own list, or the numbers describe other people's failures.
+   */
+  agentIds?: readonly string[],
+): Promise<Stats> {
+  const [allIncidents, allLedger] = await Promise.all([
     db.select().from(incidents).orderBy(desc(incidents.detectedAt)).limit(500),
     db.select().from(remediationLedger).orderBy(desc(remediationLedger.attemptedAt)).limit(500),
   ]);
+  const incidentRows = agentIds
+    ? allIncidents.filter((row) => agentIds.includes(row.agentId))
+    : allIncidents;
+  // The ledger has no agent column, so it is narrowed through the incidents
+  // that survived the filter.
+  const visibleIncidentIds = new Set(incidentRows.map((row) => row.id));
+  const ledgerRows = agentIds
+    ? allLedger.filter((row) => visibleIncidentIds.has(row.incidentId))
+    : allLedger;
 
   const open = incidentRows.filter((i) => i.status !== 'resolved' && i.status !== 'acknowledged');
   const countSeverity = (severity: string): number =>
@@ -380,10 +398,12 @@ export async function stats(db: Database, now: Date = new Date()): Promise<Stats
 }
 
 /** Distinct agents seen, with their signers, chains and open incident counts. */
-export async function listAgents(db: Database): Promise<
-  { agentId: string; signers: string[]; chainIds: number[]; openIncidents: number }[]
-> {
-  const rows = await db.select().from(incidents).limit(1000);
+export async function listAgents(
+  db: Database,
+  agentIds?: readonly string[],
+): Promise<{ agentId: string; signers: string[]; chainIds: number[]; openIncidents: number }[]> {
+  const all = await db.select().from(incidents).limit(1000);
+  const rows = agentIds ? all.filter((row) => agentIds.includes(row.agentId)) : all;
   const byAgent = new Map<string, { signers: Set<string>; chainIds: Set<number>; open: number }>();
   for (const row of rows) {
     const entry = byAgent.get(row.agentId) ?? { signers: new Set(), chainIds: new Set(), open: 0 };

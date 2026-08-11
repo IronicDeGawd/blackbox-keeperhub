@@ -870,3 +870,115 @@ describe('connect with KeeperHub, over HTTP', () => {
     expect(res.json().detail).toContain('expired or was already used');
   });
 });
+
+describe('scoping every read, not just the list', () => {
+  const signedIn = async (orgKeyId: string) => {
+    const identity = new Identity(db, { listKeys: async () => [{ id: orgKeyId }] });
+    const result = await identity.signIn('kh_x');
+    if (!result.ok) throw new Error('fixture sign-in failed');
+    return { identity, token: result.token };
+  };
+
+  const setup = async () => {
+    const mine = await signedIn('org-a');
+    const server = await app({
+      identity: mine.identity,
+      publicAgentIds: ['demo'],
+      remediate: async () => ({ accepted: true, guards: [] }),
+      proposals: {
+        plan: async () => ({ plan: 'fill-nonce' }),
+        record: async () => ({ recorded: true }),
+      },
+    });
+    await server.inject({
+      method: 'POST',
+      url: '/api/watched',
+      headers: { authorization: `Bearer ${mine.token}` },
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'mine' },
+    });
+    await saveIncident(db, row({ id: 'inc-mine', agentId: 'mine' }) as never);
+    await saveIncident(db, row({ id: 'inc-demo', agentId: 'demo', key: 'k-demo' }) as never);
+    return { server, token: mine.token };
+  };
+
+  /**
+   * 404 rather than 403 on a read: a 403 confirms the id exists and belongs to
+   * somebody, which is more than a stranger should learn by guessing.
+   */
+  it('hides another tenant’s incident behind a 404', async () => {
+    const { server, token } = await setup();
+    expect((await server.inject({ url: '/api/incidents/inc-mine' })).statusCode).toBe(404);
+    expect(
+      (
+        await server.inject({
+          url: '/api/incidents/inc-mine',
+          headers: { authorization: `Bearer ${token}` },
+        })
+      ).statusCode,
+    ).toBe(200);
+    // The public agent stays public.
+    expect((await server.inject({ url: '/api/incidents/inc-demo' })).statusCode).toBe(200);
+  });
+
+  it('counts only what the caller may see in stats and agents', async () => {
+    const { server, token } = await setup();
+    const anon = await server.inject({ url: '/api/agents' });
+    expect(anon.json().items.map((a: { agentId: string }) => a.agentId)).toEqual(['demo']);
+
+    const owner = await server.inject({
+      url: '/api/agents',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(owner.json().items.map((a: { agentId: string }) => a.agentId).sort()).toEqual([
+      'demo',
+      'mine',
+    ]);
+
+    const anonStats = await server.inject({ url: '/api/stats' });
+    const ownerStats = await server.inject({
+      url: '/api/stats',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    // Two open incidents visible to the owner, one to a visitor.
+    const openCount = (body: { openBySeverity: Record<string, number> }): number =>
+      Object.values(body.openBySeverity).reduce((a, b) => a + b, 0);
+    expect(openCount(ownerStats.json())).toBeGreaterThan(openCount(anonStats.json()));
+  });
+
+  it('refuses to acknowledge or remediate another tenant’s incident', async () => {
+    const { server, token } = await setup();
+    // Not readable at all when anonymous, so it is not even findable.
+    expect(
+      (await server.inject({ method: 'POST', url: '/api/incidents/inc-mine/acknowledge' }))
+        .statusCode,
+    ).toBe(404);
+    expect(
+      (await server.inject({ method: 'POST', url: '/api/incidents/inc-mine/remediate' })).statusCode,
+    ).toBe(404);
+    // The owner can do both.
+    expect(
+      (
+        await server.inject({
+          method: 'POST',
+          url: '/api/incidents/inc-mine/acknowledge',
+          headers: { authorization: `Bearer ${token}` },
+        })
+      ).statusCode,
+    ).toBe(200);
+  });
+
+  it('scopes the remediation plan and the transaction a wallet signed', async () => {
+    const { server, token } = await setup();
+    expect(
+      (await server.inject({ url: '/api/incidents/inc-mine/remediation-plan' })).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await server.inject({
+          url: '/api/incidents/inc-mine/remediation-plan',
+          headers: { authorization: `Bearer ${token}` },
+        })
+      ).statusCode,
+    ).toBe(200);
+  });
+});

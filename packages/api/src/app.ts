@@ -259,8 +259,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     },
   }));
 
-  app.get('/api/stats', async () => {
-    const result = await stats(db);
+  app.get('/api/stats', async (request) => {
+    const readable = await readableAgents(await callerOf(request));
+    const result = await stats(db, new Date(), readable ?? undefined);
     return { ...result, updatedAt: result.updatedAt.toISOString() };
   });
 
@@ -446,9 +447,29 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     };
   });
 
+  /**
+   * Fetch an incident this caller is allowed to see.
+   *
+   * An incident they may not read answers 404, not 403: a 403 would confirm
+   * that an id exists and belongs to somebody, which is more than a stranger
+   * should learn from guessing. Acting on one they do not own is a different
+   * question and answers 403, because by then they have named an agent they
+   * can already see.
+   */
+  const readableIncident = async (
+    request: { headers: Record<string, unknown> },
+    id: string,
+  ): Promise<NonNullable<Awaited<ReturnType<typeof getIncident>>> | null> => {
+    const row = await getIncident(db, id);
+    if (!row) return null;
+    const readable = await readableAgents(await callerOf(request));
+    if (readable && !readable.includes(row.agentId)) return null;
+    return row;
+  };
+
   app.get('/api/incidents/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const row = await getIncident(db, id);
+    const row = await readableIncident(request, id);
     if (!row) {
       return reply
         .code(404)
@@ -464,11 +485,20 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   app.post('/api/incidents/:id/acknowledge', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const row = await getIncident(db, id);
+    const row = await readableIncident(request, id);
     if (!row) {
       return reply
         .code(404)
         .send({ error: 'not_found', detail: `Incident ${id} not found`, requestId: request.id });
+    }
+    // Acknowledging silences an alarm. On somebody else's agent that is not a
+    // small rudeness — it is hiding a live failure from the people who own it.
+    if (!(await mayAct(db, row.agentId, await callerOf(request)))) {
+      return reply.code(403).send({
+        error: 'forbidden',
+        detail: `Agent ${row.agentId} belongs to another organisation.`,
+        requestId: request.id,
+      });
     }
     await saveIncident(db, { ...row, status: 'acknowledged' });
     const summary = incidentSummary({ ...row, status: 'acknowledged' } as IncidentRow);
@@ -480,7 +510,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     const remediate = options.remediate;
     app.post('/api/incidents/:id/remediate', async (request, reply) => {
       const { id } = request.params as { id: string };
-      const row = await getIncident(db, id);
+      const row = await readableIncident(request, id);
       if (!row) {
         return reply
           .code(404)
@@ -513,7 +543,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     // What transaction would fix this, and who has to sign it. Read-only.
     app.get('/api/incidents/:id/remediation-plan', async (request, reply) => {
       const { id } = request.params as { id: string };
-      if (!(await getIncident(db, id))) {
+      if (!(await readableIncident(request, id))) {
         return reply
           .code(404)
           .send({ error: 'not_found', detail: `Incident ${id} not found`, requestId: request.id });
@@ -524,10 +554,20 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     // A transaction the owner's wallet signed, offered as the remediation.
     app.post('/api/incidents/:id/remediation-tx', async (request, reply) => {
       const { id } = request.params as { id: string };
-      if (!(await getIncident(db, id))) {
+      const incident = await readableIncident(request, id);
+      if (!incident) {
         return reply
           .code(404)
           .send({ error: 'not_found', detail: `Incident ${id} not found`, requestId: request.id });
+      }
+      // Recording a remediation writes to somebody's history and closes their
+      // incident. Only the owner may say what fixed their agent.
+      if (!(await mayAct(db, incident.agentId, await callerOf(request)))) {
+        return reply.code(403).send({
+          error: 'forbidden',
+          detail: `Agent ${incident.agentId} belongs to another organisation.`,
+          requestId: request.id,
+        });
       }
 
       const body = (request.body ?? {}) as Record<string, unknown>;
@@ -558,8 +598,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     });
   }
 
-  app.get('/api/agents', async () => {
-    const agents = await listAgents(db);
+  app.get('/api/agents', async (request) => {
+    const readable = await readableAgents(await callerOf(request));
+    const agents = await listAgents(db, readable ?? undefined);
     const watched = await activeSigners(db);
     return {
       items: agents.map((agent) => ({
@@ -890,7 +931,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   }
 
   // --- SSE ------------------------------------------------------------------
-  app.get('/api/stream', (request, reply) => {
+  app.get('/api/stream', async (request, reply) => {
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -903,7 +944,29 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     };
 
     send('hello', { at: new Date().toISOString(), chainId: DEFAULT_CHAIN });
-    const unsubscribe = bus.subscribe((event) => send(event.type, event.data));
+
+    /**
+     * A live feed is still a read, and it was the one place scoping had no
+     * effect: every subscriber received every incident as it happened,
+     * whichever agent it belonged to.
+     *
+     * Resolved once, when the stream opens, rather than per event — a query
+     * per subscriber per incident would turn a busy tick into a stampede. The
+     * cost is that an agent claimed *during* a long-lived stream is not
+     * included until the client reconnects, which a console does on every
+     * navigation.
+     */
+    const readablePromise = readableAgents(await callerOf(request));
+
+    const unsubscribe = bus.subscribe((event) => {
+      void readablePromise.then((readable) => {
+        const agentId = (event.data as { agentId?: unknown } | null)?.agentId;
+        // An event that names no agent is infrastructure, not somebody's
+        // failure, so it is not filtered by an agent it does not have.
+        if (readable && typeof agentId === 'string' && !readable.includes(agentId)) return;
+        send(event.type, event.data);
+      });
+    });
     // Proxies drop an idle connection; a comment frame is not an event and the
     // client ignores it.
     const keepAlive = setInterval(() => reply.raw.write(': ping\n\n'), 15_000);
