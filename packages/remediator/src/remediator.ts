@@ -1,7 +1,13 @@
-import type { BlackboxConfig, Incident, RemediationRecord } from '@blackbox/core';
+import type { AgentKind, BlackboxConfig, Incident, RemediationRecord } from '@blackbox/core';
 import { recordRemediationAttempt, type Database } from '@blackbox/store';
 import { evaluateGuards, mutexKey, type GuardName } from './guards.js';
-import { playbookFor, type PlaybookPlan, type PlanContext } from './playbooks.js';
+import {
+  playbookFor,
+  servability,
+  type ExecutorKind,
+  type PlaybookPlan,
+  type PlanContext,
+} from './playbooks.js';
 
 /**
  * Submits the transaction a playbook planned and reports what happened.
@@ -26,7 +32,13 @@ export type RemediationExecutor = {
     txHash: `0x${string}`;
     incident: Incident;
     timeoutMs: number;
-  }): Promise<{ included: boolean; gasUsed?: bigint }>;
+  }): Promise<{
+    included: boolean;
+    gasUsed?: bigint;
+    effectiveGasPrice?: bigint;
+    uncertain?: boolean;
+    detail?: string;
+  }>;
 };
 
 export type MarketData = {
@@ -45,6 +57,17 @@ export type RemediatorOptions = {
   /** Registered circuit breakers, by agent id (P4). */
   breakers?: Record<string, `0x${string}`>;
   fundingWallet?: `0x${string}`;
+  /**
+   * How the agent behind an incident executes, when it has been established.
+   * Absent means unknown, and an unknown agent is offered every playbook —
+   * declining on a guess would refuse a fix somebody could have used.
+   */
+  agentKind?: (incident: Incident) => AgentKind | undefined;
+  /**
+   * What this deployment can actually execute with. Defaults to the executor
+   * it was given, which is the honest answer for a process holding one.
+   */
+  executorKinds?: readonly ExecutorKind[];
   logger?: { info: (m: string, d?: unknown) => void; error: (m: string, d?: unknown) => void };
 };
 
@@ -65,6 +88,11 @@ export class Remediator {
     this.now = options.now ?? (() => new Date());
   }
 
+  /** What this process can execute with, as the router understands it. */
+  private executors(): readonly ExecutorKind[] {
+    return this.options.executorKinds ?? ['signer', 'keeperhub', 'keeperhub-workflow'];
+  }
+
   get busySigners(): string[] {
     return [...this.inFlight];
   }
@@ -82,6 +110,22 @@ export class Remediator {
     if (!playbook) {
       return {
         record: skipped('none', 'skipped_by_policy', this.now(), `no playbook handles ${incident.class}`),
+        guardsFailed: [],
+      };
+    }
+
+    /**
+     * Refuse before spending anything, and say why.
+     *
+     * "No remediation available" is a worse answer than "this agent's nonces
+     * are managed by KeeperHub, so a replacement submission is not something
+     * anyone here can send". The first sounds like a missing feature; the
+     * second is a fact about the agent that an operator can act on.
+     */
+    const serve = servability(playbook, this.options.agentKind?.(incident), this.executors());
+    if (!serve.servable) {
+      return {
+        record: skipped(playbook.id, 'skipped_by_policy', this.now(), serve.reason ?? 'not servable'),
         guardsFailed: [],
       };
     }
@@ -149,6 +193,7 @@ export class Remediator {
       });
       let included = false;
       let gasUsed: bigint | undefined;
+      let gasSpentWei: bigint | undefined;
       let failureReason: string | undefined;
 
       try {
@@ -159,7 +204,23 @@ export class Remediator {
         });
         included = verified.included;
         gasUsed = verified.gasUsed;
-        if (!included) failureReason = 'submitted but not confirmed within the verify timeout';
+        // What it cost, rather than how much gas it burned. Without the price
+        // the ledger records a count of gas in a column named for wei, which
+        // understates every remediation by roughly nine orders of magnitude.
+        gasSpentWei =
+          verified.gasUsed !== undefined && verified.effectiveGasPrice !== undefined
+            ? verified.gasUsed * verified.effectiveGasPrice
+            : undefined;
+        if (!included) {
+          // Says which of the two happened. An operator deciding whether to
+          // resubmit needs to know the difference between "the chain did not
+          // include it" and "we never managed to ask", and resubmitting a
+          // transaction that actually landed is its own incident.
+          failureReason = verified.uncertain
+            ? `submitted, but inclusion could not be verified — ${verified.detail ?? 'no node answered'}. ` +
+              `This is not proof it failed; check the hash before resubmitting.`
+            : 'submitted but not confirmed within the verify timeout';
+        }
       } catch (error) {
         failureReason = `verification failed: ${(error as Error).message}`;
       }
@@ -169,7 +230,7 @@ export class Remediator {
         playbook.id,
         startedAt,
         included ? 'succeeded' : 'failed',
-        gasUsed,
+        gasSpentWei,
         txHash,
         executor,
       );
@@ -235,7 +296,7 @@ export class Remediator {
     playbookId: string,
     at: Date,
     status: string,
-    gasUsed?: bigint,
+    gasSpentWei?: bigint,
     txHash?: string,
     executor?: string,
   ): Promise<void> {
@@ -247,8 +308,12 @@ export class Remediator {
       playbookId,
       signer: incident.signer,
       chainId: incident.chainId,
+      // What the per-agent daily cap counts.
+      agentId: incident.agentId,
       attemptedAt: at,
-      ...(gasUsed !== undefined ? { gasSpentWei: gasUsed } : {}),
+      // Cost, not units. `gasUsed` is a count of gas; what the budget guard
+      // and the ledger care about is what it was bought for.
+      ...(gasSpentWei !== undefined ? { gasSpentWei } : {}),
       status,
       ...(txHash ? { txHash } : {}),
       ...(executor ? { executor } : {}),

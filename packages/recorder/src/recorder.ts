@@ -3,6 +3,7 @@ import {
   normaliseExecution,
   type BlackboxConfig,
   type ExecutionEvent,
+  type Incident,
   type KeeperHubExecution,
 } from '@blackbox/core';
 import {
@@ -27,6 +28,7 @@ import {
 import type { CorroborationProvider } from './corroboration.js';
 import { enrichEvents, type TransactionProvider } from './enrich.js';
 import { buildEventFromChain, type ChainReader } from './chain-source.js';
+import type { KeeperHubIngestResult } from './keeperhub-source.js';
 
 /** The one call the recorder makes against KeeperHub. */
 export type ExecutionFetcher = {
@@ -41,6 +43,25 @@ export type RecorderOptions = {
   transactions?: TransactionProvider;
   /** Optional. Observes transactions that have no KeeperHub execution record. */
   chain?: ChainReader;
+  /**
+   * Optional. Ingests the organisation's whole run history, including runs
+   * Blackbox never submitted — the audit trail the PRD calls the input.
+   */
+  keeperHubRuns?: { ingest(): Promise<KeeperHubIngestResult> };
+  /**
+   * Optional. Announces incidents somewhere a person will see them. Absent
+   * means detection still works and stays inside the process — which is what
+   * every deployment did before this existed.
+   */
+  alerter?: { consider(incident: Incident): Promise<unknown> };
+  /**
+   * Reads the organisation's daily execution budget, for SPEND_CAP_EXHAUSTED.
+   * Absent means that rule declines rather than guesses, which is correct: a
+   * budget we cannot read is not a budget we can say anything about.
+   */
+  spendLimits?: {
+    getSpendingLimits(): Promise<{ dailyCapWei: string | null; dailyUsedWei: string | null }>;
+  };
   config: BlackboxConfig;
   tracker: IncidentTracker;
   makeId: () => string;
@@ -55,6 +76,8 @@ export type TickResult = {
   polled: number;
   settled: number;
   eventsInserted: number;
+  /** Runs read from the organisation's KeeperHub history this tick. */
+  runsIngested: number;
   signersEvaluated: number;
   incidentsCreated: number;
   incidentsUpdated: number;
@@ -91,6 +114,7 @@ export class Recorder {
       polled: 0,
       settled: 0,
       eventsInserted: 0,
+      runsIngested: 0,
       signersEvaluated: 0,
       incidentsCreated: 0,
       incidentsUpdated: 0,
@@ -101,6 +125,23 @@ export class Recorder {
     const due = await dueExecutions(this.options.db, this.batchSize);
     /** Signers touched this tick, so evaluation is scoped to what changed. */
     const touched = new Map<string, { signer: `0x${string}`; chainId: number; agentId: string }>();
+
+    // Runs first: an organisation's history is the widest input, and the
+    // signers it touches deserve the same evaluation as a watched execution.
+    if (this.options.keeperHubRuns) {
+      try {
+        const ingested = await this.options.keeperHubRuns.ingest();
+        result.runsIngested += ingested.runsIngested;
+        result.eventsInserted += ingested.eventsInserted;
+        result.errors += ingested.errors;
+        for (const target of ingested.touched) {
+          touched.set(`${target.signer}|${target.chainId}`, target);
+        }
+      } catch (error) {
+        result.errors += 1;
+        this.options.logger?.error('keeperhub run ingest failed', { error });
+      }
+    }
 
     for (const watched of due) {
       try {
@@ -240,12 +281,32 @@ export class Recorder {
     });
 
     const c = corroboration as { latestNonce?: number };
+    /**
+     * A managed wallet has no nonce queue of its own — KeeperHub owns gas
+     * estimation, nonce management and ordering, and submits from a shared
+     * relayer. Nonces read for such an account belong to KeeperHub's traffic,
+     * not this agent's, so deriving a gap from them would manufacture evidence
+     * for an incident the agent cannot have.
+     */
+    const managed = window.some((e) => e.agentKind === 'keeperhub');
+    /**
+     * Established from what was actually recorded, not configured. A window
+     * with no kind on any event leaves this undefined, and every rule is
+     * offered the window — the old behaviour, which is right for an agent we
+     * have not classified.
+     */
+    const agentKind = managed
+      ? ('keeperhub' as const)
+      : window.some((e) => e.agentKind === 'signer')
+        ? ('signer' as const)
+        : undefined;
+
     // The gap is derived from what we observed being submitted, not from
     // pending minus latest: a queued transaction does not raise the pending
     // count, so those two are equal during a real gap. The counter is durable
     // so R2 survives a restart mid-gap.
     let consecutiveGapPolls: number | undefined;
-    if (c.latestNonce !== undefined) {
+    if (c.latestNonce !== undefined && !managed) {
       const { missingNonces } = findNonceGap(window, c.latestNonce);
       consecutiveGapPolls = await recordGapObservation(this.options.db, {
         signer: target.signer,
@@ -255,15 +316,38 @@ export class Recorder {
       });
     }
 
+    /**
+     * Read once per evaluation, and only for a managed wallet — a signer-kind
+     * agent pays its own gas, so an organisation budget says nothing about it.
+     * A failure here degrades to no spend-cap rule rather than no evaluation.
+     */
+    let spendCap: { dailyCapWei: bigint | null; dailyUsedWei: bigint } | undefined;
+    if (managed && this.options.spendLimits) {
+      try {
+        const limits = await this.options.spendLimits.getSpendingLimits();
+        spendCap = {
+          dailyCapWei: limits.dailyCapWei === null ? null : BigInt(limits.dailyCapWei),
+          dailyUsedWei: BigInt(limits.dailyUsedWei ?? '0'),
+        };
+      } catch (error) {
+        this.options.logger?.error('spend cap read failed', { error });
+      }
+    }
+
     const ctx: RuleContext = {
       now,
       detection: detectionFor(this.options.config, target.chainId),
       agentId: target.agentId,
       signer: target.signer,
       chainId: target.chainId,
+      ...(agentKind ? { agentKind } : {}),
       corroboration: {
         ...corroboration,
         ...(consecutiveGapPolls !== undefined ? { consecutiveGapPolls } : {}),
+        // Without this, a rule reading `latestNonce` cannot tell a wallet whose
+        // nonces the agent controls from one whose nonces it does not.
+        ...(managed ? { managedNonces: true } : {}),
+        ...(spendCap ? { spendCap } : {}),
       },
     };
 
@@ -291,6 +375,15 @@ export class Recorder {
         rca: incident.rca ?? null,
         remediation: incident.remediation ?? null,
       });
+
+      // After the save, so an alert never describes a state that was not
+      // persisted. The alerter decides whether this is worth saying at all.
+      try {
+        await this.options.alerter?.consider(incident);
+      } catch (error) {
+        // Delivery is not allowed to cost a detection.
+        this.options.logger?.error('alerting failed', { incidentId: incident.id, error });
+      }
     }
 
     return { created: created.length, updated: updated.length, resolved: resolved.length };

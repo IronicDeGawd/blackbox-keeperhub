@@ -6,6 +6,7 @@ import {
   executionEvents,
   incidents,
   listIncidents,
+  insertEvents,
   signerState,
   watchedExecutions,
   watchExecution,
@@ -87,6 +88,7 @@ const makeRecorder = (over: {
   corroboration?: CorroborationProvider;
   now?: () => Date;
   tracker?: IncidentTracker;
+  alerter?: { consider(incident: never): Promise<unknown> };
 }) => {
   let n = 0;
   return new Recorder({
@@ -99,6 +101,7 @@ const makeRecorder = (over: {
     tracker: over.tracker ?? new IncidentTracker({ makeId: () => `inc-${n++}` }),
     makeId: () => `evt-${n++}`,
     now: over.now ?? (() => T0),
+    ...(over.alerter ? { alerter: over.alerter } : {}),
   });
 };
 
@@ -354,6 +357,102 @@ describe('detection through the full pipeline', () => {
     await recorder.tick();
     const [state] = await db.select().from(signerState);
     expect(state!.consecutiveGapPolls).toBe(1);
+  });
+
+  // The end of the chain: a detection that nobody hears about is worth little.
+  it('announces an incident it just persisted', async () => {
+    await watchExecution(db, {
+      executionId: 'stuck-1',
+      agentId: 'chaos',
+      signer: SIGNER,
+      chainId: CHAIN,
+      submitted: { nonce: 5 },
+      at: T0,
+    });
+    const announced: string[] = [];
+    const recorder = makeRecorder({
+      fetch: async (id) => pendingExecution(id),
+      corroboration: { gather: async () => ({ latestNonce: 5, pendingNonce: 6 }) },
+      now: () => new Date(T0.getTime() + 200_000),
+      alerter: {
+        consider: async (incident: { id: string; class: string }) => {
+          announced.push(`${incident.class}:${incident.id}`);
+        },
+      },
+    });
+
+    await recorder.tick();
+    expect(announced).toHaveLength(1);
+    expect(announced[0]).toContain('STUCK_TRANSACTION');
+  });
+
+  // Delivery is not allowed to cost a detection.
+  it('records the incident even when announcing it throws', async () => {
+    await watchExecution(db, {
+      executionId: 'stuck-1',
+      agentId: 'chaos',
+      signer: SIGNER,
+      chainId: CHAIN,
+      submitted: { nonce: 5 },
+      at: T0,
+    });
+    const recorder = makeRecorder({
+      fetch: async (id) => pendingExecution(id),
+      corroboration: { gather: async () => ({ latestNonce: 5, pendingNonce: 6 }) },
+      now: () => new Date(T0.getTime() + 200_000),
+      alerter: { consider: async () => Promise.reject(new Error('pager down')) },
+    });
+
+    const result = await recorder.tick();
+    expect(result.incidentsCreated).toBe(1);
+    expect(await listIncidents(db)).toHaveLength(1);
+  });
+
+  /**
+   * The same reading, for an agent that cannot have a nonce gap. KeeperHub owns
+   * nonce management for a managed wallet and submits from a shared relayer, so
+   * a nonce read for that account describes KeeperHub's traffic. Counting a gap
+   * from it would be evidence for an incident the agent is structurally
+   * incapable of having.
+   */
+  it('does not derive a nonce gap for a managed wallet', async () => {
+    await insertEvents(db, [
+      {
+        id: 'kh-1',
+        sourceId: 'run-1:0',
+        logicalActionId: 'run-1',
+        attemptIndex: 0,
+        agentId: 'org',
+        signer: SIGNER,
+        chainId: CHAIN,
+        agentKind: 'keeperhub',
+        trigger: { kind: 'api' },
+        simulation: { performed: true, success: true },
+        submission: { nonce: 7, submittedAt: T0, route: 'unknown' },
+        outcome: { status: 'pending' },
+        raw: {},
+        ingestedAt: T0,
+      },
+    ]);
+
+    // Registered so the tick evaluates this signer at all.
+    await watchExecution(db, {
+      executionId: 'kh-exec',
+      agentId: 'org',
+      signer: SIGNER,
+      chainId: CHAIN,
+      submitted: { nonce: 7 },
+      at: T0,
+    });
+    const recorder = makeRecorder({
+      fetch: async (id) => pendingExecution(id),
+      corroboration: { gather: async () => ({ latestNonce: 6, pendingNonce: 8 }) },
+      now: () => new Date(T0.getTime() + 200_000),
+    });
+    await recorder.tick();
+
+    // No gap observation recorded at all, rather than one recorded as absent.
+    expect(await db.select().from(signerState)).toHaveLength(0);
   });
 });
 

@@ -31,6 +31,19 @@ export const executionEvents = pgTable(
     signer: text('signer').notNull(),
     chainId: integer('chain_id').notNull(),
 
+    /**
+     * How this agent executes, and therefore which rules can apply to it.
+     *
+     * `keeperhub` means a managed wallet: KeeperHub owns gas estimation, nonce
+     * management and ordering, so such an agent has no nonce queue of its own
+     * and cannot have a nonce gap. `signer` means an agent holding its own key,
+     * which can. Null is an event recorded before the distinction existed, and
+     * reads as unknown rather than as either kind.
+     */
+    agentKind: text('agent_kind'),
+    /** The KeeperHub workflow this run belonged to, when it was one. */
+    workflowId: text('workflow_id'),
+
     // Flattened because rules filter on these; the rest stays in JSONB.
     txHash: text('tx_hash'),
     nonce: integer('nonce'),
@@ -134,12 +147,18 @@ export const ingestCursors = pgTable('ingest_cursors', {
 /**
  * Executions the recorder is watching.
  *
- * KeeperHub exposes no "list executions" endpoint — `/api/executions` 404s and
- * status is retrievable only per execution id. So an execution has to be
- * registered at submission time, by the wrapper or the chaos harness, and
- * polled until it reaches a terminal state. This table is that watchlist, and
- * it is durable because a restart mid-flight would otherwise lose track of
+ * `/api/executions` 404s and `/execute/{id}/status` needs an id already in
+ * hand, so an execution Blackbox submits is registered here at submission time
+ * and polled until it reaches a terminal state. This table is that watchlist,
+ * and it is durable because a restart mid-flight would otherwise lose track of
  * exactly the transactions most likely to be in trouble.
+ *
+ * There *is* a listing endpoint — `/api/analytics/runs`, behind their
+ * `list_executions` tool — and the recorder reads it for the whole
+ * organisation's history. It does not replace this table: it reports a run
+ * after the fact and on its own schedule, whereas an execution registered here
+ * is polled from the moment it is submitted, which is the difference between
+ * noticing a stuck transaction and reading about one.
  */
 export const watchedExecutions = pgTable(
   'watched_executions',
@@ -247,9 +266,200 @@ export const remediationLedger = pgTable(
     txHash: text('tx_hash'),
     /** signer | keeperhub | user-signed. Absent on older rows. */
     executor: text('executor'),
+    /**
+     * Which agent this was spent on — since a KeeperHub agent is a workflow,
+     * this is what makes a per-workflow budget possible. Every workflow in an
+     * organisation executes from one managed wallet, so a per-signer budget
+     * collapses into a single bucket and one noisy workflow can exhaust the
+     * whole organisation's allowance. Absent on rows written before this.
+     */
+    agentId: text('agent_id'),
   },
   (t) => ({
     budget: index('remediation_ledger_budget_idx').on(t.signer, t.chainId, t.attemptedAt),
+    byAgent: index('remediation_ledger_agent_idx').on(t.agentId, t.attemptedAt),
     byIncident: index('remediation_ledger_incident_idx').on(t.incidentId),
+  }),
+);
+
+/**
+ * An operator's session, proved by a KeeperHub organisation key.
+ *
+ * The key itself is never stored — it is a bearer credential for someone
+ * else's account, and holding one would make this database worth stealing.
+ * What is stored is a hash of the session token we issued and a hash of the
+ * key, the latter only so the same key resolves to the same session rather
+ * than minting a new one on every sign-in.
+ */
+export const orgSessions = pgTable(
+  'org_sessions',
+  {
+    /** SHA-256 of the token handed to the caller. The token is never at rest. */
+    tokenHash: text('token_hash').primaryKey(),
+    /**
+     * Stable identity for the organisation: the lowest key id in the org's own
+     * key list, which every key belonging to that organisation can see. There
+     * is no endpoint that names an organisation — `/api/organizations` answers
+     * 401 and `/api/organization` and `/api/me` do not exist — so this is
+     * derived rather than read.
+     */
+    orgId: text('org_id').notNull(),
+    keyHash: text('key_hash').notNull(),
+    label: text('label'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull(),
+    /** Revocation is one update, and a revoked session is kept for the audit. */
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => ({
+    byKey: index('org_sessions_key_idx').on(t.keyHash),
+    byOrg: index('org_sessions_org_idx').on(t.orgId),
+  }),
+);
+
+/**
+ * Who owns an agent, and may therefore act on it.
+ *
+ * First registration claims it. A claim is not a security boundary against the
+ * chain — anyone can watch a public address — it is a boundary against acting:
+ * remediating, relabelling, or spending another operator's budget.
+ */
+export const agentOwners = pgTable(
+  'agent_owners',
+  {
+    agentId: text('agent_id').primaryKey(),
+    orgId: text('org_id').notNull(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }).notNull(),
+  },
+  (t) => ({ byOrg: index('agent_owners_org_idx').on(t.orgId) }),
+);
+
+/**
+ * Our registration with an OAuth provider.
+ *
+ * KeeperHub supports dynamic client registration (RFC 7591), so Blackbox
+ * registers itself the first time someone signs in and reuses that client id
+ * forever after. Persisted because re-registering on every restart would
+ * litter their side with clients and give each deployment a new identity in
+ * their consent screen.
+ */
+export const oauthClients = pgTable('oauth_clients', {
+  /** The provider, e.g. `https://app.keeperhub.com`. */
+  issuer: text('issuer').primaryKey(),
+  clientId: text('client_id').notNull(),
+  /** Registered redirect, kept so a changed public URL is detected, not ignored. */
+  redirectUri: text('redirect_uri').notNull(),
+  registeredAt: timestamp('registered_at', { withTimezone: true }).notNull(),
+});
+
+/**
+ * A sign-in in flight.
+ *
+ * Holds the PKCE verifier, which never leaves this server — that is the whole
+ * point of PKCE: the code returned to the browser is useless without it. The
+ * `state` is single-use and short-lived, so a replayed callback finds nothing.
+ */
+export const oauthAuthRequests = pgTable('oauth_auth_requests', {
+  state: text('state').primaryKey(),
+  codeVerifier: text('code_verifier').notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  /** Where to send the operator once they are signed in. */
+  returnTo: text('return_to'),
+  /**
+   * Set when the operator asked to *connect* their account rather than only
+   * sign in, and how long they chose to let the connection live. Null means a
+   * plain sign-in, which keeps no credential at all.
+   */
+  connectDays: integer('connect_days'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+});
+
+/**
+ * A secret that lets something outside tell Blackbox to go and look.
+ *
+ * Deliberately not a way to submit data. A caller proves it holds the secret
+ * and Blackbox then reads the run from KeeperHub itself, so nothing a caller
+ * sends can become an event. The worst a stolen secret buys is making us poll.
+ */
+export const webhookSecrets = pgTable(
+  'webhook_secrets',
+  {
+    /** SHA-256 of the secret. The secret is shown once and never stored. */
+    secretHash: text('secret_hash').primaryKey(),
+    orgId: text('org_id').notNull(),
+    label: text('label'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => ({ byOrg: index('webhook_secrets_org_idx').on(t.orgId) }),
+);
+
+/**
+ * An operator's KeeperHub account, connected so Blackbox can read their runs.
+ *
+ * The credential is a refresh token with `mcp:read` and nothing else, so it can
+ * watch and cannot execute, transfer, or spend. It is encrypted rather than
+ * hashed because it has to be replayed to KeeperHub intact.
+ *
+ * Two clocks end a connection. Theirs is a rolling 30-day idle timeout, reset
+ * by every refresh, so an active connection never expires on their side. Ours
+ * is `expires_at`: stamped once at connect, never extended, and the only thing
+ * that puts a bound on how long we hold somebody else's credential.
+ */
+export const keeperhubConnections = pgTable(
+  'keeperhub_connections',
+  {
+    orgId: text('org_id').primaryKey(),
+    /** AES-256-GCM ciphertext. Rotates on every refresh — see `secrets.ts`. */
+    refreshTokenEnc: text('refresh_token_enc').notNull(),
+    /** What we were actually granted, which may be less than we asked for. */
+    scope: text('scope').notNull(),
+    /** The KeeperHub user who connected it, for the console to name. */
+    subject: text('subject'),
+    /**
+     * The address this organisation executes as, looked up from their `/user`
+     * rather than typed in. A run record carries no address — KeeperHub submits
+     * from a shared relayer into the organisation's smart account — so without
+     * this there is nothing to file their runs against.
+     */
+    signer: text('signer'),
+    connectedAt: timestamp('connected_at', { withTimezone: true }).notNull(),
+    /** Ours, absolute, 7–60 days. Not extended by a refresh, deliberately. */
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    lastRefreshedAt: timestamp('last_refreshed_at', { withTimezone: true }),
+    lastSweptAt: timestamp('last_swept_at', { withTimezone: true }),
+    /** `active` | `needs_reauth` | `disconnected`. */
+    status: text('status').notNull(),
+    lastError: text('last_error'),
+    /** Consecutive refresh failures. Reset on success. */
+    failureCount: integer('failure_count').notNull().default(0),
+  },
+  (t) => ({ byStatus: index('keeperhub_connections_status_idx').on(t.status) }),
+);
+
+/**
+ * One workflow the operator asked Blackbox to watch.
+ *
+ * Nothing is watched on connect. An operator picks, the way a repository is
+ * picked when connecting to a deploy service, so a fresh connection is inert
+ * until somebody says what matters. Rows survive a disconnect, so reconnecting
+ * restores the choices instead of asking again.
+ */
+export const watchedWorkflows = pgTable(
+  'watched_workflows',
+  {
+    orgId: text('org_id').notNull(),
+    workflowId: text('workflow_id').notNull(),
+    /** Their name for it, refreshed on sweep so the console does not go stale. */
+    name: text('name'),
+    active: boolean('active').notNull().default(true),
+    connectedAt: timestamp('connected_at', { withTimezone: true }).notNull(),
+    lastRunAt: timestamp('last_run_at', { withTimezone: true }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.orgId, t.workflowId] }),
+    byOrg: index('watched_workflows_org_idx').on(t.orgId),
   }),
 );

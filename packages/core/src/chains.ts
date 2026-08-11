@@ -74,6 +74,27 @@ export const CHAINS: Readonly<Record<SupportedChainId, ChainInfo>> = {
   },
 } as const;
 
+/**
+ * Resolve KeeperHub's `network` field, which is not one type.
+ *
+ * A workflow run reports it as a chain id string (`"11155111"`); a direct run
+ * reports the network name (`"sepolia"`). Both appear in the same list
+ * response, so a consumer of `/api/analytics/runs` has to accept either. An
+ * unrecognised value returns null rather than a guess — a run on a chain we do
+ * not support is a run we cannot read receipts for.
+ */
+export function resolveNetwork(value: string | null | undefined): SupportedChainId | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const id = Number(trimmed);
+    return isSupportedChain(id) ? id : null;
+  }
+  const lowered = trimmed.toLowerCase();
+  const match = Object.values(CHAINS).find((c) => c.keeperHubNetwork === lowered);
+  return match?.chainId ?? null;
+}
+
 export function isSupportedChain(chainId: number): chainId is SupportedChainId {
   return chainId in CHAINS;
 }

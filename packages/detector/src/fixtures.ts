@@ -34,6 +34,13 @@ export function evt(overrides: {
   simulatedAtBlock?: number;
   gasEstimate?: bigint;
   observedAt?: Date;
+  /** For the KeeperHub rules: a run belongs to a workflow and reaches a step. */
+  workflowId?: string;
+  workflowName?: string;
+  completedSteps?: number;
+  errorType?: string;
+  agentKind?: 'keeperhub' | 'signer';
+  noTxHash?: boolean;
 } = {}): ExecutionEvent {
   const id = overrides.id ?? `e${seq++}`;
   return {
@@ -44,7 +51,19 @@ export function evt(overrides: {
     agentId: 'chaos',
     signer: SIGNER,
     chainId: 11155111,
-    trigger: { kind: 'api' },
+    ...(overrides.agentKind ? { agentKind: overrides.agentKind } : {}),
+    ...(overrides.workflowId ? { workflowId: overrides.workflowId } : {}),
+    trigger: {
+      kind: 'api',
+      detail: {
+        ...(overrides.workflowId ? { workflowId: overrides.workflowId } : {}),
+        ...(overrides.workflowName ? { workflowName: overrides.workflowName } : {}),
+        ...(overrides.completedSteps !== undefined
+          ? { completedSteps: overrides.completedSteps }
+          : {}),
+        ...(overrides.errorType ? { errorType: overrides.errorType } : {}),
+      },
+    },
     simulation: {
       performed: overrides.simPerformed ?? true,
       ...(overrides.simSuccess !== undefined ? { success: overrides.simSuccess } : { success: true }),
@@ -55,7 +74,10 @@ export function evt(overrides: {
       ...(overrides.gasEstimate !== undefined ? { gasEstimate: overrides.gasEstimate } : {}),
     },
     submission: {
-      txHash: `0x${id.replace(/\W/g, '').padEnd(64, '0')}` as `0x${string}`,
+      // A run rejected in pre-flight never produced one.
+      ...(overrides.noTxHash
+        ? {}
+        : { txHash: `0x${id.replace(/\W/g, '').padEnd(64, '0')}` as `0x${string}` }),
       ...(overrides.nonce !== undefined ? { nonce: overrides.nonce } : {}),
       ...(overrides.maxFeePerGas !== undefined ? { maxFeePerGas: overrides.maxFeePerGas } : {}),
       ...(overrides.maxPriorityFeePerGas !== undefined

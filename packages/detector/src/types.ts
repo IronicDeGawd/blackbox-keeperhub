@@ -1,4 +1,10 @@
-import type { DetectionConfig, ExecutionEvent, IncidentClass, RuleId } from '@blackbox/core';
+import type {
+  AgentKind,
+  DetectionConfig,
+  ExecutionEvent,
+  IncidentClass,
+  RuleId,
+} from '@blackbox/core';
 
 /** RPC-sourced facts, gathered once per evaluation so rules stay pure. */
 export type Corroboration = {
@@ -14,6 +20,22 @@ export type Corroboration = {
   consecutiveGapPolls?: number;
   /** Nonces submitted but never seen terminal, as understood by the caller. */
   missingNonces?: number[];
+  /**
+   * True when the agent does not control its own nonces — a KeeperHub managed
+   * wallet, where nonce management belongs to the platform and submission comes
+   * from a shared relayer. Any nonce read for such an account describes someone
+   * else's traffic, so a rule reasoning about nonces must decline rather than
+   * read `latestNonce` and draw a conclusion the address cannot support.
+   */
+  managedNonces?: boolean;
+  /**
+   * The organisation's daily execution budget, as KeeperHub reports it.
+   *
+   * `dailyCapWei` is null when no cap is configured, which is not the same as a
+   * cap of zero — it means the question does not apply, and SPEND_CAP_EXHAUSTED
+   * must decline rather than treat "no limit" as "limit reached".
+   */
+  spendCap?: { dailyCapWei: bigint | null; dailyUsedWei: bigint };
 };
 
 /**
@@ -32,6 +54,13 @@ export type InclusionAnalysis = {
 
 export type RuleContext = {
   now: Date;
+  /**
+   * How the agent executes, when it has been established. Rules that reason
+   * about a key the agent does not hold are skipped for a managed wallet;
+   * absent means unestablished, and every rule is offered the window rather
+   * than assuming a kind.
+   */
+  agentKind?: AgentKind;
   detection: DetectionConfig;
   agentId: string;
   signer: `0x${string}`;
@@ -56,6 +85,15 @@ export type IncidentDraft = {
 
 export type Rule = {
   id: RuleId;
+  /**
+   * Which kinds of agent this rule can fire for.
+   *
+   * Not a preference — a statement about what the evidence can support. A
+   * KeeperHub managed wallet has no nonce queue and no gas balance of its own,
+   * so a rule built on nonces or signer balance has nothing true to say about
+   * one, and offering it would be advertising a detection that cannot happen.
+   */
+  appliesTo: readonly AgentKind[];
   /** Window is this signer's recent events, oldest first. */
   evaluate: (window: readonly ExecutionEvent[], ctx: RuleContext) => IncidentDraft | null;
 };

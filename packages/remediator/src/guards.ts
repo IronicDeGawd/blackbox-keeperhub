@@ -1,6 +1,7 @@
 import type { BlackboxConfig, Incident } from '@blackbox/core';
 import {
   attemptsForIncident,
+  remediationSpendForAgent,
   remediationSpendSince,
   type Database,
 } from '@blackbox/store';
@@ -23,6 +24,7 @@ export type GuardName =
   | 'signer_allowlist'
   | 'chain_allowlist'
   | 'budget'
+  | 'agent_daily_budget'
   | 'no_remediation_in_flight'
   | 'max_attempts'
   | 'not_self';
@@ -42,6 +44,7 @@ export type GuardContext = {
 };
 
 const BUDGET_WINDOW_MS = 60 * 60_000;
+const DAY_MS = 24 * 60 * 60_000;
 
 export async function evaluateGuards(ctx: GuardContext): Promise<GuardResult> {
   const { config, incident } = ctx;
@@ -114,6 +117,26 @@ export async function evaluateGuards(ctx: GuardContext): Promise<GuardResult> {
     !withinCount
       ? `${spend.count} remediations in the last hour reaches the cap of ${maxRemediationsPerHour}`
       : `${spend.gasWei} wei spent in the last hour reaches the cap of ${maxGasWeiPerHour}`,
+  );
+
+  /**
+   * A second ceiling, per agent per day.
+   *
+   * The one above is per signer, and every workflow in a KeeperHub
+   * organisation executes from the same managed wallet — so on its own it is a
+   * single bucket shared by everything the organisation runs, and one workflow
+   * failing in a loop can spend the lot. This one is the workflow's own
+   * allowance.
+   */
+  const daily = await remediationSpendForAgent(ctx.db, {
+    agentId: incident.agentId,
+    since: new Date(ctx.now.getTime() - DAY_MS),
+  });
+  const { maxRemediationsPerDayPerAgent } = config.remediation.budget;
+  check(
+    'agent_daily_budget',
+    daily.count < maxRemediationsPerDayPerAgent,
+    `${incident.agentId} has had ${daily.count} remediations today, which reaches its cap of ${maxRemediationsPerDayPerAgent}`,
   );
 
   return { passed, failed };

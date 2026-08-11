@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { blackboxConfigSchema, detectionFor, CHAIN_IDS } from '@blackbox/core';
-import { findNonceGap, R1, R2, R3, R4, R5, R6, R7 } from './rules.js';
-import { evaluateRules } from './index.js';
+import { findNonceGap, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10 } from './rules.js';
+import { evaluateRules, rulesFor } from './index.js';
 import { at, evt, resetSeq, SIGNER, T0 } from './fixtures.js';
 import type { RuleContext } from './types.js';
 
@@ -380,5 +380,162 @@ describe('findNonceGap', () => {
 
   it('does not invent a hole for a submission at the next nonce', () => {
     expect(findNonceGap([evt({ status: 'pending', nonce: 7 })], 7).missingNonces).toEqual([]);
+  });
+});
+
+describe('which rules apply to which kind of agent', () => {
+  // A rule is skipped for a kind it cannot reason about, not merely unlikely to
+  // fire — the evidence it needs does not exist for that agent.
+  it('offers a managed wallet only the rules its evidence can support', () => {
+    // R8/R9/R10 are the managed-wallet rules; R1/R2/R6 need a key it does not
+    // hold.
+    expect(rulesFor('keeperhub')).toEqual(['R3', 'R4', 'R5', 'R7', 'R8', 'R9', 'R10']);
+    expect(rulesFor('signer')).toEqual(['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7']);
+  });
+
+  it('does not report a stuck transaction for a managed wallet', () => {
+    const e = evt({ status: 'pending', nonce: 5, submittedAt: T0 });
+    expect(evaluateRules([e], ctx()).map((d) => d.ruleId)).toContain('R1');
+    expect(evaluateRules([e], ctx({ agentKind: 'keeperhub' }))).toEqual([]);
+  });
+
+  it('does not report a nonce gap for a managed wallet', () => {
+    const window = [evt({ status: 'pending', nonce: 9, submittedAt: T0 })];
+    const corroboration = { latestNonce: 7, consecutiveGapPolls: 5 };
+    expect(evaluateRules(window, ctx({ corroboration })).map((d) => d.ruleId)).toContain('R2');
+    expect(evaluateRules(window, ctx({ agentKind: 'keeperhub', corroboration }))).toEqual([]);
+  });
+
+  it('still reports state drift for a managed wallet, which is its strongest signal', () => {
+    const e = evt({ status: 'reverted', nonce: 5, simulation: { performed: true, success: true } });
+    expect(evaluateRules([e], ctx({ agentKind: 'keeperhub' })).map((d) => d.ruleId)).toEqual(['R4']);
+  });
+
+  // An agent we have not classified is offered everything, as before.
+  it('withholds nothing when the kind was never established', () => {
+    const e = evt({ status: 'pending', nonce: 5, submittedAt: T0 });
+    expect(evaluateRules([e], ctx()).map((d) => d.ruleId)).toEqual(['R1']);
+  });
+});
+
+describe('R8 SPEND_CAP_EXHAUSTED', () => {
+  const kh = (spendCap?: { dailyCapWei: bigint | null; dailyUsedWei: bigint }) =>
+    ctx({ agentKind: 'keeperhub', ...(spendCap ? { corroboration: { spendCap } } : {}) });
+
+  it('warns before the budget runs out, not after', () => {
+    const r = R8.evaluate([], kh({ dailyCapWei: 100n, dailyUsedWei: 85n }));
+    expect(r?.class).toBe('SPEND_CAP_EXHAUSTED');
+    expect(r?.severity).toBe('warning');
+    expect(r?.facts['remainingWei']).toBe('15');
+  });
+
+  it('is critical once the agent has actually stopped', () => {
+    const r = R8.evaluate([], kh({ dailyCapWei: 100n, dailyUsedWei: 100n }));
+    expect(r?.severity).toBe('critical');
+    expect(r?.facts['exhausted']).toBe(true);
+  });
+
+  it('stays quiet well below the threshold', () => {
+    expect(R8.evaluate([], kh({ dailyCapWei: 100n, dailyUsedWei: 10n }))).toBeNull();
+  });
+
+  /** No cap is not a cap of zero — it means the question does not apply. */
+  it('says nothing when the organisation has no cap configured', () => {
+    expect(R8.evaluate([], kh({ dailyCapWei: null, dailyUsedWei: 900n }))).toBeNull();
+    expect(R8.evaluate([], kh())).toBeNull();
+  });
+
+  it('does not apply to an agent that pays its own gas', () => {
+    expect(rulesFor('signer')).not.toContain('R8');
+    expect(rulesFor('keeperhub')).toContain('R8');
+  });
+});
+
+describe('R9 EXECUTION_STALLED', () => {
+  const kh = (over = {}) => ctx({ agentKind: 'keeperhub', now: at(700_000), ...over });
+
+  it('fires for a run that has not finished inside the threshold', () => {
+    const e = evt({ status: 'pending', workflowId: 'wf-1', workflowName: 'rebalance', completedSteps: 1 });
+    const r = R9.evaluate([e], kh());
+    expect(r?.class).toBe('EXECUTION_STALLED');
+    expect(r?.facts['workflowName']).toBe('rebalance');
+    expect(r?.facts['stalledMs']).toBe(700_000);
+  });
+
+  // Ten minutes, not ninety seconds: a multi-step workflow legitimately takes
+  // minutes, and calling that stalled would make the rule a nuisance.
+  it('leaves a slow but ordinary run alone', () => {
+    const e = evt({ status: 'pending', workflowId: 'wf-1' });
+    expect(R9.evaluate([e], kh({ now: at(599_000) }))).toBeNull();
+  });
+
+  it('does not fire once any attempt at that action finished', () => {
+    const stalled = evt({ id: 'a', status: 'pending', logicalActionId: 'wf-1' });
+    const done = evt({ id: 'b', status: 'included', logicalActionId: 'wf-1' });
+    expect(R9.evaluate([stalled, done], kh())).toBeNull();
+  });
+
+  it('is not offered to an agent holding its own key', () => {
+    expect(rulesFor('signer')).not.toContain('R9');
+  });
+});
+
+describe('R10 WORKFLOW_MISCONFIGURED', () => {
+  const kh = (over = {}) => ctx({ agentKind: 'keeperhub', ...over });
+  const rejected = (id: string, over = {}) =>
+    evt({
+      id,
+      status: 'rejected',
+      noTxHash: true,
+      workflowId: 'wf-1',
+      workflowName: 'rebalance',
+      // Runs of one workflow share a logical action, which is what lets
+      // RETRY_STORM see them as attempts at the same thing.
+      logicalActionId: 'wf-1',
+      completedSteps: 2,
+      simSuccess: false,
+      simRevertReason: 'execution reverted: bad address',
+      ...over,
+    });
+
+  it('fires when one workflow is rejected repeatedly before reaching the chain', () => {
+    const r = R10.evaluate([rejected('a'), rejected('b'), rejected('c')], kh());
+    expect(r?.class).toBe('WORKFLOW_MISCONFIGURED');
+    expect(r?.facts['failureCount']).toBe(3);
+    // Every failure stopped at the same step, so the diagnosis is firm.
+    expect(r?.facts['failingAfterSteps']).toBe(2);
+    expect(r?.confidence).toBe(0.9);
+    expect(r?.facts['distinctReasons']).toEqual(['execution reverted: bad address']);
+  });
+
+  it('is less confident when the failures stop at different steps', () => {
+    const r = R10.evaluate(
+      [rejected('a'), rejected('b', { completedSteps: 1 }), rejected('c')],
+      kh(),
+    );
+    expect(r?.confidence).toBe(0.75);
+    expect(r?.facts['failingAfterSteps']).toBeNull();
+  });
+
+  /**
+   * The distinction the rule exists for: a run that reached the chain and
+   * reverted is the chain's news, not the workflow's.
+   */
+  it('ignores failures that actually reached the chain', () => {
+    const onchain = (id: string) =>
+      evt({ id, status: 'reverted', workflowId: 'wf-1', completedSteps: 2 });
+    expect(R10.evaluate([onchain('a'), onchain('b'), onchain('c')], kh())).toBeNull();
+  });
+
+  it('does not accuse a workflow on one or two rejections', () => {
+    expect(R10.evaluate([rejected('a'), rejected('b')], kh())).toBeNull();
+  });
+
+  it('suppresses RETRY_STORM, being the more specific of the two', () => {
+    const window = [rejected('a'), rejected('b'), rejected('c'), rejected('d')];
+    const fired = evaluateRules(window, kh());
+    expect(fired.map((d) => d.ruleId)).toContain('R10');
+    expect(fired.map((d) => d.ruleId)).not.toContain('R5');
+    expect(fired.find((d) => d.ruleId === 'R10')?.suppressedRules).toEqual(['R5']);
   });
 });

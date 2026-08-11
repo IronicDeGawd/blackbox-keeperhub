@@ -1,4 +1,9 @@
-import { createPublicClient, http, type PublicClient } from 'viem';
+import {
+  createPublicClient,
+  http,
+  TransactionReceiptNotFoundError,
+  type PublicClient,
+} from 'viem';
 
 /**
  * Confirmation by receipt, from a node — never from the thing that submitted.
@@ -33,21 +38,55 @@ export class ReceiptVerifier {
     txHash: `0x${string}`;
     chainId: number;
     timeoutMs: number;
-  }): Promise<{ included: boolean; gasUsed?: bigint }> {
+  }): Promise<{
+    included: boolean;
+    gasUsed?: bigint;
+    /** Needed to turn gas *units* into what the remediation actually cost. */
+    effectiveGasPrice?: bigint;
+    uncertain?: boolean;
+    detail?: string;
+  }> {
     const deadline = this.clock() + params.timeoutMs;
     const client = this.client(params.chainId);
+    // Remembers why the last attempt came back empty. "The node says there is
+    // no receipt" and "we could not ask the node" are different facts, and
+    // only the first of them means the remediation did not land.
+    let unreachable: string | undefined;
     for (;;) {
       try {
         const receipt = await client.getTransactionReceipt({ hash: params.txHash });
+        unreachable = undefined;
         if (receipt) {
           // A reverted receipt is still an unsuccessful remediation. Included
           // is not the same as worked, and the caller is told which.
-          return { included: receipt.status === 'success', gasUsed: receipt.gasUsed };
+          return {
+            included: receipt.status === 'success',
+            gasUsed: receipt.gasUsed,
+            ...(receipt.effectiveGasPrice !== undefined
+              ? { effectiveGasPrice: receipt.effectiveGasPrice }
+              : {}),
+          };
         }
-      } catch {
-        // Not mined yet; viem throws rather than returning null.
+      } catch (error) {
+        // viem throws rather than returning null when a receipt does not exist
+        // yet, so that specific error is the node answering "not mined". Any
+        // other error is the node failing to answer at all — and reporting
+        // that as "not included" would record a remediation that may well have
+        // succeeded as a failure, permanently, in the audit trail.
+        unreachable =
+          error instanceof TransactionReceiptNotFoundError
+            ? undefined
+            : String((error as Error)?.message ?? error).split('\n')[0]?.slice(0, 200);
       }
-      if (this.clock() >= deadline) return { included: false };
+      if (this.clock() >= deadline) {
+        return unreachable
+          ? {
+              included: false,
+              uncertain: true,
+              detail: `could not reach a node to check: ${unreachable}`,
+            }
+          : { included: false };
+      }
       await this.sleep(this.pollIntervalMs);
     }
   }

@@ -1,0 +1,32 @@
+# HTTPS for the public deployment.
+#
+# Caddy obtains and renews a Let's Encrypt certificate for BLACKBOX_HOST on its
+# own. Using an sslip.io name means the VM's own IP resolves to a real
+# hostname, so the certificate can be issued without owning a domain.
+
+{$BLACKBOX_HOST} {
+	encode gzip
+
+	# The event stream must not be buffered — a console watching incidents
+	# appear in real time is the whole point of it, and a proxy that holds the
+	# response until it is complete turns a live feed into a long silence.
+	@stream path /api/stream
+	reverse_proxy @stream api:4000 {
+		flush_interval -1
+	}
+
+	reverse_proxy api:4000
+
+	header {
+		# The API is served to browsers from other origins by design, so the
+		# usual framing and sniffing protections are what is left to set.
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

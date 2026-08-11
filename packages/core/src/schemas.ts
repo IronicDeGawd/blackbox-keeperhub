@@ -17,6 +17,9 @@ export const hexHash = z
 
 // ---------------------------------------------------------------- events
 
+export const agentKind = z.enum(['keeperhub', 'signer']);
+export type AgentKind = z.infer<typeof agentKind>;
+
 export const triggerKind = z.enum(['schedule', 'condition', 'manual', 'api', 'unknown']);
 
 /**
@@ -53,6 +56,16 @@ export const executionEventSchema = z.object({
   agentId: z.string(),
   signer: hexAddress,
   chainId: z.number().int().positive(),
+
+  /**
+   * How the agent executes. Rules declare which kinds they apply to, because
+   * the two fail differently: KeeperHub manages nonces for a `keeperhub` agent,
+   * so it cannot have a nonce gap, while a `signer` agent holding its own key
+   * can. Absent means not established rather than either kind.
+   */
+  agentKind: agentKind.optional(),
+  /** The KeeperHub workflow a run belonged to, when it was one. */
+  workflowId: z.string().optional(),
 
   trigger: z.object({
     kind: triggerKind,
@@ -102,6 +115,19 @@ export const incidentClass = z.enum([
   'RETRY_STORM',
   'SIGNER_GAS_STARVED',
   'ADVERSE_INCLUSION',
+  /**
+   * A KeeperHub run that never finishes. Invisible to chain scanning, because a
+   * workflow can stall before it produces a transaction at all.
+   */
+  'EXECUTION_STALLED',
+  /** Repeated failures at one workflow node: broken definition, not bad luck. */
+  'WORKFLOW_MISCONFIGURED',
+  /**
+   * The organisation's daily spend cap is close to or at its limit. The
+   * managed-wallet equivalent of a signer running out of gas: every later
+   * execution fails for a reason no chain read explains.
+   */
+  'SPEND_CAP_EXHAUSTED',
 ]);
 export type IncidentClass = z.infer<typeof incidentClass>;
 
@@ -116,7 +142,7 @@ export const incidentStatus = z.enum([
   'acknowledged',
 ]);
 
-export const ruleId = z.enum(['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7']);
+export const ruleId = z.enum(['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10']);
 export type RuleId = z.infer<typeof ruleId>;
 
 export const rootCauseAnalysisSchema = z.object({

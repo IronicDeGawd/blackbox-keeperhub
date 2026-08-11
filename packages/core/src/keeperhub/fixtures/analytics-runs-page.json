@@ -1,0 +1,121 @@
+{
+  "runs": [
+    {
+      "id": "fe5rn7io7qx1ey65dhq5b",
+      "source": "workflow",
+      "status": "success",
+      "startedAt": "2026-08-10T14:59:46.995Z",
+      "completedAt": "2026-08-10T15:00:14.237Z",
+      "durationMs": 27147,
+      "workflowId": "xyrw2r4kq6ib1wxgcr8zd",
+      "workflowName": "blackbox/remediation/11155111/pause/0x69c744bb9f953d822a52e88604d26c9a895ac0e0",
+      "directType": null,
+      "network": "11155111",
+      "networks": [
+        "11155111"
+      ],
+      "gasCostWei": "59177450207616",
+      "transactionHashes": [
+        {
+          "hash": "0x15d351d004f12e804ac8677ddbcf7be786a0f844c7a70adae4efa8d74142052a",
+          "nodeId": "step-1",
+          "chainId": 11155111,
+          "gasUsed": "52728",
+          "nodeName": "pause the circuit breaker at 0x69C744Bb9f953D822a52E88604D26C9a895ac0E0",
+          "verified": true,
+          "verifiedAt": "2026-08-10T15:00:14.184Z",
+          "blockNumber": 11459949,
+          "receiptStatus": "success"
+        }
+      ],
+      "gasUsedWei": "52728",
+      "totalSteps": null,
+      "completedSteps": 2,
+      "error": null,
+      "errorCode": null,
+      "errorType": null,
+      "errorCategory": null
+    },
+    {
+      "id": "x2gpnnwfysryzxb161mgf",
+      "source": "workflow",
+      "status": "error",
+      "startedAt": "2026-08-10T14:57:33.595Z",
+      "completedAt": "2026-08-10T14:57:39.831Z",
+      "durationMs": 6200,
+      "workflowId": "xyrw2r4kq6ib1wxgcr8zd",
+      "workflowName": "blackbox/remediation/11155111/pause/0x69c744bb9f953d822a52e88604d26c9a895ac0e0",
+      "directType": null,
+      "network": null,
+      "networks": [],
+      "gasCostWei": null,
+      "transactionHashes": [],
+      "gasUsedWei": null,
+      "totalSteps": null,
+      "completedSteps": 2,
+      "error": "Contract call failed: execution reverted (unknown custom error) (action=\"call\", data=\"0x9ad8bb47\", reason=null, transaction={ \"data\": \"0x8456cb59\", \"from\": \"0x01cC313321Eb09c51F5b649f2bBd578Ee32750A5\", \"to\": \"0x69C744Bb9f953D822a52E88604D26C9a895ac0E0\" }, invocation=null, revert=null, code=CALL_EXCEPTION)",
+      "errorCode": null,
+      "errorType": "user",
+      "errorCategory": "transaction"
+    },
+    {
+      "id": "4u327l4wep7q2hwrvqwf2",
+      "source": "direct",
+      "status": "success",
+      "startedAt": "2026-08-10T10:18:00.048Z",
+      "completedAt": "2026-08-10T10:18:15.260Z",
+      "durationMs": 15212,
+      "workflowId": null,
+      "workflowName": null,
+      "directType": "contract-call",
+      "network": "sepolia",
+      "networks": [
+        "sepolia"
+      ],
+      "gasCostWei": "52716",
+      "transactionHashes": [
+        {
+          "hash": "0x487033142c19de9808e71cc15661f4b9ec6b364a29ecda90b6fc00fba3e546a5",
+          "nodeId": "direct",
+          "nodeName": "Direct execution",
+          "network": "sepolia"
+        }
+      ],
+      "gasUsedWei": "52716",
+      "totalSteps": null,
+      "completedSteps": null,
+      "error": null,
+      "errorCode": null,
+      "errorType": null,
+      "errorCategory": null
+    },
+    {
+      "id": "p1748x0qxk0dgeryhgzau",
+      "source": "direct",
+      "status": "error",
+      "startedAt": "2026-08-09T17:19:44.308Z",
+      "completedAt": "2026-08-09T17:19:46.000Z",
+      "durationMs": 1692,
+      "workflowId": null,
+      "workflowName": null,
+      "directType": "contract-call",
+      "network": "sepolia",
+      "networks": [
+        "sepolia"
+      ],
+      "gasCostWei": null,
+      "transactionHashes": [],
+      "gasUsedWei": null,
+      "totalSteps": null,
+      "completedSteps": null,
+      "error": null,
+      "errorCode": null,
+      "errorType": null,
+      "errorCategory": null
+    }
+  ],
+  "nextCursor": "2026-08-09T17:19:44.308Z",
+  "total": 4,
+  "page": 1,
+  "pageSize": 4
+}

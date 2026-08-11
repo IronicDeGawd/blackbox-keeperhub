@@ -1,6 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { privateKeyToAccount } from 'viem/accounts';
-import { blackboxConfigSchema, getChain, KeeperHubClient, KeeperHubMcp } from '@blackbox/core';
+import {
+  blackboxConfigSchema,
+  getChain,
+  KeeperHubClient,
+  KeeperHubMcp,
+  type AgentKind,
+} from '@blackbox/core';
 import { ChaosHarness } from '@blackbox/chaos';
 import {
   KeeperHubExecutor,
@@ -11,16 +17,41 @@ import {
   SignerExecutor,
   WorkflowExecutor,
 } from '@blackbox/remediator';
-import { createDb, getIncident, saveIncident, type Database } from '@blackbox/store';
+import {
+  createDb,
+  getIncident,
+  recentAgentKinds,
+  saveIncident,
+  type Database,
+} from '@blackbox/store';
 import { buildApp, type ChaosScenario } from './app.js';
 import { EventBus } from './bus.js';
+import { planChaos } from './chaos-plans.js';
 import {
   buildProposal,
   recordUserRemediation,
   verifyUserSubmission,
   type Proposal,
 } from './proposals.js';
+import {
+  Alerter,
+  discordRender,
+  keeperHubEmailChannel,
+  logChannel,
+  slackRender,
+  webhookChannel,
+  type Channel,
+} from '@blackbox/alerter';
 import { diagnosticianFromEnv, keeperHubFromEnv, Runtime } from './runtime.js';
+import { httpKeyVerifier, Identity } from './identity.js';
+import { KeeperHubOAuth } from './oauth.js';
+import { Connections } from './connections.js';
+import { Demo } from './demo.js';
+import { keyFrom } from './secrets.js';
+import { Webhooks } from './webhooks.js';
+import { WalletAuth } from './wallet-auth.js';
+import { installEventTrigger, installScheduledSweep, triggersAvailable } from './triggers.js';
+import { EventWebhook } from './event-webhook.js';
 
 /**
  * Composition root.
@@ -42,6 +73,13 @@ function loadEnv(): Record<string, string | undefined> {
   } catch {
     // No file is a normal deployment; the environment carries everything.
   }
+  // An unset variable and one set to nothing must mean the same thing. Compose
+  // and most orchestrators pass an absent value through as an empty string, so
+  // without this a blank KEEPERHUB_ORG_KEY defeats its own default and a blank
+  // ALCHEMY_RPC_URL wins the fallback against a perfectly good SEPOLIA_RPC_URL.
+  for (const [key, value] of Object.entries(merged)) {
+    if (value !== undefined && value.trim() === '') delete merged[key];
+  }
   return merged;
 }
 
@@ -49,8 +87,24 @@ const env = loadEnv();
 const chainId = Number(env['CHAIN_ID'] ?? 11155111);
 const rpcUrl = env['ALCHEMY_RPC_URL'] ?? env['SEPOLIA_RPC_URL'];
 if (!rpcUrl) throw new Error('No RPC URL: set ALCHEMY_RPC_URL or SEPOLIA_RPC_URL');
+// Every endpoint we know of, for finding a transaction a stranger's wallet
+// broadcast somewhere else. Queued transactions are not gossiped, so which
+// node holds one is a matter of which node their wallet talked to.
+const lookupRpcUrls = [env['SEPOLIA_RPC_URL'], env['ALCHEMY_RPC_URL'], env['FALLBACK_RPC_URL']]
+  .filter((url): url is string => Boolean(url))
+  .filter((url) => url !== rpcUrl);
 
+// The local compose database is a convenience for development and a trap in a
+// container: unset in a deployment, the process would boot, look healthy, and
+// quietly fail every query against a host that does not exist. Refuse instead,
+// unless something is actually listening locally.
 const databaseUrl = env['DATABASE_URL'] ?? 'postgres://blackbox:blackbox@localhost:5433/blackbox';
+if (!env['DATABASE_URL'] && env['K_SERVICE']) {
+  throw new Error(
+    'DATABASE_URL is not set. Refusing to start against the local development database ' +
+      'from inside a managed container, where it cannot exist.',
+  );
+}
 const signerAccount = env['CHAOS_SIGNER_PRIVATE_KEY']
   ? privateKeyToAccount(env['CHAOS_SIGNER_PRIVATE_KEY'] as `0x${string}`)
   : undefined;
@@ -76,14 +130,127 @@ const logger = {
 const keeperHub = keeperHubFromEnv(env);
 const diagnostician = diagnosticianFromEnv(env);
 
+/** Answers already paid for, keyed by chain and hash. */
+const diagnosisCache = new Map<string, unknown>();
+
+/**
+ * Watching a whole organisation needs the address it executes as, which no run
+ * record carries: KeeperHub submits from a shared relayer into the org's smart
+ * account. So this stays off until an operator names that address, rather than
+ * filing their history under an address we guessed.
+ */
+const keeperHubOrg =
+  env['KH_MANAGED_WALLET_ADDRESS'] && /^0x[0-9a-fA-F]{40}$/.test(env['KH_MANAGED_WALLET_ADDRESS'])
+    ? {
+        orgId: env['KH_ORG_ID'] ?? 'default',
+        agentId: env['KEEPERHUB_AGENT_ID'] ?? 'keeperhub-org',
+        signer: env['KH_MANAGED_WALLET_ADDRESS'] as `0x${string}`,
+        ...(env['KEEPERHUB_RUNS_RANGE'] ? { range: env['KEEPERHUB_RUNS_RANGE'] } : {}),
+      }
+    : undefined;
+
+/**
+ * Where alerts go.
+ *
+ * Nothing configured means the log, so an operator running this locally still
+ * sees that an alert would have fired rather than wondering whether alerting
+ * works at all. A webhook covers Discord and Slack — both accept an incoming
+ * webhook — and email goes through KeeperHub's own SendGrid key, so it needs no
+ * credentials from the operator.
+ */
+const alertChannels: Channel[] = [logChannel(logger)];
+const webhookUrl = env['BLACKBOX_ALERT_WEBHOOK_URL'];
+if (webhookUrl) {
+  const format = (env['BLACKBOX_ALERT_WEBHOOK_FORMAT'] ?? '').toLowerCase();
+  alertChannels.push(
+    webhookChannel({
+      url: webhookUrl,
+      ...(format === 'discord' ? { render: discordRender } : {}),
+      ...(format === 'slack' ? { render: slackRender } : {}),
+    }),
+  );
+}
+if (env['BLACKBOX_ALERT_EMAIL_TO'] && keeperHub) {
+  alertChannels.push(keeperHubEmailChannel({ to: env['BLACKBOX_ALERT_EMAIL_TO'], client: keeperHub }));
+}
+
+const quietHours = env['BLACKBOX_ALERT_QUIET_HOURS']
+  ? parseQuietHours(env['BLACKBOX_ALERT_QUIET_HOURS'])
+  : undefined;
+
+const alerter = new Alerter({
+  channels: alertChannels,
+  policy: {
+    routes: alertChannels.map((c) => ({
+      channel: c.name,
+      minSeverity: (env['BLACKBOX_ALERT_MIN_SEVERITY'] ?? 'critical') as 'info' | 'warning' | 'critical',
+      ...(quietHours ? { quietHours } : {}),
+    })),
+  },
+  logger,
+});
+
+/**
+ * Sign-in with a KeeperHub organisation key.
+ *
+ * Always on: it costs nothing when nobody uses it, and without it every agent
+ * stays unowned and every action stays open to anyone who can reach the URL.
+ */
+const identity = new Identity(db, httpKeyVerifier(env['KEEPERHUB_API_URL']));
+
+/**
+ * Agents any visitor may read. Unset means all of them, which is right for a
+ * local run and for a deployment that hosts only its own demo agents. Set it
+ * once real operators are signing in.
+ */
+const publicAgentIds = env['BLACKBOX_PUBLIC_AGENTS']
+  ? env['BLACKBOX_PUBLIC_AGENTS'].split(',').map((a) => a.trim()).filter(Boolean)
+  : undefined;
+
+/**
+ * "Connect KeeperHub" needs to know its own public URL, because that is what it
+ * registers as a redirect and what KeeperHub will refuse to deviate from. With
+ * none set it falls back to localhost, which is right for development and
+ * useless in production — so a deployment must set BLACKBOX_PUBLIC_URL.
+ */
+const oauth = new KeeperHubOAuth({
+  db,
+  baseUrl: env['BLACKBOX_PUBLIC_URL'] ?? `http://127.0.0.1:${env['PORT'] ?? '8080'}`,
+  ...(env['KEEPERHUB_OAUTH_CLIENT_ID'] ? { clientId: env['KEEPERHUB_OAUTH_CLIENT_ID'] } : {}),
+});
+
+/**
+ * Connected KeeperHub accounts, if this deployment can keep a credential.
+ *
+ * Without `BLACKBOX_ENCRYPTION_KEY` there is nowhere safe to put a refresh
+ * token, so connecting is refused rather than done in the clear. Sign-in still
+ * works; it simply grants identity and no ingestion.
+ */
+const connections = env['BLACKBOX_ENCRYPTION_KEY']
+  ? new Connections({
+      db,
+      oauth,
+      key: keyFrom(env['BLACKBOX_ENCRYPTION_KEY']),
+      ...(env['KEEPERHUB_API_URL'] ? { keeperHubApiUrl: env['KEEPERHUB_API_URL'] } : {}),
+      onNeedsReauth: (orgId, reason) => {
+        console.warn(`[connections] ${orgId} needs re-authorising: ${reason}`);
+      },
+    })
+  : undefined;
+
 const runtime = new Runtime({
   db,
   config,
   bus,
   chainId,
   rpcUrl,
+  ...(lookupRpcUrls.length > 0 ? { fallbackRpcUrls: lookupRpcUrls } : {}),
   ...(diagnostician ? { diagnostician } : {}),
   ...(keeperHub ? { keeperHub } : {}),
+  ...(keeperHubOrg ? { keeperHubOrg } : {}),
+  ...(connections ? { connections } : {}),
+  ...(env['KEEPERHUB_API_URL'] ? { keeperHubApiUrl: env['KEEPERHUB_API_URL'] } : {}),
+  alerter,
   ...(env['BLACKBOX_TICK_MS'] ? { intervalMs: Number(env['BLACKBOX_TICK_MS']) } : {}),
   logger,
 });
@@ -160,10 +327,43 @@ const remediator = canRemediate
       }),
       market: async () => runtime.market(),
       ...(breakers ? { breakers } : {}),
+      /**
+       * What this process can actually execute with, so the router refuses a
+       * playbook it could never carry out — and names the reason — instead of
+       * planning one and failing at submission.
+       */
+      executorKinds: [
+        ...(signerExecutor ? (['signer'] as const) : []),
+        ...(keeperHubExecutor ? (['keeperhub'] as const) : []),
+        ...(workflowExecutor ? (['keeperhub-workflow'] as const) : []),
+      ],
+      // Read from what was recorded rather than configured: the events say how
+      // the agent executed, and nothing else can.
+      agentKind: (incident) => agentKindFor(incident.agentId),
       makeId: () => runtime.nextId('rem'),
       logger,
     })
   : undefined;
+
+/**
+ * How an agent executes, from its own recorded events.
+ *
+ * Cached because the router asks once per remediation and the answer changes
+ * only when an agent is first seen. A miss returns undefined, which the router
+ * reads as "unclassified" and serves every playbook to.
+ */
+const agentKinds = new Map<string, AgentKind | undefined>();
+function agentKindFor(agentId: string): AgentKind | undefined {
+  return agentKinds.get(agentId);
+}
+void (async () => {
+  try {
+    for (const row of await recentAgentKinds(db)) agentKinds.set(row.agentId, row.agentKind);
+  } catch {
+    // An unavailable database at startup is already fatal elsewhere; here it
+    // only costs the classification, which degrades to "unknown".
+  }
+})();
 
 const loop = remediator
   ? new RemediationLoop({
@@ -252,11 +452,130 @@ async function loadIncident(id: string): Promise<{ row: Record<string, unknown>;
   };
 }
 
+const webhooks = new Webhooks(db, runtime);
+const publicUrl = env['BLACKBOX_PUBLIC_URL'];
+
+/**
+ * Installing a trigger needs three things: this deployment's address, a secret
+ * for the workflow to call back with, and a KeeperHub client to write the
+ * workflow. Missing any of them leaves the routes absent rather than failing
+ * halfway through somebody's organisation.
+ */
+const triggers =
+  keeperHub && publicUrl
+    ? {
+        installSchedule: async (
+          orgId: string,
+          params: { intervalSeconds?: number; cron?: string; timezone?: string },
+        ) =>
+          installScheduledSweep({
+            client: keeperHub,
+            baseUrl: publicUrl,
+            // A fresh secret per install, so revoking one trigger's access
+            // does not silence the others.
+            webhookSecret: await webhooks.mint(orgId, 'schedule trigger'),
+            ...params,
+          }),
+        installEvent: async (
+          orgId: string,
+          params: {
+            contractAddress: string;
+            eventName: string;
+            network: string;
+            contractABI?: string;
+          },
+        ) =>
+          installEventTrigger({
+            client: keeperHub,
+            baseUrl: publicUrl,
+            webhookSecret: await webhooks.mint(orgId, `event trigger ${params.eventName}`),
+            ...params,
+          }),
+      }
+    : undefined;
+
+/**
+ * Raw events out, for a system rather than a person. Distinct from alerting on
+ * purpose: an alert is deduplicated and severity-filtered because a human is
+ * reading it, and that editing is exactly wrong for a pipeline that wants
+ * everything.
+ */
+if (env['BLACKBOX_EVENT_WEBHOOK_URL']) {
+  new EventWebhook({
+    url: env['BLACKBOX_EVENT_WEBHOOK_URL'],
+    ...(env['BLACKBOX_EVENT_WEBHOOK_SECRET']
+      ? { secret: env['BLACKBOX_EVENT_WEBHOOK_SECRET'] }
+      : {}),
+    ...(env['BLACKBOX_EVENT_WEBHOOK_TYPES']
+      ? { types: env['BLACKBOX_EVENT_WEBHOOK_TYPES'].split(',').map((t) => t.trim()) }
+      : {}),
+    logger,
+  }).attach(bus);
+}
+
+/**
+ * Asked once at startup rather than per request: a plan does not change often,
+ * and a billing call on every `/api/config` would be rude to their API.
+ */
+const triggerAvailability = keeperHub ? await triggersAvailable(keeperHub) : undefined;
+
+/**
+ * The one button a visitor may press without an account.
+ *
+ * Needs a KeeperHub organisation of our own to break, so it is absent on a
+ * deployment that has none — better no button than one that 500s. It induces a
+ * pre-flight failure, which costs an execution and no gas.
+ */
+const demo =
+  keeperHub && env['BLACKBOX_DEMO'] !== 'false'
+    ? new Demo({
+        db,
+        client: keeperHub,
+        chainId,
+        sweep: () => runtime.sweepKeeperHub(),
+      })
+    : undefined;
+
 const app = await buildApp({
   db,
   config,
   bus,
-  diagnose: (params) => runtime.diagnoseTransaction(params),
+  identity,
+  oauth,
+  ...(connections ? { connections } : {}),
+  ...(demo ? { demo } : {}),
+  sweepsOwnOrg: Boolean(keeperHubOrg),
+  ...(env['KEEPERHUB_API_URL'] ? { keeperHubApiUrl: env['KEEPERHUB_API_URL'] } : {}),
+  /**
+   * Named after this deployment, so a signature collected here is useless
+   * anywhere else. Falls back to the host header's absence rather than
+   * pretending to be somebody.
+   */
+  walletAuth: new WalletAuth({ domain: publicUrl ?? 'blackbox (unconfigured deployment)' }),
+  // A nudge causes the same sweep the loop does, just sooner.
+  webhooks,
+  ...(publicUrl ? { publicUrl } : {}),
+  ...(triggers ? { triggers } : {}),
+  ...(triggerAvailability ? { triggerAvailability } : {}),
+  ...(publicAgentIds ? { publicAgentIds } : {}),
+  // Diagnosis spends a model call, and the route is open to anyone. The
+  // background loop already refuses to explain the same incident twice for
+  // this reason; the on-demand path needs the same memory, or the same hash
+  // asked for repeatedly bills us repeatedly for one answer.
+  diagnose: async (params) => {
+    const key = `${params.chainId}:${params.txHash.toLowerCase()}`;
+    const remembered = diagnosisCache.get(key);
+    if (remembered) return remembered;
+    const answer = await runtime.diagnoseTransaction(params);
+    // Bounded, oldest out first: a cache nobody can flush is another way to be
+    // filled up by strangers.
+    if (diagnosisCache.size >= 500) {
+      const oldest = diagnosisCache.keys().next().value;
+      if (oldest) diagnosisCache.delete(oldest);
+    }
+    diagnosisCache.set(key, answer);
+    return answer;
+  },
   signerHealth: (params) => runtime.signerHealth(params),
   ...(loop
     ? {
@@ -315,6 +634,22 @@ const app = await buildApp({
         },
       }
     : {}),
+  // Unconditional, unlike `chaos` above: planning needs no key and no funds,
+  // only the ability to read the chain. This is what a public deployment
+  // offers a visitor who wants to see the loop run on their own wallet.
+  chaosPlan: {
+    plan: async ({ scenario, signer, chainId: requested }) => {
+      const state = await runtime.chaosChainState(signer);
+      return planChaos(scenario, {
+        chainId: requested,
+        signer,
+        state,
+        tickSeconds: Math.round(Number(env['BLACKBOX_TICK_MS'] ?? 15_000) / 1000),
+        ...(env['CHAOS_TARGET_ADDRESS'] ? { chaosTarget: env['CHAOS_TARGET_ADDRESS'] } : {}),
+      });
+    },
+    observe: (params) => runtime.observeSubmissions(params),
+  },
   proposals: {
     plan: async (incidentId: string) => {
       const loaded = await loadIncident(incidentId);
@@ -357,6 +692,9 @@ const app = await buildApp({
 
 const port = Number(env['PORT'] ?? 4000);
 await app.listen({ port, host: '0.0.0.0' });
+// Before the first tick, so the first evaluation knows which incidents are
+// already open rather than filing duplicates for them.
+await runtime.restoreOpenIncidents();
 runtime.start();
 
 console.log(`blackbox api on http://localhost:${port}`);
@@ -380,4 +718,17 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       process.exit(0);
     })();
   });
+}
+
+/** `22-7` or `22-7+5.5`. A malformed value is ignored rather than guessed at. */
+function parseQuietHours(
+  raw: string,
+): { start: number; end: number; utcOffsetHours?: number } | undefined {
+  const match = /^(\d{1,2})-(\d{1,2})(?:([+-][\d.]+))?$/.exec(raw.trim());
+  if (!match) return undefined;
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  if (start > 23 || end > 23) return undefined;
+  const offset = match[3] === undefined ? undefined : Number(match[3]);
+  return { start, end, ...(offset !== undefined && !Number.isNaN(offset) ? { utcOffsetHours: offset } : {}) };
 }

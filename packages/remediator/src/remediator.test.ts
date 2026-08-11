@@ -7,7 +7,7 @@ import {
   type Database,
 } from '@blackbox/store';
 import { evaluateGuards, mutexKey } from './guards.js';
-import { P1, P2, P3, P4, P5, playbookFor } from './playbooks.js';
+import { P1, P2, P3, P4, P5, playbookFor, servability } from './playbooks.js';
 import { Remediator, type RemediationExecutor } from './remediator.js';
 
 const URL = process.env['DATABASE_URL'] ?? 'postgres://blackbox:blackbox@localhost:5433/blackbox';
@@ -159,6 +159,63 @@ describe('universal guards block independently', () => {
     const r = await evaluateGuards(guardCtx());
     expect(r.failed.map((f) => f.guard)).toEqual(['budget']);
     expect(r.failed[0]!.reason).toMatch(/wei spent/);
+  });
+
+  /**
+   * Every workflow in a KeeperHub organisation executes from one managed
+   * wallet, so the per-signer cap above is a single bucket shared by all of
+   * them. This is the workflow's own allowance.
+   */
+  it("one workflow's daily cap blocks on its own", async () => {
+    for (let i = 0; i < 3; i++) {
+      await recordRemediationAttempt(db, {
+        id: `d${i}`,
+        incidentId: `other-${i}`,
+        playbookId: 'P1',
+        signer: SIGNER,
+        chainId: CHAIN_IDS.sepolia,
+        agentId: 'chaos',
+        attemptedAt: new Date(T0.getTime() - i * 60 * 60_000),
+        status: 'succeeded',
+      });
+    }
+    const r = await evaluateGuards(guardCtx());
+    expect(r.failed.map((f) => f.guard)).toEqual(['agent_daily_budget']);
+    expect(r.failed[0]!.reason).toMatch(/reaches its cap of 3/);
+  });
+
+  it("another workflow's spending does not count against this one", async () => {
+    for (let i = 0; i < 5; i++) {
+      await recordRemediationAttempt(db, {
+        id: `e${i}`,
+        incidentId: `other-${i}`,
+        playbookId: 'P1',
+        signer: SIGNER,
+        chainId: CHAIN_IDS.sepolia,
+        agentId: 'kh:some-other-workflow',
+        attemptedAt: new Date(T0.getTime() - i * 60 * 60_000),
+        status: 'succeeded',
+      });
+    }
+    // Five on the shared wallet, none on this workflow: the hourly per-signer
+    // ceiling still applies, and it is nowhere near reached.
+    expect((await evaluateGuards(guardCtx())).failed).toEqual([]);
+  });
+
+  it('yesterday does not count against today', async () => {
+    for (let i = 0; i < 3; i++) {
+      await recordRemediationAttempt(db, {
+        id: `f${i}`,
+        incidentId: `other-${i}`,
+        playbookId: 'P1',
+        signer: SIGNER,
+        chainId: CHAIN_IDS.sepolia,
+        agentId: 'chaos',
+        attemptedAt: new Date(T0.getTime() - 25 * 60 * 60_000),
+        status: 'succeeded',
+      });
+    }
+    expect((await evaluateGuards(guardCtx())).failed).toEqual([]);
   });
 
   it('spend outside the rolling hour does not count', async () => {
@@ -342,7 +399,7 @@ describe('P5 top-up', () => {
 
 const executor = (over: Partial<RemediationExecutor> = {}): RemediationExecutor => ({
   submit: async () => ({ txHash: TX }),
-  verify: async () => ({ included: true, gasUsed: 21_000n }),
+  verify: async () => ({ included: true, gasUsed: 21_000n, effectiveGasPrice: 2_000_000_000n }),
   ...over,
 });
 
@@ -415,7 +472,9 @@ describe('remediation outcomes', () => {
     await remediator().remediate(incident());
     const rows = await db.select().from(remediationLedger);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.gasSpentWei).toBe('21000');
+    // Cost, not gas units: 21,000 gas at 2 gwei. Recording the count here is
+    // what made /api/stats report a real remediation as 21,000 wei.
+    expect(rows[0]!.gasSpentWei).toBe('42000000000000');
     expect(rows[0]!.txHash).toBe(TX);
   });
 
@@ -435,7 +494,7 @@ describe('per-signer mutex', () => {
       executor: executor({
         verify: async () => {
           observedDuringVerify = r.busySigners;
-          return { included: true, gasUsed: 21_000n };
+          return { included: true, gasUsed: 21_000n, effectiveGasPrice: 2_000_000_000n };
         },
       }),
     });
@@ -495,5 +554,41 @@ describe('per-signer mutex', () => {
 
     expect(second.record.finalStatus).toBe('skipped_by_guard');
     expect(second.record.attempts[0]!.guardsFailed).toContain('no_remediation_in_flight');
+  });
+});
+
+describe('who a playbook can serve', () => {
+  /**
+   * The honesty this exists for: refusing before spending, with a reason an
+   * operator can act on rather than "no remediation available".
+   */
+  it('refuses a nonce-bearing playbook for a managed wallet, and says why', () => {
+    const check = servability(P1, 'keeperhub', ['signer', 'keeperhub']);
+    expect(check.servable).toBe(false);
+    expect(check.reason).toContain('does not apply to a keeperhub agent');
+  });
+
+  it('serves the same playbook for an agent that holds its own key', () => {
+    expect(servability(P1, 'signer', ['signer']).servable).toBe(true);
+  });
+
+  // Pausing carries no nonce and asks nothing of the sender beyond the role, so
+  // it is the one playbook a managed wallet can be served by today.
+  it('serves the circuit breaker for either kind of agent', () => {
+    expect(servability(P4, 'keeperhub', ['keeperhub-workflow']).servable).toBe(true);
+    expect(servability(P4, 'signer', ['signer']).servable).toBe(true);
+  });
+
+  it('refuses when this deployment has no executor the playbook can use', () => {
+    const check = servability(P4, 'signer', []);
+    expect(check.servable).toBe(false);
+    expect(check.reason).toContain('this deployment has none');
+  });
+
+  // An agent nobody has classified is offered everything: declining on a guess
+  // would refuse a fix somebody could have used.
+  it('withholds nothing when the agent kind is unknown', () => {
+    expect(servability(P1, undefined, ['signer']).servable).toBe(true);
+    expect(servability(P2, undefined, ['user-signed']).servable).toBe(true);
   });
 });

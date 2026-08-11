@@ -53,6 +53,96 @@ export const keeperHubExecutionSchema = z.object({
 export type KeeperHubExecution = z.infer<typeof keeperHubExecutionSchema>;
 
 /**
+ * Shape of `GET /api/analytics/runs`, the endpoint behind their `list_executions`
+ * tool. Captured live on 2026-08-11 (fixture `analytics-runs-page.json`).
+ *
+ * This is a *different* record from the one above: it covers workflow runs as
+ * well as direct executions, it is the only listing endpoint of the two — the
+ * status route answers for one id you already know — and its field names do not
+ * line up with the execution record's. Kept permissive for the same reason.
+ */
+
+export const keeperHubRunStatus = z.enum([
+  'pending',
+  'running',
+  'success',
+  'error',
+  'system_error',
+  'external_error',
+  'cancelled',
+]);
+export type KeeperHubRunStatus = z.infer<typeof keeperHubRunStatus>;
+
+/**
+ * One on-chain write a run produced.
+ *
+ * A workflow run fills in `chainId`, `verified`, `blockNumber`, `gasUsed` and
+ * `receiptStatus` because KeeperHub re-fetches the receipt itself. A direct run
+ * carries only `hash`, `nodeId`, `nodeName` and `network` — same array, half the
+ * information — so anything beyond the hash is optional here by observation,
+ * not by caution.
+ */
+export const keeperHubRunTxSchema = z.object({
+  hash: z.string(),
+  nodeId: z.string().nullish(),
+  nodeName: z.string().nullish(),
+  chainId: z.number().int().positive().nullish(),
+  network: z.string().nullish(),
+  gasUsed: z.string().nullish(),
+  verified: z.boolean().nullish(),
+  verifiedAt: z.string().nullish(),
+  blockNumber: z.number().int().nonnegative().nullish(),
+  receiptStatus: z.string().nullish(),
+});
+export type KeeperHubRunTx = z.infer<typeof keeperHubRunTxSchema>;
+
+export const keeperHubRunSchema = z.object({
+  id: z.string(),
+  source: z.enum(['workflow', 'direct']),
+  status: keeperHubRunStatus,
+  startedAt: z.string(),
+  completedAt: z.string().nullish(),
+  durationMs: z.number().nullish(),
+  workflowId: z.string().nullish(),
+  workflowName: z.string().nullish(),
+  directType: z.string().nullish(),
+  /** A chain id string on a workflow run, a network name on a direct one. */
+  network: z.string().nullish(),
+  networks: z.array(z.string()).nullish(),
+  /**
+   * Documented as the native cost in wei, and correct for a workflow run. A
+   * direct run repeats `gasUsedWei` here — gas units, not wei — so this field
+   * is only trustworthy for `source: 'workflow'`.
+   */
+  gasCostWei: z.string().nullish(),
+  gasUsedWei: z.string().nullish(),
+  transactionHashes: z.array(keeperHubRunTxSchema).nullish(),
+  totalSteps: z.number().int().nullish(),
+  completedSteps: z.number().int().nullish(),
+  error: z.string().nullish(),
+  errorCode: z.string().nullish(),
+  errorType: z.string().nullish(),
+  errorCategory: z.string().nullish(),
+});
+export type KeeperHubRun = z.infer<typeof keeperHubRunSchema>;
+
+export const keeperHubRunPageSchema = z.object({
+  runs: z.array(keeperHubRunSchema),
+  /**
+   * The `startedAt` of the last run on this page, not an opaque token. The
+   * server pages *backwards* with a strict `<`, so this walks into the past and
+   * can never be used to resume forward from a position — see the recorder's
+   * high-water mark. A strict `<` also drops a run sharing that exact
+   * millisecond, which is why ingestion dedupes on run id as well.
+   */
+  nextCursor: z.string().nullable(),
+  total: z.number().int().nonnegative().nullish(),
+  page: z.number().int().nullish(),
+  pageSize: z.number().int().nullish(),
+});
+export type KeeperHubRunPage = z.infer<typeof keeperHubRunPageSchema>;
+
+/**
  * A `status: "failed"` record means two very different things depending on
  * whether a transaction was ever submitted. KeeperHub pre-flights with
  * `eth_estimateGas` and refuses to submit a call it expects to revert, which

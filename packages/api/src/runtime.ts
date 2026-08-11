@@ -2,6 +2,7 @@ import { createPublicClient, http, type PublicClient } from 'viem';
 import {
   detectionFor,
   getChain,
+  isSupportedChain,
   type BlackboxConfig,
   type Incident,
 } from '@blackbox/core';
@@ -10,13 +11,24 @@ import { Diagnostician, VertexGemini } from '@blackbox/diagnostician';
 import {
   BlockScanner,
   buildEventFromChain,
+  KeeperHubSource,
+  type KeeperHubIngestResult,
   Recorder,
   RpcCorroborator,
   type ChainReader,
 } from '@blackbox/recorder';
-import { getIncident, listIncidents, saveIncident, stats, type Database } from '@blackbox/store';
+import {
+  getIncident,
+  listIncidents,
+  saveIncident,
+  stats,
+  watchTransaction,
+  type Database,
+} from '@blackbox/store';
 import { KeeperHubClient } from '@blackbox/core';
 import type { EventBus } from './bus.js';
+import { ConnectionSweeper } from './connection-sweeper.js';
+import type { Connections } from './connections.js';
 import { incidentSummary, type IncidentRow } from './serialise.js';
 
 /**
@@ -50,6 +62,44 @@ export type RuntimeOptions = {
    * chain shows, and every KeeperHub-specific field is simply absent.
    */
   keeperHub?: KeeperHubClient;
+  /**
+   * Read the whole organisation's run history, not just executions Blackbox
+   * submitted. Needs the address the organisation executes as — a run record
+   * does not carry one — so it stays off until that is configured rather than
+   * filing an org's activity under a guessed signer.
+   */
+  /** Announces incidents outside the process. Absent means detection stays quiet. */
+  alerter?: { consider(incident: Incident): Promise<unknown> };
+  keeperHubOrg?: {
+    orgId: string;
+    agentId: string;
+    signer: `0x${string}`;
+    range?: string;
+  };
+  /**
+   * Accounts other operators connected.
+   *
+   * With it, every connection's chosen workflows are swept alongside this
+   * deployment's own organisation. Without it, ingestion is exactly what it was:
+   * one organisation, from the environment.
+   */
+  connections?: Connections;
+  /** Base URL for reads made on a connection's behalf. */
+  keeperHubApiUrl?: string;
+  /**
+   * Extra endpoints to consult when looking up a transaction someone else's
+   * wallet broadcast.
+   *
+   * A transaction above an unused nonce is *queued*, not pending, and a node
+   * does not gossip queued transactions to its peers — they are not yet
+   * executable, so there is nothing to propagate. It therefore exists only on
+   * whichever endpoint the sender's wallet happened to use. Asking one node
+   * finds a stranger's nonce gap only by luck; asking every endpoint we have
+   * turns luck into reasonable odds.
+   */
+  fallbackRpcUrls?: string[];
+  /** How many times to sweep those endpoints before giving up on a hash. */
+  lookupRounds?: number;
   intervalMs?: number;
   logger?: { info: (m: string, d?: unknown) => void; error: (m: string, d?: unknown) => void };
 };
@@ -104,10 +154,54 @@ export function makeChainReader(clients: Record<number, PublicClient>): ChainRea
   };
 }
 
+/**
+ * Ask each endpoint in turn, and take the first that knows.
+ *
+ * Not redundancy for its own sake. A queued transaction — one sitting above an
+ * unused nonce — is never gossiped between nodes, because it is not yet
+ * executable, so it exists only in the mempool of the single machine its
+ * sender talked to. Even one public endpoint is a fleet behind a load
+ * balancer, so "does this transaction exist" is a question with a different
+ * answer per request. One reader answers it wrongly and confidently.
+ */
+export function makeFallbackReader(readers: ChainReader[]): ChainReader {
+  const first = readers[0]!;
+  // Each reader is tried inside its own guard. The readers built here never
+  // throw, but this composes any ChainReader, and one that does would
+  // otherwise abort the sweep at the first endpoint — taking the whole
+  // recorder tick down with it, since a throw from a lookup propagates all the
+  // way out of the poll. A broken endpoint must cost us that endpoint, not
+  // every observation in that tick.
+  const tryEach = async <T>(attempt: (reader: ChainReader) => Promise<T | null>): Promise<T | null> => {
+    for (const reader of readers) {
+      try {
+        const result = await attempt(reader);
+        if (result) return result;
+      } catch {
+        // This endpoint cannot answer. The next one may.
+      }
+    }
+    return null;
+  };
+  return {
+    getTransaction: (params) => tryEach((reader) => reader.getTransaction(params)),
+    getReceipt: (params) => tryEach((reader) => reader.getReceipt(params)),
+    // A simulation is a question about state, not about a mempool, so every
+    // endpoint gives the same answer and there is nothing to fall back to.
+    ...(first.call ? { call: first.call } : {}),
+  };
+}
+
 export class Runtime {
   private readonly client: PublicClient;
   private readonly reader: ChainReader;
+  /** The primary first, then any fallback, for finding a queued transaction. */
+  private readonly lookupReaders: ChainReader[];
   private readonly recorder: Recorder;
+  /** Kept so a webhook can ask for a sweep now rather than at the next tick. */
+  private readonly keeperHubSource: KeeperHubSource | undefined;
+  /** Every organisation this deployment reads: its own, plus connected ones. */
+  private readonly runSource: { ingest(): Promise<KeeperHubIngestResult> } | undefined;
   private readonly scanner: BlockScanner;
   private readonly tracker: IncidentTracker;
   private timer: NodeJS.Timeout | undefined;
@@ -117,8 +211,55 @@ export class Runtime {
 
   constructor(private readonly options: RuntimeOptions) {
     this.client = createPublicClient({ transport: http(options.rpcUrl) }) as PublicClient;
-    this.reader = makeChainReader({ [options.chainId]: this.client });
+    this.lookupReaders = [
+      makeChainReader({ [options.chainId]: this.client }),
+      ...(options.fallbackRpcUrls ?? [])
+        .filter((url) => url && url !== options.rpcUrl)
+        .map((url) =>
+          makeChainReader({
+            [options.chainId]: createPublicClient({ transport: http(url) }) as PublicClient,
+          }),
+        ),
+    ];
+    // The recorder reads through the same fallback, so a transaction only one
+    // endpoint can see is still ingested on an ordinary tick.
+    this.reader = makeFallbackReader(this.lookupReaders);
     this.tracker = new IncidentTracker({ makeId: () => this.id('inc') });
+
+    this.keeperHubSource =
+      options.keeperHub && options.keeperHubOrg
+        ? new KeeperHubSource({
+            db: options.db,
+            client: options.keeperHub,
+            orgId: options.keeperHubOrg.orgId,
+            agentId: options.keeperHubOrg.agentId,
+            signer: options.keeperHubOrg.signer,
+            ...(isSupportedChain(options.chainId) ? { fallbackChainId: options.chainId } : {}),
+            ...(options.keeperHubOrg.range ? { range: options.keeperHubOrg.range } : {}),
+            makeId: () => this.id('evt'),
+            ...(options.logger ? { logger: options.logger } : {}),
+          })
+        : undefined;
+
+    /**
+     * What the recorder actually ingests from.
+     *
+     * One organisation from the environment when nobody can connect; otherwise
+     * that organisation plus every connected account, each filtered to the
+     * workflows its operator picked.
+     */
+    this.runSource = options.connections
+      ? new ConnectionSweeper({
+          db: options.db,
+          connections: options.connections,
+          ...(isSupportedChain(options.chainId) ? { fallbackChainId: options.chainId } : {}),
+          ...(options.keeperHubApiUrl ? { keeperHubApiUrl: options.keeperHubApiUrl } : {}),
+          ...(options.keeperHubOrg?.range ? { range: options.keeperHubOrg.range } : {}),
+          makeId: () => this.id('evt'),
+          ...(this.keeperHubSource ? { ownSource: this.keeperHubSource } : {}),
+          ...(options.logger ? { logger: options.logger } : {}),
+        })
+      : this.keeperHubSource;
 
     this.recorder = new Recorder({
       db: options.db,
@@ -134,6 +275,12 @@ export class Runtime {
       },
       corroboration: new RpcCorroborator({ rpcUrls: { [options.chainId]: options.rpcUrl } }),
       chain: this.reader,
+      ...(options.alerter ? { alerter: options.alerter } : {}),
+      // The same client, in the one role SPEND_CAP_EXHAUSTED needs. Without a
+      // KeeperHub key the rule simply declines, which is correct: a budget we
+      // cannot read is not one we can say anything about.
+      ...(options.keeperHub ? { spendLimits: options.keeperHub } : {}),
+      ...(this.runSource ? { keeperHubRuns: this.runSource } : {}),
       config: options.config,
       tracker: this.tracker,
       makeId: () => this.id('evt'),
@@ -158,6 +305,24 @@ export class Runtime {
 
   private id(prefix: string): string {
     return `${prefix}-${Date.now()}-${this.seq++}`;
+  }
+
+  /**
+   * Pick up where the last process left off.
+   *
+   * The tracker holds open incidents in memory, so without this a restart
+   * starts blind: the first evaluation cannot see that an incident for a key
+   * is already open and files a second one for a condition that never went
+   * away. Three redeploys in an afternoon produced three copies of the same
+   * spend-cap warning, which is how this was found.
+   */
+  async restoreOpenIncidents(): Promise<number> {
+    const rows = await listIncidents(this.options.db, { status: 'open' });
+    const restored = this.tracker.hydrate(rows as unknown as Incident[]);
+    if (restored > 0) {
+      this.options.logger?.info('restored open incidents after restart', { restored });
+    }
+    return restored;
   }
 
   start(): void {
@@ -247,6 +412,20 @@ export class Runtime {
    * that were checked, because "nothing is wrong, and here is what I looked at"
    * is a useful answer rather than an empty one.
    */
+  /**
+   * Read the organisation's runs now, rather than at the next tick.
+   *
+   * What an inbound webhook actually triggers. The webhook carries no data we
+   * trust — it only says something happened — so the work is the same sweep the
+   * loop does, just sooner. Returns null when this deployment watches no
+   * organisation, which is a truthful answer to "did anything happen".
+   */
+  async sweepKeeperHub(): Promise<{ runsIngested: number; eventsInserted: number } | null> {
+    if (!this.runSource) return null;
+    const result = await this.runSource.ingest();
+    return { runsIngested: result.runsIngested, eventsInserted: result.eventsInserted };
+  }
+
   async diagnoseTransaction(params: { txHash: string; chainId: number }): Promise<unknown> {
     const chainId = params.chainId;
     const chain = getChain(chainId);
@@ -395,10 +574,18 @@ export class Runtime {
   async waitForReceipt(
     hash: `0x${string}`,
     timeoutMs = 90_000,
-  ): Promise<{ included: boolean; gasUsed?: bigint }> {
+  ): Promise<{ included: boolean; gasUsed?: bigint; effectiveGasPrice?: bigint }> {
     try {
       const receipt = await this.client.waitForTransactionReceipt({ hash, timeout: timeoutMs });
-      return { included: receipt.status === 'success', gasUsed: receipt.gasUsed };
+      // The price comes back with the receipt, and without it the ledger can
+      // only record gas units.
+      return {
+        included: receipt.status === 'success',
+        gasUsed: receipt.gasUsed,
+        ...(receipt.effectiveGasPrice !== undefined
+          ? { effectiveGasPrice: receipt.effectiveGasPrice }
+          : {}),
+      };
     } catch {
       return { included: false };
     }
@@ -438,6 +625,97 @@ export class Runtime {
       missingNonces: [],
       runwayActions: null,
     };
+  }
+
+  /**
+   * Take delivery of transactions somebody else's wallet sent.
+   *
+   * Needed because block scanning cannot see the most interesting failure at
+   * all: a transaction above an unused nonce is queued, never mined, and so
+   * never appears in any block. Only the wallet that sent it knows it exists.
+   *
+   * The hash is taken as a pointer, not as testimony. Who sent it, at what
+   * nonce and at what price are read from the chain, so a caller reporting
+   * someone else's hash attributes it to that someone else and gains nothing.
+   */
+  async observeSubmissions(params: {
+    txHashes: string[];
+    chainId: number;
+    /** Shared across a batch so retries of one action group together for R5. */
+    runId?: string;
+  }): Promise<{
+    observed: { txHash: string; signer: string; nonce: number }[];
+    ignored: { txHash: string; reason: string }[];
+  }> {
+    const observed: { txHash: string; signer: string; nonce: number }[] = [];
+    const ignored: { txHash: string; reason: string }[] = [];
+
+    for (const raw of params.txHashes) {
+      const txHash = String(raw);
+      if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+        ignored.push({ txHash, reason: 'not a transaction hash' });
+        continue;
+      }
+      // Safe by the regex just above, which is the only reason this narrows.
+      const hash = txHash as `0x${string}`;
+      // Rounds, not one pass. A public endpoint is a fleet behind a load
+      // balancer, and a queued transaction lives in the mempool of exactly one
+      // machine in it — measured at roughly two misses for every hit on
+      // Sepolia. Asking again lands on a different backend.
+      let tx = null;
+      const rounds = this.options.lookupRounds ?? 4;
+      for (let round = 0; round < rounds && !tx; round++) {
+        for (const reader of this.lookupReaders) {
+          tx = await reader.getTransaction({ hash, chainId: params.chainId });
+          if (tx) break;
+        }
+        if (!tx && round < rounds - 1) await new Promise((r) => setTimeout(r, 250));
+      }
+      if (!tx) {
+        // Every endpoint we have denies knowing it. Most likely it was queued
+        // behind a nonce gap on a node we cannot reach, since those are never
+        // gossiped. Attributing it anyway would mean taking the caller's word
+        // for who signed it, which is exactly what this refuses to do.
+        ignored.push({
+          txHash,
+          reason:
+            'no endpoint we can reach has this transaction; if it is queued behind a nonce ' +
+            'gap it exists only on the node your wallet broadcast to',
+        });
+        continue;
+      }
+      await watchTransaction(this.options.db, {
+        txHash,
+        signer: tx.from,
+        agentId: tx.from.slice(0, 10),
+        chainId: params.chainId,
+        label: 'self-signed chaos',
+        at: new Date(),
+        ...(params.runId ? { logicalActionId: params.runId } : {}),
+      });
+      observed.push({ txHash, signer: tx.from, nonce: tx.nonce });
+    }
+    return { observed, ignored };
+  }
+
+  /**
+   * What a wallet needs to sign chaos for itself.
+   *
+   * Read live rather than assumed: the nonce decides where the gap goes, and
+   * the base fee decides what "underpriced" means on this chain right now.
+   * A stale value for either produces a transaction that either fails to
+   * broadcast or induces nothing.
+   */
+  async chaosChainState(signer: string): Promise<{ nextNonce: number; baseFeePerGas: bigint }> {
+    const [nextNonce, block] = await Promise.all([
+      // Pending, not latest: their wallet will sign the next one it would use,
+      // so the gap has to be measured from there or there is no gap at all.
+      this.client.getTransactionCount({ address: signer as `0x${string}`, blockTag: 'pending' }),
+      this.client.getBlock({ blockTag: 'latest' }),
+    ]);
+    // A pre-1559 chain reports no base fee; the fallback keeps the plan
+    // signable rather than pricing everything at zero.
+    return { nextNonce, baseFeePerGas: block.baseFeePerGas ?? 1_000_000_000n };
   }
 }
 

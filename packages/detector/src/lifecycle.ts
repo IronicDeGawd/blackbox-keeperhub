@@ -61,6 +61,39 @@ export class IncidentTracker {
     return [...this.open.values()];
   }
 
+  /**
+   * Restore the open set from what was already persisted.
+   *
+   * Without this the tracker starts empty on every boot, and the first
+   * evaluation after a restart cannot see that an incident for this key is
+   * already open — so it files a second one for a condition that never went
+   * away. A deployment that restarts three times ends up showing the same
+   * problem three times, which is how this was found.
+   *
+   * Incidents already in the open set are left alone: a running tracker's own
+   * state is more current than the row it wrote.
+   */
+  hydrate(incidents: readonly (Incident & { key?: string })[]): number {
+    let restored = 0;
+    for (const incident of incidents) {
+      if (incident.status === 'resolved') continue;
+      const key =
+        incident.key ??
+        incidentKey(incident.agentId, incident.signer, incident.chainId, incident.class);
+      if (this.open.has(key)) continue;
+      this.open.set(key, {
+        ...incident,
+        key,
+        // Nothing has re-confirmed it since the restart, so the causal window
+        // runs from when it was detected — not from now, which would keep a
+        // long-dead incident absorbing new evidence.
+        lastSeenAt: incident.detectedAt,
+      } as TrackedIncident);
+      restored += 1;
+    }
+    return restored;
+  }
+
   get(key: IncidentKey): TrackedIncident | undefined {
     return this.open.get(key);
   }

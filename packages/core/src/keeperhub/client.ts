@@ -1,4 +1,10 @@
-import { keeperHubExecutionSchema, type KeeperHubExecution } from './types.js';
+import {
+  keeperHubExecutionSchema,
+  keeperHubRunPageSchema,
+  type KeeperHubExecution,
+  type KeeperHubRunPage,
+  type KeeperHubRunStatus,
+} from './types.js';
 
 export type SignMessage = (message: string) => Promise<string>;
 
@@ -11,6 +17,13 @@ export type KeeperHubClientOptions = {
   baseUrl?: string;
   /** `kh_` organisation key. The `wfb_` webhook key will NOT work for execution. */
   orgKey?: string;
+  /**
+   * An OAuth access token, for reading on behalf of an operator who connected
+   * their account. Sent as a bearer token exactly like an organisation key, but
+   * named apart because it is a different thing: scoped to reading, short
+   * lived, and belonging to somebody else.
+   */
+  accessToken?: string;
   /** Session cookie from `login()`. Needed for dashboard-scoped endpoints. */
   cookie?: string;
   fetchImpl?: typeof fetch;
@@ -37,7 +50,7 @@ export class KeeperHubClient {
 
   constructor(options: KeeperHubClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
-    this.orgKey = options.orgKey;
+    this.orgKey = options.orgKey ?? options.accessToken;
     this.cookie = options.cookie;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
@@ -192,6 +205,26 @@ export class KeeperHubClient {
 
   useOrgKey(key: string): void {
     this.orgKey = key;
+  }
+
+  /**
+   * Who this credential belongs to, and the address they execute as.
+   *
+   * A run record carries no address — KeeperHub submits from a shared relayer
+   * into the organisation's smart account — so for an operator who connected
+   * their own account this is where the signer comes from. Asking them to type
+   * it in would be asking them to know something we can look up.
+   */
+  async getUser(): Promise<{ id: string; walletAddress: `0x${string}` | null }> {
+    const res = await this.request<{ id?: string; walletAddress?: string }>('/user');
+    if (res.status !== 200) throw new KeeperHubError('getUser failed', res.status, res.body);
+    const address = res.body?.walletAddress;
+    return {
+      id: String(res.body?.id ?? ''),
+      walletAddress: /^0x[0-9a-fA-F]{40}$/.test(String(address))
+        ? (String(address).toLowerCase() as `0x${string}`)
+        : null,
+    };
   }
 
   async listChains(): Promise<unknown[]> {
@@ -407,6 +440,255 @@ export class KeeperHubClient {
       status: res.body.execution.status,
       error: res.body.execution.error,
       logs: (res.body.logs ?? []) as never[],
+    };
+  }
+
+  /**
+   * List runs for the organisation — workflow and direct alike.
+   *
+   * The only listing endpoint KeeperHub has. `/api/executions` does not exist
+   * (it answers 404), and `/execute/{id}/status` needs an id you already know,
+   * so this is what turns Blackbox from a submitter that watches its own calls
+   * into a monitor that sees everything an org ran.
+   *
+   * `range` defaults to 24h *on the server*, so it is passed explicitly here:
+   * omitting it silently hides anything older than a day, which looks exactly
+   * like an org with no activity.
+   */
+  async listRuns(
+    params: {
+      cursor?: string;
+      limit?: number;
+      status?: KeeperHubRunStatus;
+      source?: 'workflow' | 'direct';
+      /** `1h` | `24h` | `7d` | `30d`. Anything else is ignored by the server. */
+      range?: string;
+    } = {},
+  ): Promise<KeeperHubRunPage> {
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.status) query.set('status', params.status);
+    if (params.source) query.set('source', params.source);
+    query.set('range', params.range ?? '7d');
+
+    const res = await this.request<unknown>(`/analytics/runs?${query.toString()}`);
+    if (res.status !== 200) throw new KeeperHubError('listRuns failed', res.status, res.body);
+    const parsed = keeperHubRunPageSchema.safeParse(res.body);
+    if (!parsed.success) {
+      throw new KeeperHubError(
+        `Unrecognised runs page: ${parsed.error.issues
+          .map((i) => `${i.path.join('.')} ${i.message}`)
+          .join('; ')}`,
+        200,
+        res.body,
+      );
+    }
+    return parsed.data;
+  }
+
+  /**
+   * Read a value, test it, and act only if the test holds — all on their side.
+   *
+   * The difference from doing the same three steps here is atomicity of intent:
+   * our guards run in this process a block or more before the transaction
+   * lands, so the state they checked can move underneath them. This one checks
+   * and acts in the same call, which is what a circuit breaker actually needs.
+   *
+   * `functionArgs` is a JSON array encoded as a string on both the check and
+   * the action, per their API.
+   */
+  async checkAndExecute(params: {
+    contractAddress: string;
+    chainId: string;
+    functionName: string;
+    functionArgs: string;
+    abi?: string;
+    condition: { operator: 'gt' | 'gte' | 'lt' | 'lte' | 'eq' | 'neq'; value: string };
+    action: {
+      contractAddress: string;
+      functionName: string;
+      functionArgs: string;
+      abi?: string;
+      gasLimitMultiplier?: string;
+    };
+    simulate?: boolean;
+    idempotencyKey?: string;
+  }): Promise<{ conditionMet: boolean; execution: KeeperHubExecution | null; raw: unknown }> {
+    const { idempotencyKey, ...body } = params;
+    const res = await this.request<Record<string, unknown>>('/execute/check-and-execute', {
+      method: 'POST',
+      body,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+    if (res.status >= 400 && !isExecutionShaped(res.body)) {
+      throw new KeeperHubError('check-and-execute failed', res.status, res.body);
+    }
+    const body_ = res.body ?? {};
+    /**
+     * Their answer carries the verdict as `conditionResult.met`, alongside the
+     * value it actually observed:
+     *
+     *   {"success":true,"status":"simulated","executed":false,
+     *    "conditionResult":{"met":false,"observedValue":"true", …}}
+     *
+     * An earlier reading of this looked for a top-level `conditionMet`, which
+     * never exists — so a condition that *held* would have been reported as
+     * not held whenever no execution record came back, which is exactly what
+     * happens in a simulation. A condition that did not hold is a result, not
+     * a failure: nothing ran and nothing went wrong.
+     */
+    const verdict = body_['conditionResult'] as { met?: unknown } | undefined;
+    const conditionMet =
+      verdict?.met === true || (verdict === undefined && isExecutionShaped(body_));
+    const observed = (verdict as { observedValue?: unknown } | undefined)?.observedValue;
+    return {
+      conditionMet,
+      ...(typeof observed === 'string' ? { observedValue: observed } : {}),
+      execution: isExecutionShaped(body_) ? this.parseExecution(body_) : null,
+      raw: body_,
+    };
+  }
+
+  /**
+   * Run a published protocol action — Aave, Morpho, Compound and the rest.
+   *
+   * Lets a playbook express "repay this position" instead of assembling
+   * calldata for a protocol we would otherwise have to encode ourselves and
+   * keep correct as it upgrades.
+   */
+  async executeProtocolAction(
+    actionType: string,
+    params: Record<string, unknown>,
+    idempotencyKey?: string,
+  ): Promise<unknown> {
+    const [integration, slug] = actionType.split('/');
+    if (!integration || !slug) {
+      throw new KeeperHubError(
+        `actionType must be "protocol/action-slug"; got "${actionType}"`,
+        400,
+        actionType,
+      );
+    }
+    const res = await this.request<unknown>(`/execute/${integration}/${slug}`, {
+      method: 'POST',
+      body: params,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+    if (res.status >= 400) {
+      throw new KeeperHubError(`Protocol action ${actionType} failed`, res.status, res.body);
+    }
+    return res.body;
+  }
+
+  /** Discover protocol actions and the parameters each one needs. */
+  async searchProtocolActions(protocol?: string): Promise<unknown> {
+    const query = new URLSearchParams({ includeChains: 'false' });
+    if (protocol) query.set('category', protocol);
+    const res = await this.request<unknown>(`/mcp/schemas?${query.toString()}`);
+    if (res.status !== 200) {
+      throw new KeeperHubError('searchProtocolActions failed', res.status, res.body);
+    }
+    return res.body;
+  }
+
+  /**
+   * Sign a payment and hold it, rather than broadcasting it.
+   *
+   * The only primitive here that acts *before* harm. Everything else Blackbox
+   * does is compensation — pause it, replace it, fill the gap — and all of that
+   * happens after the money moved. A held payment can simply be cancelled.
+   */
+  async tempoSignAndHold(params: Record<string, unknown>): Promise<unknown> {
+    const res = await this.request<unknown>('/tempo/held-payments', {
+      method: 'POST',
+      body: params,
+    });
+    if (res.status >= 400) {
+      throw new KeeperHubError('tempoSignAndHold failed', res.status, res.body);
+    }
+    return res.body;
+  }
+
+  async tempoCancelHold(paymentId: string): Promise<unknown> {
+    const res = await this.request<unknown>(`/tempo/held-payments/${paymentId}/cancel`, {
+      method: 'POST',
+    });
+    if (res.status >= 400) {
+      throw new KeeperHubError('tempoCancelHold failed', res.status, res.body);
+    }
+    return res.body;
+  }
+
+  async tempoReleaseHold(paymentId: string): Promise<unknown> {
+    const res = await this.request<unknown>(`/tempo/held-payments/${paymentId}/release`, {
+      method: 'POST',
+    });
+    if (res.status >= 400) {
+      throw new KeeperHubError('tempoReleaseHold failed', res.status, res.body);
+    }
+    return res.body;
+  }
+
+  /**
+   * The organisation's plan, and whether it may still start a trial.
+   *
+   * Read because features are gated by it: the code action a trigger needs is
+   * Pro-only, and finding that out at install time means offering a button that
+   * fails. The trial terms come from here too, live rather than assumed.
+   */
+  async getSubscription(): Promise<{
+    plan: string;
+    status?: string;
+    trial?: { eligible: boolean; days: number; tier: string };
+  }> {
+    const res = await this.request<Record<string, unknown>>('/billing/subscription');
+    if (res.status !== 200) {
+      throw new KeeperHubError('getSubscription failed', res.status, res.body);
+    }
+    const body = res.body ?? {};
+    const sub = (body['subscription'] ?? {}) as { plan?: unknown; status?: unknown };
+    const trial = body['trial'] as { eligible?: unknown; days?: unknown; tier?: unknown } | undefined;
+    return {
+      plan: typeof sub.plan === 'string' ? sub.plan : 'free',
+      ...(typeof sub.status === 'string' ? { status: sub.status } : {}),
+      ...(trial
+        ? {
+            trial: {
+              eligible: trial.eligible === true,
+              days: Number(trial.days ?? 0),
+              tier: String(trial.tier ?? ''),
+            },
+          }
+        : {}),
+    };
+  }
+
+  /**
+   * The organisation's daily execution budget and what it has spent today.
+   *
+   * `dailyCapWei` is null when no cap is configured. That is not a cap of zero
+   * and must not be read as one — it means the organisation has no limit, and
+   * an alert about reaching a limit that does not exist would be nonsense.
+   */
+  async getSpendingLimits(): Promise<{
+    dailyCapWei: string | null;
+    dailyUsedWei: string | null;
+    dailySolanaCapLamports: string | null;
+    dailySolanaUsedLamports: string | null;
+  }> {
+    const res = await this.request<Record<string, unknown>>('/analytics/spend-cap');
+    if (res.status !== 200) {
+      throw new KeeperHubError('getSpendingLimits failed', res.status, res.body);
+    }
+    const body = res.body ?? {};
+    const str = (key: string): string | null =>
+      typeof body[key] === 'string' ? (body[key] as string) : null;
+    return {
+      dailyCapWei: str('dailyCapWei'),
+      dailyUsedWei: str('dailyUsedWei'),
+      dailySolanaCapLamports: str('dailySolanaCapLamports'),
+      dailySolanaUsedLamports: str('dailySolanaUsedLamports'),
     };
   }
 

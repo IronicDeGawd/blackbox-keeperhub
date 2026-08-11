@@ -1,4 +1,10 @@
-import { getChain, type BlackboxConfig, type Incident, type IncidentClass } from '@blackbox/core';
+import {
+  getChain,
+  type AgentKind,
+  type BlackboxConfig,
+  type Incident,
+  type IncidentClass,
+} from '@blackbox/core';
 
 /**
  * Remediation playbooks (PRD §6).
@@ -9,7 +15,7 @@ import { getChain, type BlackboxConfig, type Incident, type IncidentClass } from
  * declines with a reason rather than pretending.
  */
 
-export type PlaybookId = 'P1' | 'P2' | 'P3' | 'P4' | 'P5';
+export type PlaybookId = 'P1' | 'P2' | 'P3' | 'P4' | 'P5' | 'P6' | 'P7';
 
 /** A concrete chain write, or a refusal with the reason stated. */
 export type PlaybookPlan =
@@ -46,11 +52,65 @@ export type PlanContext = {
   signerBalance?: bigint;
 };
 
+/**
+ * Who can carry out a plan.
+ *
+ * `signer` puts a transaction on chain with a key Blackbox holds; `keeperhub`
+ * submits through the platform, which chooses fees and nonces itself;
+ * `keeperhub-workflow` runs a workflow; `user-signed` means a human's wallet
+ * signs what Blackbox planned. They are not interchangeable — a plan that
+ * carries a nonce cannot be executed by something that manages its own.
+ */
+export type ExecutorKind = 'signer' | 'keeperhub' | 'keeperhub-workflow' | 'user-signed';
+
 export type Playbook = {
   id: PlaybookId;
   handles: IncidentClass[];
+  /**
+   * Which kinds of agent this playbook can fix.
+   *
+   * Declared rather than discovered at the moment of failure, so the router can
+   * say "nothing here can serve this" before spending anything — and so a
+   * console can show an operator why a fix is not on offer.
+   */
+  appliesTo: readonly AgentKind[];
+  /**
+   * Which executors can carry it out. A plan that names a nonce needs a signer;
+   * one that pauses a contract does not care who sends it.
+   */
+  executors: readonly ExecutorKind[];
   plan: (ctx: PlanContext) => PlaybookPlan;
 };
+
+/**
+ * Can this playbook be served at all, for this agent, by these executors?
+ *
+ * Returns the reason when it cannot, because "no remediation available" is a
+ * worse answer than "this agent's nonces are managed by KeeperHub, so a
+ * replacement submission is not something anyone here can send".
+ */
+export function servability(
+  playbook: Playbook,
+  agentKind: AgentKind | undefined,
+  availableExecutors: readonly ExecutorKind[],
+): { servable: boolean; reason?: string } {
+  if (agentKind && !playbook.appliesTo.includes(agentKind)) {
+    return {
+      servable: false,
+      reason: `${playbook.id} does not apply to a ${agentKind} agent`,
+    };
+  }
+  const usable = playbook.executors.filter((e) => availableExecutors.includes(e));
+  if (usable.length === 0) {
+    return {
+      servable: false,
+      reason: `${playbook.id} needs one of ${playbook.executors.join(', ')}; this deployment has ${
+        availableExecutors.length > 0 ? availableExecutors.join(', ') : 'none'
+      }`,
+    };
+  }
+  return { servable: true };
+}
 
 const fact = (incident: Incident, key: string): unknown => incident.evidence.facts[key];
 
@@ -72,6 +132,10 @@ const asBigInt = (v: unknown): bigint | undefined => {
 export const P1: Playbook = {
   id: 'P1',
   handles: ['GAS_UNDERPRICED', 'STUCK_TRANSACTION'],
+  // A replacement reuses the stuck transaction's nonce, so it can only be sent
+  // by something that controls that nonce. KeeperHub manages its own.
+  appliesTo: ['signer'],
+  executors: ['signer', 'user-signed'],
   plan(ctx) {
     const nonce = fact(ctx.incident, 'nonce');
     if (typeof nonce !== 'number') {
@@ -119,6 +183,9 @@ export const P1: Playbook = {
 export const P2: Playbook = {
   id: 'P2',
   handles: ['NONCE_GAP'],
+  // Filling a gap means sending *at* the missing nonce. Only a key holder can.
+  appliesTo: ['signer'],
+  executors: ['signer', 'user-signed'],
   plan(ctx) {
     const missing = fact(ctx.incident, 'missingNonces');
     const lowest = Array.isArray(missing) ? missing.find((n) => typeof n === 'number') : undefined;
@@ -160,6 +227,10 @@ export const P2: Playbook = {
 export const P3: Playbook = {
   id: 'P3',
   handles: ['ADVERSE_INCLUSION'],
+  // Rerouting picks the mempool a transaction is sent to, which is a choice
+  // KeeperHub makes for itself.
+  appliesTo: ['signer'],
+  executors: ['signer'],
   plan(ctx) {
     const chain = getChain(ctx.incident.chainId);
     if (!chain.privateMempool) {
@@ -189,7 +260,14 @@ const PAUSE_SELECTOR = '0x8456cb59' as const; // pause()
 
 export const P4: Playbook = {
   id: 'P4',
-  handles: ['RETRY_STORM', 'SIM_PASS_EXEC_REVERT'],
+  handles: ['RETRY_STORM', 'SIM_PASS_EXEC_REVERT', 'WORKFLOW_MISCONFIGURED'],
+  /**
+   * Pausing a contract carries no nonce and asks nothing of the sender beyond
+   * having the pauser role — so it works for either kind of agent, and is the
+   * one playbook a managed wallet can actually be served by today.
+   */
+  appliesTo: ['signer', 'keeperhub'],
+  executors: ['signer', 'keeperhub', 'keeperhub-workflow', 'user-signed'],
   plan(ctx) {
     if (!ctx.breakerAddress) {
       return {
@@ -223,6 +301,11 @@ export const P4: Playbook = {
 export const P5: Playbook = {
   id: 'P5',
   handles: ['SIGNER_GAS_STARVED'],
+  // Topping up a balance only helps an agent that pays from one. A managed
+  // wallet's equivalent problem is the organisation's spend cap, which is
+  // raised in KeeperHub's own settings rather than fixed by a transfer.
+  appliesTo: ['signer'],
+  executors: ['signer', 'user-signed'],
   plan(ctx) {
     if (!ctx.fundingWallet) {
       return {
@@ -254,7 +337,65 @@ export const P5: Playbook = {
   },
 };
 
-export const ALL_PLAYBOOKS: readonly Playbook[] = [P1, P2, P3, P4, P5];
+/**
+ * P6 — a stalled workflow.
+ *
+ * There is nothing to submit. A workflow that has not finished is KeeperHub's
+ * to cancel or continue, and sending a transaction would not touch it. The
+ * playbook exists so the answer is "here is what to do and why Blackbox is not
+ * doing it" rather than "no playbook handles EXECUTION_STALLED", which reads
+ * like a missing feature instead of a considered position.
+ */
+export const P6: Playbook = {
+  id: 'P6',
+  handles: ['EXECUTION_STALLED'],
+  appliesTo: ['keeperhub'],
+  executors: ['keeperhub', 'keeperhub-workflow'],
+  plan(ctx) {
+    const workflowId = fact(ctx.incident, 'workflowId');
+    const name = fact(ctx.incident, 'workflowName');
+    return {
+      kind: 'skip',
+      policy: 'skipped_by_policy',
+      reason:
+        `${name ? `workflow "${String(name)}"` : 'this workflow'} has not finished` +
+        `${workflowId ? ` (${String(workflowId)})` : ''}. Nothing on chain can end it: ` +
+        `cancel or re-run it in KeeperHub, and check the step it stopped at.`,
+    };
+  },
+};
+
+/**
+ * P7 — the organisation's daily budget.
+ *
+ * Raising a spend cap is a billing action inside KeeperHub, not a transaction,
+ * so no executor here can serve it. Saying exactly that is more use than
+ * silence, because the operator's next move is a specific one.
+ */
+export const P7: Playbook = {
+  id: 'P7',
+  handles: ['SPEND_CAP_EXHAUSTED'],
+  appliesTo: ['keeperhub'],
+  executors: ['keeperhub'],
+  plan(ctx) {
+    const used = fact(ctx.incident, 'dailyUsedWei');
+    const cap = fact(ctx.incident, 'dailyCapWei');
+    const exhausted = fact(ctx.incident, 'exhausted') === true;
+    return {
+      kind: 'skip',
+      policy: 'skipped_by_policy',
+      reason:
+        (exhausted
+          ? 'the daily execution budget is spent, so KeeperHub will submit nothing more today'
+          : 'the daily execution budget is nearly spent') +
+        `${cap ? ` (${String(used)} of ${String(cap)} wei)` : ''}. ` +
+        `Raise the cap in KeeperHub's organisation settings, or wait for it to reset; ` +
+        `no transaction can fix this one.`,
+    };
+  },
+};
+
+export const ALL_PLAYBOOKS: readonly Playbook[] = [P1, P2, P3, P4, P5, P6, P7];
 
 /**
  * The playbook for an incident class.

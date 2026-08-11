@@ -3,6 +3,7 @@ import {
   CHAIN_IDS,
   CHAOS_ALLOWED_CHAINS,
   CHAINS,
+  resolveNetwork,
   assertChaosAllowed,
   getChain,
   isSupportedChain,
@@ -66,5 +67,23 @@ describe('chain lookup', () => {
     expect(getChain(CHAIN_IDS.baseSepolia).explorerTxUrl(hash)).toBe(
       `https://sepolia.basescan.org/tx/${hash}`,
     );
+  });
+});
+
+describe('resolveNetwork', () => {
+  // Both forms come back in the same /analytics/runs page: workflow runs report
+  // a chain id string, direct runs report the network name.
+  it('accepts a chain id string and a network name', () => {
+    expect(resolveNetwork('11155111')).toBe(CHAIN_IDS.sepolia);
+    expect(resolveNetwork('sepolia')).toBe(CHAIN_IDS.sepolia);
+    expect(resolveNetwork('base-sepolia')).toBe(CHAIN_IDS.baseSepolia);
+    expect(resolveNetwork(' Sepolia ')).toBe(CHAIN_IDS.sepolia);
+  });
+
+  it('returns null rather than guessing at an unknown network', () => {
+    expect(resolveNetwork('solana')).toBeNull();
+    expect(resolveNetwork('999999')).toBeNull();
+    expect(resolveNetwork(null)).toBeNull();
+    expect(resolveNetwork('')).toBeNull();
   });
 });

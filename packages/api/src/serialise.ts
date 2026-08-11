@@ -163,6 +163,14 @@ export function summarise(row: IncidentRow): string {
       return `Balance ${eth(facts['signerBalance'])} covers ${n('projectedActionsRemaining')} further action(s)`;
     case 'ADVERSE_INCLUSION':
       return `Executed ${n('deltaBps')} bps worse than quoted`;
+    case 'EXECUTION_STALLED':
+      return `Workflow unfinished after ${Math.round(Number(facts['stalledMs'] ?? 0) / 1000)}s`;
+    case 'WORKFLOW_MISCONFIGURED':
+      return `${n('failureCount')} rejections before the chain, at the same workflow`;
+    case 'SPEND_CAP_EXHAUSTED':
+      return facts['exhausted'] === true
+        ? `Daily spend cap of ${eth(facts['dailyCapWei'])} reached`
+        : `Daily spend cap ${Math.round(Number(facts['usedRatio'] ?? 0) * 100)}% used`;
     default:
       return `${row.class} detected by ${row.ruleId}`;
   }

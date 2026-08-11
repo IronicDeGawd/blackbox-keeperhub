@@ -1,12 +1,19 @@
-import { and, asc, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import type { ExecutionEvent } from '@blackbox/core';
 import {
   executionEvents,
   incidents,
+  agentOwners,
   ingestCursors,
+  oauthAuthRequests,
+  oauthClients,
+  orgSessions,
   signerState,
+  keeperhubConnections,
+  watchedWorkflows,
+  webhookSecrets,
   watchedExecutions,
   watchedSigners,
   watchedTransactions,
@@ -34,6 +41,8 @@ function serialiseEvent(e: ExecutionEvent) {
     agentId: e.agentId,
     signer: e.signer.toLowerCase(),
     chainId: e.chainId,
+    agentKind: e.agentKind ?? null,
+    workflowId: e.workflowId ?? null,
     txHash: e.submission.txHash ?? null,
     nonce: e.submission.nonce ?? null,
     submittedAt: e.submission.submittedAt,
@@ -81,6 +90,8 @@ function deserialiseEvent(row: typeof executionEvents.$inferSelect): ExecutionEv
     agentId: row.agentId,
     signer: row.signer as `0x${string}`,
     chainId: row.chainId,
+    ...(row.agentKind ? { agentKind: row.agentKind as ExecutionEvent['agentKind'] } : {}),
+    ...(row.workflowId ? { workflowId: row.workflowId } : {}),
     trigger: row.trigger as ExecutionEvent['trigger'],
     simulation: {
       performed: Boolean(sim['performed']),
@@ -327,11 +338,29 @@ export type Stats = {
  * detection" would read as instant detection rather than as no data, and this
  * number is one a viewer will quote.
  */
-export async function stats(db: Database, now: Date = new Date()): Promise<Stats> {
-  const [incidentRows, ledgerRows] = await Promise.all([
+export async function stats(
+  db: Database,
+  now: Date = new Date(),
+  /**
+   * Restrict to these agents. Undefined means every agent, which is right for a
+   * deployment that hosts only its own; a caller-scoped console must pass its
+   * own list, or the numbers describe other people's failures.
+   */
+  agentIds?: readonly string[],
+): Promise<Stats> {
+  const [allIncidents, allLedger] = await Promise.all([
     db.select().from(incidents).orderBy(desc(incidents.detectedAt)).limit(500),
     db.select().from(remediationLedger).orderBy(desc(remediationLedger.attemptedAt)).limit(500),
   ]);
+  const incidentRows = agentIds
+    ? allIncidents.filter((row) => agentIds.includes(row.agentId))
+    : allIncidents;
+  // The ledger has no agent column, so it is narrowed through the incidents
+  // that survived the filter.
+  const visibleIncidentIds = new Set(incidentRows.map((row) => row.id));
+  const ledgerRows = agentIds
+    ? allLedger.filter((row) => visibleIncidentIds.has(row.incidentId))
+    : allLedger;
 
   const open = incidentRows.filter((i) => i.status !== 'resolved' && i.status !== 'acknowledged');
   const countSeverity = (severity: string): number =>
@@ -344,7 +373,14 @@ export async function stats(db: Database, now: Date = new Date()): Promise<Stats
     .map((i) => i.detectedAt.getTime() - i.firstEventAt.getTime())
     .filter((ms) => ms >= 0);
 
-  const remediated = incidentRows.filter((i) => i.resolvedAt && i.resolvedBy === 'blackbox');
+  /**
+   * Both count as Blackbox remediating: one it signed itself, one it planned
+   * and an owner's wallet signed through its route. Counting only the first
+   * left the statistic null for a run that plainly was a remediation.
+   */
+  const remediated = incidentRows.filter(
+    (i) => i.resolvedAt && (i.resolvedBy === 'blackbox' || i.resolvedBy === 'blackbox-proposed'),
+  );
   const remediationLatencies = remediated
     .map((i) => i.resolvedAt!.getTime() - i.detectedAt.getTime())
     .filter((ms) => ms >= 0);
@@ -372,10 +408,12 @@ export async function stats(db: Database, now: Date = new Date()): Promise<Stats
 }
 
 /** Distinct agents seen, with their signers, chains and open incident counts. */
-export async function listAgents(db: Database): Promise<
-  { agentId: string; signers: string[]; chainIds: number[]; openIncidents: number }[]
-> {
-  const rows = await db.select().from(incidents).limit(1000);
+export async function listAgents(
+  db: Database,
+  agentIds?: readonly string[],
+): Promise<{ agentId: string; signers: string[]; chainIds: number[]; openIncidents: number }[]> {
+  const all = await db.select().from(incidents).limit(1000);
+  const rows = agentIds ? all.filter((row) => agentIds.includes(row.agentId)) : all;
   const byAgent = new Map<string, { signers: Set<string>; chainIds: Set<number>; open: number }>();
   for (const row of rows) {
     const entry = byAgent.get(row.agentId) ?? { signers: new Set(), chainIds: new Set(), open: 0 };
@@ -586,6 +624,32 @@ export async function remediationSpendSince(
   };
 }
 
+/**
+ * What one agent has spent since a moment.
+ *
+ * Separate from the per-signer figure because they answer different questions:
+ * per signer bounds what one wallet can spend in an hour, per agent stops a
+ * single workflow retrying all day on an organisation's shared wallet.
+ */
+export async function remediationSpendForAgent(
+  db: Database,
+  params: { agentId: string; since: Date },
+): Promise<RemediationSpend> {
+  const rows = await db
+    .select()
+    .from(remediationLedger)
+    .where(
+      and(
+        eq(remediationLedger.agentId, params.agentId),
+        gte(remediationLedger.attemptedAt, params.since),
+      ),
+    );
+  return {
+    count: rows.length,
+    gasWei: rows.reduce((sum, r) => sum + BigInt(r.gasSpentWei), 0n),
+  };
+}
+
 /** How many attempts this incident has already had. */
 export async function attemptsForIncident(db: Database, incidentId: string): Promise<number> {
   const rows = await db
@@ -608,6 +672,7 @@ export async function recordRemediationAttempt(
     status: string;
     txHash?: string;
     executor?: string;
+    agentId?: string;
   },
 ): Promise<void> {
   await db.insert(remediationLedger).values({
@@ -616,6 +681,7 @@ export async function recordRemediationAttempt(
     gasSpentWei: (entry.gasSpentWei ?? 0n).toString(),
     txHash: entry.txHash ?? null,
     executor: entry.executor ?? null,
+    agentId: entry.agentId ?? null,
   });
 }
 
@@ -665,4 +731,510 @@ export async function activeSigners(db: Database, chainId?: number): Promise<Wat
     chainId !== undefined ? eq(watchedSigners.chainId, chainId) : undefined,
   ].filter((c): c is NonNullable<typeof c> => c !== undefined);
   return db.select().from(watchedSigners).where(and(...clauses));
+}
+
+// --- identity ---------------------------------------------------------------
+// A KeeperHub organisation key is a bearer credential for someone else's
+// account. None of these functions accept or return one: the API hashes before
+// it calls, so a key never reaches this layer and never reaches the disk.
+
+export async function createOrgSession(
+  db: Database,
+  params: { tokenHash: string; orgId: string; keyHash: string; label?: string | null; at: Date },
+): Promise<void> {
+  await db.insert(orgSessions).values({
+    tokenHash: params.tokenHash,
+    orgId: params.orgId,
+    keyHash: params.keyHash,
+    label: params.label ?? null,
+    createdAt: params.at,
+    lastSeenAt: params.at,
+  });
+}
+
+/** A revoked session resolves to nothing, and stays on the table for the audit. */
+export async function findOrgSession(
+  db: Database,
+  tokenHash: string,
+): Promise<{ orgId: string } | null> {
+  const [row] = await db
+    .select()
+    .from(orgSessions)
+    .where(and(eq(orgSessions.tokenHash, tokenHash), isNull(orgSessions.revokedAt)))
+    .limit(1);
+  return row ? { orgId: row.orgId } : null;
+}
+
+export async function touchOrgSession(db: Database, tokenHash: string, at: Date): Promise<void> {
+  await db.update(orgSessions).set({ lastSeenAt: at }).where(eq(orgSessions.tokenHash, tokenHash));
+}
+
+export async function revokeOrgSession(db: Database, tokenHash: string, at: Date): Promise<void> {
+  await db.update(orgSessions).set({ revokedAt: at }).where(eq(orgSessions.tokenHash, tokenHash));
+}
+
+export async function ownerOfAgent(db: Database, agentId: string): Promise<string | null> {
+  const [row] = await db.select().from(agentOwners).where(eq(agentOwners.agentId, agentId)).limit(1);
+  return row?.orgId ?? null;
+}
+
+export async function agentsOwnedByOrg(db: Database, orgId: string): Promise<string[]> {
+  const rows = await db.select().from(agentOwners).where(eq(agentOwners.orgId, orgId));
+  return rows.map((r) => r.agentId);
+}
+
+/** First registration wins; a second claim by the same org is not an error. */
+export async function claimAgentForOrg(
+  db: Database,
+  params: { agentId: string; orgId: string; at: Date },
+): Promise<'claimed' | 'already_yours' | 'owned_by_another'> {
+  const existing = await ownerOfAgent(db, params.agentId);
+  if (existing) return existing === params.orgId ? 'already_yours' : 'owned_by_another';
+  await db
+    .insert(agentOwners)
+    .values({ agentId: params.agentId, orgId: params.orgId, claimedAt: params.at })
+    .onConflictDoNothing({ target: agentOwners.agentId });
+  return 'claimed';
+}
+
+// --- oauth ------------------------------------------------------------------
+
+export async function getOAuthClient(
+  db: Database,
+  issuer: string,
+): Promise<{ clientId: string; redirectUri: string } | null> {
+  const [row] = await db
+    .select()
+    .from(oauthClients)
+    .where(eq(oauthClients.issuer, issuer))
+    .limit(1);
+  return row ? { clientId: row.clientId, redirectUri: row.redirectUri } : null;
+}
+
+export async function saveOAuthClient(
+  db: Database,
+  params: { issuer: string; clientId: string; redirectUri: string; at: Date },
+): Promise<void> {
+  await db
+    .insert(oauthClients)
+    .values({
+      issuer: params.issuer,
+      clientId: params.clientId,
+      redirectUri: params.redirectUri,
+      registeredAt: params.at,
+    })
+    .onConflictDoUpdate({
+      target: oauthClients.issuer,
+      set: { clientId: params.clientId, redirectUri: params.redirectUri, registeredAt: params.at },
+    });
+}
+
+export async function saveAuthRequest(
+  db: Database,
+  params: {
+    state: string;
+    codeVerifier: string;
+    redirectUri: string;
+    returnTo?: string | null;
+    connectDays?: number | null;
+    at: Date;
+    expiresAt: Date;
+  },
+): Promise<void> {
+  await db.insert(oauthAuthRequests).values({
+    state: params.state,
+    codeVerifier: params.codeVerifier,
+    redirectUri: params.redirectUri,
+    returnTo: params.returnTo ?? null,
+    connectDays: params.connectDays ?? null,
+    createdAt: params.at,
+    expiresAt: params.expiresAt,
+  });
+}
+
+/**
+ * Read a sign-in and consume it in the same breath.
+ *
+ * Single-use by construction: the row is deleted before the code is exchanged,
+ * so a replayed callback — or two browsers racing the same link — finds
+ * nothing. An expired request is deleted and reported as absent.
+ */
+export async function takeAuthRequest(
+  db: Database,
+  state: string,
+  now: Date,
+): Promise<{
+  codeVerifier: string;
+  redirectUri: string;
+  returnTo: string | null;
+  connectDays: number | null;
+} | null> {
+  const [row] = await db
+    .delete(oauthAuthRequests)
+    .where(eq(oauthAuthRequests.state, state))
+    .returning();
+  if (!row) return null;
+  if (row.expiresAt.getTime() < now.getTime()) return null;
+  return {
+    codeVerifier: row.codeVerifier,
+    redirectUri: row.redirectUri,
+    returnTo: row.returnTo,
+    connectDays: row.connectDays,
+  };
+}
+
+/** Housekeeping: abandoned sign-ins are rows nobody will ever come back for. */
+export async function purgeExpiredAuthRequests(db: Database, now: Date): Promise<number> {
+  const rows = await db
+    .delete(oauthAuthRequests)
+    .where(lt(oauthAuthRequests.expiresAt, now))
+    .returning();
+  return rows.length;
+}
+
+// --- webhook secrets --------------------------------------------------------
+
+export async function createWebhookSecret(
+  db: Database,
+  params: { secretHash: string; orgId: string; label?: string | null; at: Date },
+): Promise<void> {
+  await db.insert(webhookSecrets).values({
+    secretHash: params.secretHash,
+    orgId: params.orgId,
+    label: params.label ?? null,
+    createdAt: params.at,
+  });
+}
+
+/** Resolve a secret to the organisation that owns it, and record the use. */
+export async function useWebhookSecret(
+  db: Database,
+  secretHash: string,
+  at: Date,
+): Promise<{ orgId: string } | null> {
+  const [row] = await db
+    .select()
+    .from(webhookSecrets)
+    .where(and(eq(webhookSecrets.secretHash, secretHash), isNull(webhookSecrets.revokedAt)))
+    .limit(1);
+  if (!row) return null;
+  await db
+    .update(webhookSecrets)
+    .set({ lastUsedAt: at })
+    .where(eq(webhookSecrets.secretHash, secretHash));
+  return { orgId: row.orgId };
+}
+
+export async function revokeWebhookSecret(
+  db: Database,
+  secretHash: string,
+  at: Date,
+): Promise<void> {
+  await db
+    .update(webhookSecrets)
+    .set({ revokedAt: at })
+    .where(eq(webhookSecrets.secretHash, secretHash));
+}
+
+/**
+ * How each agent executes, from what was actually recorded.
+ *
+ * The most recent classification wins, since an agent that has migrated from
+ * its own key to a managed wallet is now the latter. Agents with no
+ * classification are absent rather than guessed at.
+ */
+export async function recentAgentKinds(
+  db: Database,
+): Promise<{ agentId: string; agentKind: 'keeperhub' | 'signer' }[]> {
+  const rows = await db
+    .select({
+      agentId: executionEvents.agentId,
+      agentKind: executionEvents.agentKind,
+      submittedAt: executionEvents.submittedAt,
+    })
+    .from(executionEvents)
+    .orderBy(desc(executionEvents.submittedAt))
+    .limit(2000);
+
+  const seen = new Map<string, 'keeperhub' | 'signer'>();
+  for (const row of rows) {
+    if (!row.agentKind || seen.has(row.agentId)) continue;
+    if (row.agentKind === 'keeperhub' || row.agentKind === 'signer') {
+      seen.set(row.agentId, row.agentKind);
+    }
+  }
+  return [...seen.entries()].map(([agentId, agentKind]) => ({ agentId, agentKind }));
+}
+
+// --- KeeperHub connections ---------------------------------------------------
+
+export type ConnectionStatus = 'active' | 'needs_reauth' | 'disconnected';
+
+export interface KeeperhubConnection {
+  orgId: string;
+  refreshTokenEnc: string;
+  scope: string;
+  subject: string | null;
+  signer: string | null;
+  connectedAt: Date;
+  expiresAt: Date;
+  lastRefreshedAt: Date | null;
+  lastSweptAt: Date | null;
+  status: ConnectionStatus;
+  lastError: string | null;
+  failureCount: number;
+}
+
+const asStatus = (s: string): ConnectionStatus =>
+  s === 'active' || s === 'needs_reauth' || s === 'disconnected' ? s : 'disconnected';
+
+const asConnection = (row: typeof keeperhubConnections.$inferSelect): KeeperhubConnection => ({
+  ...row,
+  status: asStatus(row.status),
+});
+
+/**
+ * Store a freshly authorised connection.
+ *
+ * Reconnecting overwrites the credential and restarts both clocks, but leaves
+ * the watched workflows alone — an operator re-authorising should not have to
+ * choose again.
+ */
+export async function saveKeeperhubConnection(
+  db: Database,
+  params: {
+    orgId: string;
+    refreshTokenEnc: string;
+    scope: string;
+    subject?: string | null;
+    at: Date;
+    expiresAt: Date;
+  },
+): Promise<void> {
+  const values = {
+    orgId: params.orgId,
+    refreshTokenEnc: params.refreshTokenEnc,
+    scope: params.scope,
+    subject: params.subject ?? null,
+    connectedAt: params.at,
+    expiresAt: params.expiresAt,
+    lastRefreshedAt: null,
+    status: 'active' as const,
+    lastError: null,
+    failureCount: 0,
+  };
+  await db
+    .insert(keeperhubConnections)
+    .values(values)
+    .onConflictDoUpdate({ target: keeperhubConnections.orgId, set: values });
+}
+
+export async function getKeeperhubConnection(
+  db: Database,
+  orgId: string,
+): Promise<KeeperhubConnection | null> {
+  const [row] = await db
+    .select()
+    .from(keeperhubConnections)
+    .where(eq(keeperhubConnections.orgId, orgId))
+    .limit(1);
+  return row ? asConnection(row) : null;
+}
+
+/** Connections the sweep should read from: active, and not past our own expiry. */
+export async function listSweepableConnections(
+  db: Database,
+  now: Date,
+): Promise<KeeperhubConnection[]> {
+  const rows = await db
+    .select()
+    .from(keeperhubConnections)
+    .where(and(eq(keeperhubConnections.status, 'active'), gte(keeperhubConnections.expiresAt, now)));
+  return rows.map(asConnection);
+}
+
+/**
+ * Persist the token KeeperHub handed back on a refresh.
+ *
+ * Their refresh tokens rotate: the one we just sent is dead. So this write is
+ * not housekeeping — losing it loses the connection, which is why the caller
+ * writes before using the new access token rather than after.
+ */
+export async function recordConnectionRefresh(
+  db: Database,
+  params: { orgId: string; refreshTokenEnc: string; at: Date },
+): Promise<void> {
+  await db
+    .update(keeperhubConnections)
+    .set({
+      refreshTokenEnc: params.refreshTokenEnc,
+      lastRefreshedAt: params.at,
+      failureCount: 0,
+      lastError: null,
+    })
+    .where(eq(keeperhubConnections.orgId, params.orgId));
+}
+
+/** How many accounts are connected. A count, never a list of who. */
+export async function countConnections(db: Database): Promise<number> {
+  const rows = await db
+    .select({ orgId: keeperhubConnections.orgId })
+    .from(keeperhubConnections)
+    .where(eq(keeperhubConnections.status, 'active'));
+  return rows.length;
+}
+
+/** Remember the address this organisation executes as, once we know it. */
+export async function recordConnectionSigner(
+  db: Database,
+  orgId: string,
+  signer: string,
+): Promise<void> {
+  await db
+    .update(keeperhubConnections)
+    .set({ signer: signer.toLowerCase() })
+    .where(eq(keeperhubConnections.orgId, orgId));
+}
+
+export async function recordConnectionSweep(
+  db: Database,
+  orgId: string,
+  at: Date,
+): Promise<void> {
+  await db
+    .update(keeperhubConnections)
+    .set({ lastSweptAt: at })
+    .where(eq(keeperhubConnections.orgId, orgId));
+}
+
+/** A dead refresh token does not recover by being asked again. Stop sweeping. */
+export async function markConnectionNeedsReauth(
+  db: Database,
+  orgId: string,
+  reason: string,
+): Promise<void> {
+  await db
+    .update(keeperhubConnections)
+    .set({ status: 'needs_reauth', lastError: reason })
+    .where(eq(keeperhubConnections.orgId, orgId));
+}
+
+/** A transient failure: counted, but the connection stays live. */
+export async function recordConnectionFailure(
+  db: Database,
+  orgId: string,
+  reason: string,
+): Promise<number> {
+  const [row] = await db
+    .update(keeperhubConnections)
+    .set({ failureCount: sql`${keeperhubConnections.failureCount} + 1`, lastError: reason })
+    .where(eq(keeperhubConnections.orgId, orgId))
+    .returning();
+  return row?.failureCount ?? 0;
+}
+
+/**
+ * Our own clock running out.
+ *
+ * Nothing is deleted: the operator reconnects and their workflow choices are
+ * still there. Returns who was expired, so they can be told.
+ */
+export async function expireDueConnections(db: Database, now: Date): Promise<string[]> {
+  const rows = await db
+    .update(keeperhubConnections)
+    .set({ status: 'needs_reauth', lastError: 'The connection reached the lifetime chosen when it was created.' })
+    .where(and(eq(keeperhubConnections.status, 'active'), lt(keeperhubConnections.expiresAt, now)))
+    .returning({ orgId: keeperhubConnections.orgId });
+  return rows.map((r) => r.orgId);
+}
+
+/**
+ * Disconnect: forget the credential and stop.
+ *
+ * KeeperHub exposes no revocation endpoint, so this deletes our copy and
+ * nothing more. Saying that plainly is better than claiming a revocation we
+ * cannot perform.
+ */
+export async function disconnectKeeperhub(db: Database, orgId: string): Promise<void> {
+  await db
+    .update(keeperhubConnections)
+    .set({ refreshTokenEnc: '', status: 'disconnected', lastError: null })
+    .where(eq(keeperhubConnections.orgId, orgId));
+}
+
+// --- watched workflows -------------------------------------------------------
+
+export interface WatchedWorkflow {
+  orgId: string;
+  workflowId: string;
+  name: string | null;
+  active: boolean;
+  connectedAt: Date;
+  lastRunAt: Date | null;
+}
+
+/** Start watching workflows. Re-adding one that was stopped turns it back on. */
+export async function watchWorkflows(
+  db: Database,
+  params: { orgId: string; workflows: { workflowId: string; name?: string | null }[]; at: Date },
+): Promise<void> {
+  if (params.workflows.length === 0) return;
+  await db
+    .insert(watchedWorkflows)
+    .values(
+      params.workflows.map((w) => ({
+        orgId: params.orgId,
+        workflowId: w.workflowId,
+        name: w.name ?? null,
+        active: true,
+        connectedAt: params.at,
+      })),
+    )
+    .onConflictDoUpdate({
+      target: [watchedWorkflows.orgId, watchedWorkflows.workflowId],
+      set: { active: true, name: sql`excluded.name` },
+    });
+}
+
+export async function unwatchWorkflow(
+  db: Database,
+  orgId: string,
+  workflowId: string,
+): Promise<boolean> {
+  const rows = await db
+    .update(watchedWorkflows)
+    .set({ active: false })
+    .where(
+      and(eq(watchedWorkflows.orgId, orgId), eq(watchedWorkflows.workflowId, workflowId)),
+    )
+    .returning({ workflowId: watchedWorkflows.workflowId });
+  return rows.length > 0;
+}
+
+export async function listWatchedWorkflows(
+  db: Database,
+  orgId: string,
+  opts: { activeOnly?: boolean } = {},
+): Promise<WatchedWorkflow[]> {
+  const where =
+    opts.activeOnly === true
+      ? and(eq(watchedWorkflows.orgId, orgId), eq(watchedWorkflows.active, true))
+      : eq(watchedWorkflows.orgId, orgId);
+  return db.select().from(watchedWorkflows).where(where).orderBy(asc(watchedWorkflows.workflowId));
+}
+
+/** A run landed. Keeps the console's "last seen" honest, and their name fresh. */
+export async function recordWorkflowRun(
+  db: Database,
+  params: { orgId: string; workflowId: string; name?: string | null; at: Date },
+): Promise<void> {
+  await db
+    .update(watchedWorkflows)
+    .set(params.name ? { lastRunAt: params.at, name: params.name } : { lastRunAt: params.at })
+    .where(
+      and(
+        eq(watchedWorkflows.orgId, params.orgId),
+        eq(watchedWorkflows.workflowId, params.workflowId),
+      ),
+    );
 }

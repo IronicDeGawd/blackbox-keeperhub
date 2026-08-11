@@ -384,3 +384,50 @@ describe('attribution of a user-signed remediation', () => {
     expect(resolved[0]?.resolvedBy).toBe('blackbox-proposed');
   });
 });
+
+describe('surviving a restart', () => {
+  /**
+   * The tracker holds open incidents in memory. Without rehydration a restart
+   * starts blind and files a second incident for a condition that never went
+   * away — which is exactly what three redeploys in one afternoon produced.
+   */
+  it('adopts an incident that is still open, rather than opening another', () => {
+    const first = tracker();
+    const opened = first.ingest([stuckDraft()], [], ctx());
+    expect(opened.created).toHaveLength(1);
+
+    const afterRestart = tracker();
+    expect(afterRestart.hydrate(opened.created)).toBe(1);
+
+    const again = afterRestart.ingest([stuckDraft()], [], ctx());
+    expect(again.created).toEqual([]);
+    expect(again.updated).toHaveLength(1);
+    expect(again.updated[0]!.id).toBe(opened.created[0]!.id);
+  });
+
+  it('leaves resolved incidents where they are', () => {
+    const t = tracker();
+    const opened = t.ingest([stuckDraft()], [], ctx()).created[0]!;
+    const fresh = tracker();
+    expect(fresh.hydrate([{ ...opened, status: 'resolved' as const }])).toBe(0);
+    expect(fresh.openIncidents()).toEqual([]);
+  });
+
+  it('does not overwrite what a running tracker already holds', () => {
+    const t = tracker();
+    const opened = t.ingest([stuckDraft()], [], ctx()).created[0]!;
+    expect(t.hydrate([{ ...opened, id: 'inc-from-disk' }])).toBe(0);
+    expect(t.openIncidents()[0]!.id).toBe(opened.id);
+  });
+
+  /** The key is recomputed when a stored row does not carry one. */
+  it('works from a row that has no key of its own', () => {
+    const opened = tracker().ingest([stuckDraft()], [], ctx()).created[0]!;
+    const { key: _key, ...withoutKey } = opened;
+    const fresh = tracker();
+    expect(fresh.hydrate([withoutKey])).toBe(1);
+    expect(fresh.openIncidents()[0]!.key).toBe(
+      incidentKey('chaos', SIGNER, CHAIN_IDS.sepolia, 'STUCK_TRANSACTION'),
+    );
+  });
+});

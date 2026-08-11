@@ -1,0 +1,1 @@
+ALTER TABLE "oauth_auth_requests" ADD COLUMN "connect_days" integer;
