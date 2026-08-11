@@ -1,6 +1,9 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
+import fastifyStatic from '@fastify/static';
 import { CHAINS, getChain, KeeperHubClient, type BlackboxConfig } from '@blackbox/core';
 import { rulesFor } from '@blackbox/detector';
 import {
@@ -225,6 +228,16 @@ export type AppOptions = {
    * its own demo agents.
    */
   publicAgentIds?: readonly string[];
+
+  /**
+   * Where the built console lives, if this process is to serve it.
+   *
+   * Served by the API rather than by the proxy in front of it so that the
+   * console and the API share an origin. That is not a convenience: the OAuth
+   * flow returns the operator to a path on this host, and a console on a
+   * different origin turns every call into a cross-origin one for no gain.
+   */
+  consoleDir?: string;
 };
 
 const DEFAULT_CHAIN = 11155111;
@@ -253,13 +266,36 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   /** Applied to the routes where one request buys a disproportionate amount of our work. */
   const costly = (max: number) => ({ config: { rateLimit: { max, timeWindow: '1 minute' } } });
 
-  app.setNotFoundHandler((request, reply) =>
-    reply.code(404).send({
+  /**
+   * The console, when this deployment carries one.
+   *
+   * Registered before the not-found handler because that handler is also the
+   * console's router: a single-page application owns paths the server has never
+   * heard of, so anything that is not an API route and is not a file on disk is
+   * answered with index.html and resolved in the browser.
+   */
+  const consoleDir = options.consoleDir;
+  if (consoleDir !== undefined && existsSync(join(consoleDir, 'index.html'))) {
+    await app.register(fastifyStatic, { root: consoleDir, index: ['index.html'] });
+  }
+
+  app.setNotFoundHandler((request, reply) => {
+    const wantsPage =
+      consoleDir !== undefined &&
+      request.method === 'GET' &&
+      !request.url.startsWith('/api/') &&
+      (request.headers.accept ?? '').includes('text/html');
+    // A missing API route is still a 404 in JSON. Only a browser asking for a
+    // page gets the application, or a mistyped endpoint would answer 200 with
+    // markup and a client would parse it as data.
+    if (wantsPage) return reply.sendFile('index.html');
+
+    return reply.code(404).send({
       error: 'not_found',
       detail: `Route ${request.method} ${request.url} not found`,
       requestId: request.id,
-    }),
-  );
+    });
+  });
 
   app.setErrorHandler((error: unknown, request, reply) => {
     request.log.error(error);

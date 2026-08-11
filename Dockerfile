@@ -25,11 +25,18 @@ COPY packages/remediator/package.json   packages/remediator/
 COPY packages/diagnostician/package.json packages/diagnostician/
 COPY packages/chaos/package.json        packages/chaos/
 COPY packages/mcp/package.json          packages/mcp/
+COPY apps/console/package.json          apps/console/
 RUN pnpm install --frozen-lockfile
 
 COPY tsconfig.base.json ./
 COPY packages ./packages
-RUN pnpm -r build
+RUN pnpm -r --filter './packages/**' build
+
+# The console is built with an empty API base, which makes every call relative
+# and so same-origin: the API serves these files itself, and the OAuth flow
+# returns the operator to a path on the very host that started it.
+COPY apps ./apps
+RUN VITE_API_URL= pnpm --filter @blackbox/console build
 
 FROM node:24-slim AS runtime
 WORKDIR /app
@@ -42,6 +49,9 @@ RUN corepack enable && corepack prepare pnpm@11.14.0 --activate
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages ./packages
 COPY --from=build /app/package.json /app/pnpm-workspace.yaml ./
+
+# Static files only — none of the console's build tooling comes with them.
+COPY --from=build /app/apps/console/dist ./console
 
 # Never root. Nothing here needs it, and the container faces the public
 # internet. The home directory is not decoration: the migration tool writes

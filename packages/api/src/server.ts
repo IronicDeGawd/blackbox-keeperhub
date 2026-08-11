@@ -106,6 +106,16 @@ if (!env['DATABASE_URL'] && env['K_SERVICE']) {
       'from inside a managed container, where it cannot exist.',
   );
 }
+/**
+ * Where the built console sits, if this image carries one.
+ *
+ * Defaulted rather than required: the deployment image copies the console to
+ * /app/console, and a checkout running `node packages/api/dist/server.js` has
+ * no such directory, so the server simply serves no pages. The directory is
+ * checked for an index.html before anything is registered.
+ */
+const consoleDir = env['BLACKBOX_CONSOLE_DIR'] ?? '/app/console';
+
 const signerAccount = env['CHAOS_SIGNER_PRIVATE_KEY']
   ? privateKeyToAccount(env['CHAOS_SIGNER_PRIVATE_KEY'] as `0x${string}`)
   : undefined;
@@ -567,6 +577,11 @@ const app = await buildApp({
   ...(triggers ? { triggers } : {}),
   ...(triggerAvailability ? { triggerAvailability } : {}),
   ...(publicAgentIds ? { publicAgentIds } : {}),
+  /**
+   * The built console, when the image carries one. Absent in development,
+   * where Vite serves it on its own port with hot reload.
+   */
+  ...(consoleDir ? { consoleDir } : {}),
   // Diagnosis spends a model call, and the route is open to anyone. The
   // background loop already refuses to explain the same incident twice for
   // this reason; the on-demand path needs the same memory, or the same hash
