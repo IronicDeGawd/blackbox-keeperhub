@@ -19,6 +19,8 @@ import { buildApp } from './app.js';
 import { Identity } from './identity.js';
 import { KeeperHubOAuth } from './oauth.js';
 import { Webhooks } from './webhooks.js';
+import { WalletAuth } from './wallet-auth.js';
+import { privateKeyToAccount } from 'viem/accounts';
 import { EventBus } from './bus.js';
 import { summarise } from './serialise.js';
 
@@ -1158,5 +1160,104 @@ describe('inbound webhooks', () => {
       headers: { authorization: `Bearer ${secret}` },
     });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('signing in with a wallet', () => {
+  const account = privateKeyToAccount(`0x${'33'.repeat(32)}`);
+
+  const instance = async () =>
+    app({
+      identity: new Identity(db, { listKeys: async () => [{ id: 'org-a' }] }),
+      walletAuth: new WalletAuth({ domain: 'blackbox.test' }),
+      remediate: async () => ({ accepted: true, guards: [] }),
+    });
+
+  const signIn = async (server: FastifyInstance) => {
+    const challenge = await server.inject({
+      method: 'POST',
+      url: '/api/auth/wallet/challenge',
+      payload: { address: account.address },
+    });
+    const signature = await account.signMessage({ message: challenge.json().message });
+    return server.inject({
+      method: 'POST',
+      url: '/api/auth/wallet/verify',
+      payload: { nonce: challenge.json().nonce, signature },
+    });
+  };
+
+  it('issues a challenge and turns a signature into a session', async () => {
+    const server = await instance();
+    const res = await signIn(server);
+    expect(res.statusCode).toBe(201);
+    expect(res.json().address).toBe(account.address.toLowerCase());
+    // The tenant is the address: an agent holding its own key belongs to no
+    // KeeperHub organisation.
+    expect(res.json().orgId).toBe(`wallet:${account.address.toLowerCase()}`);
+
+    const session = await server.inject({
+      url: '/api/auth/session',
+      headers: { authorization: `Bearer ${res.json().token}` },
+    });
+    expect(session.statusCode).toBe(200);
+  });
+
+  it('refuses an address that is not an address', async () => {
+    const server = await instance();
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/auth/wallet/challenge',
+      payload: { address: 'nope' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('refuses a signature that answers no challenge it issued', async () => {
+    const server = await instance();
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/auth/wallet/verify',
+      payload: { nonce: 'invented', signature: `0x${'ab'.repeat(65)}` },
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().detail).toContain('unknown or was already used');
+  });
+
+  /**
+   * The point of the whole thing: after proving the key, that wallet — and
+   * nobody else — can act on the agents it signs for.
+   */
+  it('claims the agents that address already signs for', async () => {
+    const server = await instance();
+    // Registered anonymously first, exactly as a wallet-signed chaos run does.
+    await server.inject({
+      method: 'POST',
+      url: '/api/watched',
+      payload: {
+        signer: account.address,
+        chainId: CHAIN_IDS.sepolia,
+        agentId: 'self-signed-demo',
+      },
+    });
+
+    const res = await signIn(server);
+    expect(res.json().agents).toContain('self-signed-demo');
+
+    await saveIncident(db, row({ agentId: 'self-signed-demo' }) as never);
+    // The owner may act.
+    expect(
+      (
+        await server.inject({
+          method: 'POST',
+          url: '/api/incidents/inc-1/remediate',
+          headers: { authorization: `Bearer ${res.json().token}` },
+        })
+      ).statusCode,
+    ).toBe(202);
+    // Anyone else may not, now that it is claimed.
+    expect(
+      (await server.inject({ method: 'POST', url: '/api/incidents/inc-1/remediate' })).statusCode,
+    ).toBe(403);
   });
 });

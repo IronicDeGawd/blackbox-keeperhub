@@ -12,6 +12,7 @@ import {
 } from './identity.js';
 import type { KeeperHubOAuth } from './oauth.js';
 import { codeNodeSnippet, type Webhooks } from './webhooks.js';
+import type { WalletAuth } from './wallet-auth.js';
 import {
   activeSigners,
   eventsByIds,
@@ -155,6 +156,11 @@ export type AppOptions = {
    * which is slower but not broken.
    */
   webhooks?: Webhooks;
+  /**
+   * Ownership proved by signature, for an agent that holds its own key and
+   * belongs to no KeeperHub organisation.
+   */
+  walletAuth?: WalletAuth;
   /** This deployment's public address, used to write the code-node snippet. */
   publicUrl?: string;
   /**
@@ -428,6 +434,104 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
           return reply.redirect(`${result.returnTo}${fragment}`);
         }
         return reply.code(201).send({ token: session.token, orgId: session.orgId });
+      });
+    }
+
+    if (options.walletAuth) {
+      const walletAuth = options.walletAuth;
+
+      /**
+       * Ask for something to sign.
+       *
+       * Rate-limited because it is unauthenticated by necessity — proving who
+       * you are is what this is for — and every call costs a stored nonce.
+       */
+      app.post('/api/auth/wallet/challenge', costly(20), async (request, reply) => {
+        const body = (request.body ?? {}) as Record<string, unknown>;
+        const address = String(body['address'] ?? '');
+        if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+          return reply.code(400).send({
+            error: 'invalid_address',
+            detail: `"${address}" is not a 20-byte hex address`,
+            requestId: request.id,
+          });
+        }
+        return walletAuth.issue(address as `0x${string}`);
+      });
+
+      /**
+       * Prove it, and take ownership of the agents that address signs for.
+       *
+       * The address is recovered from the signature rather than read from the
+       * request — a caller naming an address proves nothing about it. The
+       * tenant is the address itself, since an agent holding its own key
+       * belongs to no organisation.
+       */
+      app.post('/api/auth/wallet/verify', costly(20), async (request, reply) => {
+        const body = (request.body ?? {}) as Record<string, unknown>;
+        const nonce = String(body['nonce'] ?? '');
+        const signature = String(body['signature'] ?? '');
+        if (!nonce || !/^0x[0-9a-fA-F]+$/.test(signature)) {
+          return reply.code(400).send({
+            error: 'bad_request',
+            detail: 'nonce and signature are required.',
+            requestId: request.id,
+          });
+        }
+
+        const result = await walletAuth.verify({
+          nonce,
+          signature: signature as `0x${string}`,
+          ...(typeof body['address'] === 'string' ? { address: body['address'] } : {}),
+        });
+        if (!result.ok) {
+          return reply.code(401).send({
+            error: 'unauthorized',
+            detail:
+              result.reason === 'expired'
+                ? 'That challenge has expired; ask for another.'
+                : result.reason === 'unknown_nonce'
+                  ? 'That challenge is unknown or was already used.'
+                  : 'The signature does not match that challenge.',
+            requestId: request.id,
+          });
+        }
+
+        // One tenant per address. Every scoping check downstream already reads
+        // an opaque org id, so a wallet needs no separate code path.
+        const orgId = `wallet:${result.address}`;
+        const session = await identity.signInWithOrg({
+          orgId,
+          subject: result.address,
+          label: 'wallet',
+        });
+
+        /**
+         * Claim what this address is actually the agent for: the conventional
+         * id used when a wallet registers itself, plus any agent already
+         * watching this exact signer. Claiming is best-effort — an agent
+         * another tenant already owns stays theirs, and the session is still
+         * valid for whatever else this address holds.
+         */
+        const claimed: string[] = [];
+        const candidates = new Set<string>([result.address.slice(0, 10)]);
+        for (const row of await activeSigners(db)) {
+          if (row.signer.toLowerCase() === result.address.toLowerCase()) {
+            candidates.add(row.agentId);
+          }
+        }
+        for (const agentId of candidates) {
+          if ((await claimAgent(db, { agentId, orgId })) !== 'owned_by_another') {
+            claimed.push(agentId);
+          }
+        }
+
+        return reply.code(201).send({
+          token: session.token,
+          orgId,
+          address: result.address,
+          agents: claimed,
+        });
       });
     }
 

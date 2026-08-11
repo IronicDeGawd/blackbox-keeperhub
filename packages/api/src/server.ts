@@ -46,6 +46,7 @@ import { diagnosticianFromEnv, keeperHubFromEnv, Runtime } from './runtime.js';
 import { httpKeyVerifier, Identity } from './identity.js';
 import { KeeperHubOAuth } from './oauth.js';
 import { Webhooks } from './webhooks.js';
+import { WalletAuth } from './wallet-auth.js';
 import { installEventTrigger, installScheduledSweep } from './triggers.js';
 import { EventWebhook } from './event-webhook.js';
 
@@ -494,6 +495,12 @@ const app = await buildApp({
   bus,
   identity,
   oauth,
+  /**
+   * Named after this deployment, so a signature collected here is useless
+   * anywhere else. Falls back to the host header's absence rather than
+   * pretending to be somebody.
+   */
+  walletAuth: new WalletAuth({ domain: publicUrl ?? 'blackbox (unconfigured deployment)' }),
   // A nudge causes the same sweep the loop does, just sooner.
   webhooks,
   ...(publicUrl ? { publicUrl } : {}),
