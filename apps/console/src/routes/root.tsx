@@ -48,7 +48,10 @@ function Shell(): React.JSX.Element {
           <SessionControl capabilities={config?.capabilities ?? null} />
           <ConnectionDot state={connection} />
         </div>
-        <MainnetWarning chains={chains} />
+        <MainnetWarning
+          chains={chains}
+          remediableChainIds={config?.remediation.chainAllowlist ?? []}
+        />
         <StatsStrip stats={stats} />
       </header>
 
