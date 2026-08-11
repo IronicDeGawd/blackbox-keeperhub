@@ -101,6 +101,31 @@ Two limits worth stating plainly rather than hiding:
   an organisation with one watched workflow among fifty still pages through all
   fifty.
 
+### Who may act, and who may only read
+
+Rebuilt on 2026-08-12, after the audit's ownership rules turned out to be
+weaker than they read.
+
+| Feature | Result |
+| --- | --- |
+| Reading needs no account | ✅ **live** — incidents, the ledger and the timeline all answer anonymously |
+| Remediating needs the owner | ✅ **live** — 403 `Sign in as the organisation that owns 0xb9c58185…` |
+| Registering an address needs an account | ✅ **live** — 401, naming what reading still allows |
+| Unowned means nobody, not everybody | ✅ an unclaimed agent is no longer actionable by strangers |
+| A local run stays open | ✅ no identity configured means no ownership to enforce |
+| A picked workflow must be on your account | ✅ 403 naming the id, and nothing partially applied |
+| The workflow's name comes from KeeperHub | ✅ not from the caller |
+| Unreadable is refused, not trusted | ✅ 502 when their side cannot be reached |
+| Per-workflow daily allowance | ✅ 3 per agent per day, alongside the per-signer hourly ceiling |
+| The public demo button | ✅ **live** — 202, three runs, then `WORKFLOW_MISCONFIGURED` critical |
+| Its cooldown is global | ✅ 429 `once every 30 minutes, for everybody`, and it survives a restart |
+| It spends nothing | ✅ **live** — executions 20 → 21 per run, daily spend used unchanged, gas credits 0 |
+
+Why acting had to close: an unowned agent included `keeperhub-org`, whose
+fixes execute with this deployment's KeeperHub key. A visitor could spend our
+quota, our gas credits and our daily cap — and that cap sits at 86% on purpose,
+so a few presses would have broken the R8 demo during judging.
+
 ## 3. Remediation
 
 | Feature | Result |
@@ -379,6 +404,20 @@ reading a top-level `conditionMet`. A condition that *held* would therefore have
 been reported as not held whenever no execution record came back — which is
 every simulation. **Fixed**, and the observed value is now carried through as
 evidence.
+
+### 13. An open incident was filed again on every restart
+
+**Severity: high.** The tracker holds open incidents in memory and never read
+back what was already stored, so each boot started blind: the first evaluation
+could not see that an incident for a key was open, and filed another one for a
+condition that had never gone away. Three redeploys in an afternoon left three
+identical spend-cap warnings on the deployment.
+
+**Fixed.** The tracker is rehydrated from stored open incidents before the
+first tick, keyed the way it keys them itself, with the causal window running
+from when each was detected rather than from the restart. Verified live:
+`restored open incidents after restart { restored: 2 }`, and the following
+restart created nothing new.
 
 ### 12. Two sources of the same organisation shared one position
 
