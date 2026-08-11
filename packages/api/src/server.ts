@@ -525,6 +525,7 @@ const app = await buildApp({
   identity,
   oauth,
   ...(connections ? { connections } : {}),
+  sweepsOwnOrg: Boolean(keeperHubOrg),
   ...(env['KEEPERHUB_API_URL'] ? { keeperHubApiUrl: env['KEEPERHUB_API_URL'] } : {}),
   /**
    * Named after this deployment, so a signature collected here is useless

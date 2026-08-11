@@ -507,6 +507,7 @@ describe('config', () => {
       diagnose: false,
       signerHealth: false,
       proposeRemediation: false,
+      connectKeeperHub: false,
     });
     expect(body.remediation.budget.maxGasWeiPerHour).toBeTypeOf('string');
   });
@@ -888,6 +889,13 @@ describe('connect with KeeperHub, over HTTP', () => {
    * credential. A deployment that cannot keep one must say so, because signing
    * the operator in instead would promise a watch that never happens.
    */
+  it('says plainly in the config that connecting is unavailable', async () => {
+    const res = await (await instance()).inject({ url: '/api/config' });
+    expect(res.json().connections).toMatchObject({ available: false });
+    expect(res.json().connections.detail).toContain('BLACKBOX_ENCRYPTION_KEY');
+    expect(res.json().capabilities.connectKeeperHub).toBe(false);
+  });
+
   it('refuses to connect when this deployment cannot store a credential', async () => {
     const res = await (await instance()).inject({
       url: '/api/auth/keeperhub/start?connect=1',
@@ -1260,6 +1268,39 @@ describe('managing a connection, over HTTP', () => {
       headers,
     });
     expect(missing.statusCode).toBe(404);
+  });
+
+  /**
+   * The audit's finding was that sign-in promised something ingestion did not
+   * deliver. This is the part that stops it happening again quietly.
+   */
+  it('states in the config what this deployment actually reads', async () => {
+    const server = await instance();
+    const headers = await connected(server, 'connect=1&days=14');
+    await server.inject({
+      method: 'POST',
+      url: '/api/connections/keeperhub/workflows',
+      headers,
+      payload: { workflows: ['wf-1'] },
+    });
+
+    const res = await server.inject({ url: '/api/config', headers });
+    expect(res.json().connections).toMatchObject({
+      available: true,
+      scope: 'mcp:read',
+      revocation: 'local_only',
+      connected: 1,
+      lifetimeDays: { min: 7, max: 60, default: 30 },
+      mine: { status: 'active', watching: 1 },
+    });
+    expect(res.json().capabilities.connectKeeperHub).toBe(true);
+  });
+
+  it('tells an anonymous caller the count but not whose', async () => {
+    const server = await instance();
+    await connected(server);
+    const res = await server.inject({ url: '/api/config' });
+    expect(res.json().connections).toMatchObject({ available: true, connected: 1, mine: null });
   });
 
   it('disconnects, and does not claim to have revoked anything', async () => {

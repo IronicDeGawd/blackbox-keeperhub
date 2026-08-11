@@ -11,12 +11,19 @@ import {
   type Identity,
 } from './identity.js';
 import type { KeeperHubOAuth } from './oauth.js';
-import { lifetimeDays, MAX_LIFETIME_DAYS, MIN_LIFETIME_DAYS, type Connections } from './connections.js';
+import {
+  DEFAULT_LIFETIME_DAYS,
+  lifetimeDays,
+  MAX_LIFETIME_DAYS,
+  MIN_LIFETIME_DAYS,
+  type Connections,
+} from './connections.js';
 import { codeNodeSnippet, type Webhooks } from './webhooks.js';
 import type { WalletAuth } from './wallet-auth.js';
 import {
   activeSigners,
   claimAgentForOrg,
+  countConnections,
   eventsByIds,
   listWatchedWorkflows,
   unwatchWorkflow,
@@ -164,6 +171,8 @@ export type AppOptions = {
    * then watched nothing.
    */
   connections?: Connections;
+  /** Whether this deployment reads an organisation of its own, from the env. */
+  sweepsOwnOrg?: boolean;
   /** Overrides the KeeperHub API base, for tests and for a staging provider. */
   keeperHubApiUrl?: string;
   /** Injected transport for reads on a connection's behalf; tests use it. */
@@ -268,7 +277,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   app.get('/api/health', async () => ({ ok: true, at: new Date().toISOString() }));
 
-  app.get('/api/config', async () => ({
+  app.get('/api/config', async (request) => ({
     chains: Object.values(CHAINS).map((chain) => ({
       chainId: chain.chainId,
       name: chain.name,
@@ -314,8 +323,58 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       diagnose: Boolean(options.diagnose),
       signerHealth: Boolean(options.signerHealth),
       proposeRemediation: Boolean(options.proposals),
+      /** Whether an operator can connect their own account at all. */
+      connectKeeperHub: Boolean(options.connections),
     },
+    /**
+     * What this deployment actually reads.
+     *
+     * The audit found sign-in promising something ingestion did not deliver:
+     * an operator signed in, owned their agents, and Blackbox read none of
+     * their runs. Publishing the truth here is what stops that happening again
+     * quietly — including the plain statement that connecting is unavailable
+     * when this deployment has nowhere safe to keep a credential.
+     */
+    connections: await connectionsSummary(request),
   }));
+
+  /**
+   * Said in one place, so the console and a script get the same answer.
+   *
+   * The caller's own connection is included only for a signed-in caller, and
+   * only their own — how many accounts connected is a count, not a list.
+   */
+  const connectionsSummary = async (request: {
+    headers: Record<string, unknown>;
+  }): Promise<Record<string, unknown>> => {
+    if (!options.connections) {
+      return {
+        available: false,
+        detail:
+          'This deployment cannot store a KeeperHub connection; set BLACKBOX_ENCRYPTION_KEY to enable it.',
+        sweepsOwnOrg: Boolean(options.sweepsOwnOrg),
+      };
+    }
+    const caller = await callerOf(request);
+    const mine = caller ? await options.connections.get(caller.orgId) : null;
+    return {
+      available: true,
+      sweepsOwnOrg: Boolean(options.sweepsOwnOrg),
+      lifetimeDays: { min: MIN_LIFETIME_DAYS, max: MAX_LIFETIME_DAYS, default: DEFAULT_LIFETIME_DAYS },
+      scope: 'mcp:read',
+      /** Disconnect deletes our copy; KeeperHub exposes no revocation route. */
+      revocation: 'local_only',
+      connected: await countConnections(db),
+      mine:
+        mine && mine.status !== 'disconnected'
+          ? {
+              status: mine.status,
+              expiresAt: mine.expiresAt.toISOString(),
+              watching: (await listWatchedWorkflows(db, mine.orgId, { activeOnly: true })).length,
+            }
+          : null,
+    };
+  };
 
   app.get('/api/stats', async (request) => {
     const readable = await readableAgents(await callerOf(request));

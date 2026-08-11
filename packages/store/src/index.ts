@@ -1047,6 +1047,15 @@ export async function recordConnectionRefresh(
     .where(eq(keeperhubConnections.orgId, params.orgId));
 }
 
+/** How many accounts are connected. A count, never a list of who. */
+export async function countConnections(db: Database): Promise<number> {
+  const rows = await db
+    .select({ orgId: keeperhubConnections.orgId })
+    .from(keeperhubConnections)
+    .where(eq(keeperhubConnections.status, 'active'));
+  return rows.length;
+}
+
 /** Remember the address this organisation executes as, once we know it. */
 export async function recordConnectionSigner(
   db: Database,
