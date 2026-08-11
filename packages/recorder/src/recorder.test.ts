@@ -6,6 +6,7 @@ import {
   executionEvents,
   incidents,
   listIncidents,
+  insertEvents,
   signerState,
   watchedExecutions,
   watchExecution,
@@ -354,6 +355,53 @@ describe('detection through the full pipeline', () => {
     await recorder.tick();
     const [state] = await db.select().from(signerState);
     expect(state!.consecutiveGapPolls).toBe(1);
+  });
+
+  /**
+   * The same reading, for an agent that cannot have a nonce gap. KeeperHub owns
+   * nonce management for a managed wallet and submits from a shared relayer, so
+   * a nonce read for that account describes KeeperHub's traffic. Counting a gap
+   * from it would be evidence for an incident the agent is structurally
+   * incapable of having.
+   */
+  it('does not derive a nonce gap for a managed wallet', async () => {
+    await insertEvents(db, [
+      {
+        id: 'kh-1',
+        sourceId: 'run-1:0',
+        logicalActionId: 'run-1',
+        attemptIndex: 0,
+        agentId: 'org',
+        signer: SIGNER,
+        chainId: CHAIN,
+        agentKind: 'keeperhub',
+        trigger: { kind: 'api' },
+        simulation: { performed: true, success: true },
+        submission: { nonce: 7, submittedAt: T0, route: 'unknown' },
+        outcome: { status: 'pending' },
+        raw: {},
+        ingestedAt: T0,
+      },
+    ]);
+
+    // Registered so the tick evaluates this signer at all.
+    await watchExecution(db, {
+      executionId: 'kh-exec',
+      agentId: 'org',
+      signer: SIGNER,
+      chainId: CHAIN,
+      submitted: { nonce: 7 },
+      at: T0,
+    });
+    const recorder = makeRecorder({
+      fetch: async (id) => pendingExecution(id),
+      corroboration: { gather: async () => ({ latestNonce: 6, pendingNonce: 8 }) },
+      now: () => new Date(T0.getTime() + 200_000),
+    });
+    await recorder.tick();
+
+    // No gap observation recorded at all, rather than one recorded as absent.
+    expect(await db.select().from(signerState)).toHaveLength(0);
   });
 });
 

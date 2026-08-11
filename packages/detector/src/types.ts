@@ -14,6 +14,14 @@ export type Corroboration = {
   consecutiveGapPolls?: number;
   /** Nonces submitted but never seen terminal, as understood by the caller. */
   missingNonces?: number[];
+  /**
+   * True when the agent does not control its own nonces — a KeeperHub managed
+   * wallet, where nonce management belongs to the platform and submission comes
+   * from a shared relayer. Any nonce read for such an account describes someone
+   * else's traffic, so a rule reasoning about nonces must decline rather than
+   * read `latestNonce` and draw a conclusion the address cannot support.
+   */
+  managedNonces?: boolean;
 };
 
 /**

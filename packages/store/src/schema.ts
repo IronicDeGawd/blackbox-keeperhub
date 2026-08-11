@@ -147,12 +147,18 @@ export const ingestCursors = pgTable('ingest_cursors', {
 /**
  * Executions the recorder is watching.
  *
- * KeeperHub exposes no "list executions" endpoint — `/api/executions` 404s and
- * status is retrievable only per execution id. So an execution has to be
- * registered at submission time, by the wrapper or the chaos harness, and
- * polled until it reaches a terminal state. This table is that watchlist, and
- * it is durable because a restart mid-flight would otherwise lose track of
+ * `/api/executions` 404s and `/execute/{id}/status` needs an id already in
+ * hand, so an execution Blackbox submits is registered here at submission time
+ * and polled until it reaches a terminal state. This table is that watchlist,
+ * and it is durable because a restart mid-flight would otherwise lose track of
  * exactly the transactions most likely to be in trouble.
+ *
+ * There *is* a listing endpoint — `/api/analytics/runs`, behind their
+ * `list_executions` tool — and the recorder reads it for the whole
+ * organisation's history. It does not replace this table: it reports a run
+ * after the fact and on its own schedule, whereas an execution registered here
+ * is polled from the moment it is submitted, which is the difference between
+ * noticing a stuck transaction and reading about one.
  */
 export const watchedExecutions = pgTable(
   'watched_executions',

@@ -266,12 +266,21 @@ export class Recorder {
     });
 
     const c = corroboration as { latestNonce?: number };
+    /**
+     * A managed wallet has no nonce queue of its own — KeeperHub owns gas
+     * estimation, nonce management and ordering, and submits from a shared
+     * relayer. Nonces read for such an account belong to KeeperHub's traffic,
+     * not this agent's, so deriving a gap from them would manufacture evidence
+     * for an incident the agent cannot have.
+     */
+    const managed = window.some((e) => e.agentKind === 'keeperhub');
+
     // The gap is derived from what we observed being submitted, not from
     // pending minus latest: a queued transaction does not raise the pending
     // count, so those two are equal during a real gap. The counter is durable
     // so R2 survives a restart mid-gap.
     let consecutiveGapPolls: number | undefined;
-    if (c.latestNonce !== undefined) {
+    if (c.latestNonce !== undefined && !managed) {
       const { missingNonces } = findNonceGap(window, c.latestNonce);
       consecutiveGapPolls = await recordGapObservation(this.options.db, {
         signer: target.signer,
@@ -290,6 +299,9 @@ export class Recorder {
       corroboration: {
         ...corroboration,
         ...(consecutiveGapPolls !== undefined ? { consecutiveGapPolls } : {}),
+        // Without this, a rule reading `latestNonce` cannot tell a wallet whose
+        // nonces the agent controls from one whose nonces it does not.
+        ...(managed ? { managedNonces: true } : {}),
       },
     };
 

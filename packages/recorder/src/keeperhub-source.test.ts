@@ -189,6 +189,15 @@ describe('KeeperHubSource', () => {
     expect(errors).toHaveLength(1);
   });
 
+  // KeeperHub owns nonce management for a managed wallet, so events from a run
+  // must say so — a rule that reads nonces has to be able to decline.
+  it('marks what it stores as executing on a managed wallet', async () => {
+    await source(lister([run({ id: 'a', startedAt: '2026-08-10T12:00:00.000Z' })])).ingest();
+    const rows = await db.select().from(executionEvents);
+    expect(rows[0]?.agentKind).toBe('keeperhub');
+    expect(rows[0]?.workflowId).toBe('wf-1');
+  });
+
   it('counts a run on an unreadable chain instead of dropping it silently', async () => {
     const unknown = run({ id: 'x', startedAt: '2026-08-10T12:00:00.000Z' });
     unknown.network = 'solana';
