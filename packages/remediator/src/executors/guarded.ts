@@ -30,6 +30,19 @@ export type CheckAndExecuteClient = {
   }): Promise<{ conditionMet: boolean; execution: { executionId?: string } | null; raw: unknown }>;
 };
 
+/**
+ * The two functions a breaker must expose for this to work.
+ *
+ * KeeperHub auto-fetches an ABI from the explorer, which fails for an
+ * unverified contract — our own breaker among them, which is how the audit
+ * found this. Sending a minimal ABI removes the dependency on somebody else
+ * having verified the source.
+ */
+export const BREAKER_ABI = JSON.stringify([
+  { inputs: [], name: 'paused', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'pause', outputs: [], stateMutability: 'nonpayable', type: 'function' },
+]);
+
 export type GuardedPauseParams = {
   breakerAddress: string;
   chainId: number;
@@ -59,19 +72,22 @@ export async function guardedPause(
   client: CheckAndExecuteClient,
   params: GuardedPauseParams,
 ): Promise<GuardedPauseResult> {
+  // Always send an ABI. Theirs is only auto-fetchable for a verified contract,
+  // and the failure mode is a 400 at the moment we most want to act.
+  const abi = params.abi ?? BREAKER_ABI;
   const result = await client.checkAndExecute({
     contractAddress: params.breakerAddress,
     chainId: String(params.chainId),
     functionName: params.readFunction ?? 'paused',
     functionArgs: params.readArgs ?? '[]',
-    ...(params.abi ? { abi: params.abi } : {}),
+    abi,
     // Act only while it is still false.
     condition: { operator: 'eq', value: params.pausedValue ?? 'false' },
     action: {
       contractAddress: params.breakerAddress,
       functionName: 'pause',
       functionArgs: '[]',
-      ...(params.abi ? { abi: params.abi } : {}),
+      abi,
     },
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
   });

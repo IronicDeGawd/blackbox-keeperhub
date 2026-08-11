@@ -69,3 +69,39 @@ describe('pausing only if it is not already paused', () => {
     expect(c.calls[0]).toMatchObject({ functionName: 'isHalted' });
   });
 });
+
+describe('audit findings 4 and 11', () => {
+  /** Their API cannot auto-fetch an ABI for an unverified contract. */
+  it('always sends an ABI, on both the read and the action', async () => {
+    const calls: Record<string, unknown>[] = [];
+    await guardedPause(
+      {
+        checkAndExecute: async (params) => {
+          calls.push(params as unknown as Record<string, unknown>);
+          return { conditionMet: true, execution: { executionId: 'x' }, raw: {} };
+        },
+      },
+      { breakerAddress: '0x69C744Bb9f953D822a52E88604D26C9a895ac0E0', chainId: 11155111 },
+    );
+    expect(calls[0]?.['abi']).toContain('paused');
+    expect((calls[0]?.['action'] as { abi?: string })?.abi).toContain('pause');
+  });
+
+  it('lets a caller override it for a breaker that differs', async () => {
+    const calls: Record<string, unknown>[] = [];
+    await guardedPause(
+      {
+        checkAndExecute: async (params) => {
+          calls.push(params as unknown as Record<string, unknown>);
+          return { conditionMet: false, execution: null, raw: {} };
+        },
+      },
+      {
+        breakerAddress: '0x69C744Bb9f953D822a52E88604D26C9a895ac0E0',
+        chainId: 11155111,
+        abi: '[{"name":"halted"}]',
+      },
+    );
+    expect(calls[0]?.['abi']).toBe('[{"name":"halted"}]');
+  });
+});

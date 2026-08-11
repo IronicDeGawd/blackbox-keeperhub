@@ -498,12 +498,26 @@ export class KeeperHubClient {
       throw new KeeperHubError('check-and-execute failed', res.status, res.body);
     }
     const body_ = res.body ?? {};
-    // A condition that did not hold is a result, not a failure: nothing was
-    // executed and nothing went wrong.
+    /**
+     * Their answer carries the verdict as `conditionResult.met`, alongside the
+     * value it actually observed:
+     *
+     *   {"success":true,"status":"simulated","executed":false,
+     *    "conditionResult":{"met":false,"observedValue":"true", …}}
+     *
+     * An earlier reading of this looked for a top-level `conditionMet`, which
+     * never exists — so a condition that *held* would have been reported as
+     * not held whenever no execution record came back, which is exactly what
+     * happens in a simulation. A condition that did not hold is a result, not
+     * a failure: nothing ran and nothing went wrong.
+     */
+    const verdict = body_['conditionResult'] as { met?: unknown } | undefined;
     const conditionMet =
-      body_['conditionMet'] === true || (body_['conditionMet'] === undefined && isExecutionShaped(body_));
+      verdict?.met === true || (verdict === undefined && isExecutionShaped(body_));
+    const observed = (verdict as { observedValue?: unknown } | undefined)?.observedValue;
     return {
       conditionMet,
+      ...(typeof observed === 'string' ? { observedValue: observed } : {}),
       execution: isExecutionShaped(body_) ? this.parseExecution(body_) : null,
       raw: body_,
     };

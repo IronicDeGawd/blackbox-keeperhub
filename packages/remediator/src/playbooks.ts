@@ -15,7 +15,7 @@ import {
  * declines with a reason rather than pretending.
  */
 
-export type PlaybookId = 'P1' | 'P2' | 'P3' | 'P4' | 'P5';
+export type PlaybookId = 'P1' | 'P2' | 'P3' | 'P4' | 'P5' | 'P6' | 'P7';
 
 /** A concrete chain write, or a refusal with the reason stated. */
 export type PlaybookPlan =
@@ -337,7 +337,65 @@ export const P5: Playbook = {
   },
 };
 
-export const ALL_PLAYBOOKS: readonly Playbook[] = [P1, P2, P3, P4, P5];
+/**
+ * P6 — a stalled workflow.
+ *
+ * There is nothing to submit. A workflow that has not finished is KeeperHub's
+ * to cancel or continue, and sending a transaction would not touch it. The
+ * playbook exists so the answer is "here is what to do and why Blackbox is not
+ * doing it" rather than "no playbook handles EXECUTION_STALLED", which reads
+ * like a missing feature instead of a considered position.
+ */
+export const P6: Playbook = {
+  id: 'P6',
+  handles: ['EXECUTION_STALLED'],
+  appliesTo: ['keeperhub'],
+  executors: ['keeperhub', 'keeperhub-workflow'],
+  plan(ctx) {
+    const workflowId = fact(ctx.incident, 'workflowId');
+    const name = fact(ctx.incident, 'workflowName');
+    return {
+      kind: 'skip',
+      policy: 'skipped_by_policy',
+      reason:
+        `${name ? `workflow "${String(name)}"` : 'this workflow'} has not finished` +
+        `${workflowId ? ` (${String(workflowId)})` : ''}. Nothing on chain can end it: ` +
+        `cancel or re-run it in KeeperHub, and check the step it stopped at.`,
+    };
+  },
+};
+
+/**
+ * P7 — the organisation's daily budget.
+ *
+ * Raising a spend cap is a billing action inside KeeperHub, not a transaction,
+ * so no executor here can serve it. Saying exactly that is more use than
+ * silence, because the operator's next move is a specific one.
+ */
+export const P7: Playbook = {
+  id: 'P7',
+  handles: ['SPEND_CAP_EXHAUSTED'],
+  appliesTo: ['keeperhub'],
+  executors: ['keeperhub'],
+  plan(ctx) {
+    const used = fact(ctx.incident, 'dailyUsedWei');
+    const cap = fact(ctx.incident, 'dailyCapWei');
+    const exhausted = fact(ctx.incident, 'exhausted') === true;
+    return {
+      kind: 'skip',
+      policy: 'skipped_by_policy',
+      reason:
+        (exhausted
+          ? 'the daily execution budget is spent, so KeeperHub will submit nothing more today'
+          : 'the daily execution budget is nearly spent') +
+        `${cap ? ` (${String(used)} of ${String(cap)} wei)` : ''}. ` +
+        `Raise the cap in KeeperHub's organisation settings, or wait for it to reset; ` +
+        `no transaction can fix this one.`,
+    };
+  },
+};
+
+export const ALL_PLAYBOOKS: readonly Playbook[] = [P1, P2, P3, P4, P5, P6, P7];
 
 /**
  * The playbook for an incident class.

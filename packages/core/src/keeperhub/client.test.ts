@@ -179,3 +179,56 @@ describe('listRuns', () => {
     await expect(clientWith(impl).listRuns()).rejects.toThrow(/Unrecognised runs page/);
   });
 });
+
+describe('check-and-execute', () => {
+  /**
+   * Their real answer, captured live. The verdict is nested — an earlier
+   * reading looked for a top-level `conditionMet`, which does not exist, so a
+   * condition that held would have been reported as not held in any simulation.
+   */
+  it('reads the verdict from conditionResult, not a top-level field', async () => {
+    const held = clientWith(
+      vi.fn(async () =>
+        jsonResponse({
+          success: true,
+          status: 'simulated',
+          executed: false,
+          conditionResult: { met: true, observedValue: 'false', targetValue: 'false', operator: 'eq' },
+        }),
+      ),
+    );
+    const result = await held.checkAndExecute({
+      contractAddress: '0x0',
+      chainId: '11155111',
+      functionName: 'paused',
+      functionArgs: '[]',
+      condition: { operator: 'eq', value: 'false' },
+      action: { contractAddress: '0x0', functionName: 'pause', functionArgs: '[]' },
+    });
+    expect(result.conditionMet).toBe(true);
+    expect(result.observedValue).toBe('false');
+  });
+
+  it('reports a condition that did not hold as a result, not a failure', async () => {
+    const notHeld = clientWith(
+      vi.fn(async () =>
+        jsonResponse({
+          success: true,
+          status: 'simulated',
+          executed: false,
+          conditionResult: { met: false, observedValue: 'true' },
+        }),
+      ),
+    );
+    const result = await notHeld.checkAndExecute({
+      contractAddress: '0x0',
+      chainId: '11155111',
+      functionName: 'paused',
+      functionArgs: '[]',
+      condition: { operator: 'eq', value: 'false' },
+      action: { contractAddress: '0x0', functionName: 'pause', functionArgs: '[]' },
+    });
+    expect(result.conditionMet).toBe(false);
+    expect(result.observedValue).toBe('true');
+  });
+});
