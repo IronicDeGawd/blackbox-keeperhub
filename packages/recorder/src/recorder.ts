@@ -27,6 +27,7 @@ import {
 import type { CorroborationProvider } from './corroboration.js';
 import { enrichEvents, type TransactionProvider } from './enrich.js';
 import { buildEventFromChain, type ChainReader } from './chain-source.js';
+import type { KeeperHubIngestResult } from './keeperhub-source.js';
 
 /** The one call the recorder makes against KeeperHub. */
 export type ExecutionFetcher = {
@@ -41,6 +42,11 @@ export type RecorderOptions = {
   transactions?: TransactionProvider;
   /** Optional. Observes transactions that have no KeeperHub execution record. */
   chain?: ChainReader;
+  /**
+   * Optional. Ingests the organisation's whole run history, including runs
+   * Blackbox never submitted — the audit trail the PRD calls the input.
+   */
+  keeperHubRuns?: { ingest(): Promise<KeeperHubIngestResult> };
   config: BlackboxConfig;
   tracker: IncidentTracker;
   makeId: () => string;
@@ -55,6 +61,8 @@ export type TickResult = {
   polled: number;
   settled: number;
   eventsInserted: number;
+  /** Runs read from the organisation's KeeperHub history this tick. */
+  runsIngested: number;
   signersEvaluated: number;
   incidentsCreated: number;
   incidentsUpdated: number;
@@ -91,6 +99,7 @@ export class Recorder {
       polled: 0,
       settled: 0,
       eventsInserted: 0,
+      runsIngested: 0,
       signersEvaluated: 0,
       incidentsCreated: 0,
       incidentsUpdated: 0,
@@ -101,6 +110,23 @@ export class Recorder {
     const due = await dueExecutions(this.options.db, this.batchSize);
     /** Signers touched this tick, so evaluation is scoped to what changed. */
     const touched = new Map<string, { signer: `0x${string}`; chainId: number; agentId: string }>();
+
+    // Runs first: an organisation's history is the widest input, and the
+    // signers it touches deserve the same evaluation as a watched execution.
+    if (this.options.keeperHubRuns) {
+      try {
+        const ingested = await this.options.keeperHubRuns.ingest();
+        result.runsIngested += ingested.runsIngested;
+        result.eventsInserted += ingested.eventsInserted;
+        result.errors += ingested.errors;
+        for (const target of ingested.touched) {
+          touched.set(`${target.signer}|${target.chainId}`, target);
+        }
+      } catch (error) {
+        result.errors += 1;
+        this.options.logger?.error('keeperhub run ingest failed', { error });
+      }
+    }
 
     for (const watched of due) {
       try {

@@ -2,6 +2,7 @@ import { createPublicClient, http, type PublicClient } from 'viem';
 import {
   detectionFor,
   getChain,
+  isSupportedChain,
   type BlackboxConfig,
   type Incident,
 } from '@blackbox/core';
@@ -10,6 +11,7 @@ import { Diagnostician, VertexGemini } from '@blackbox/diagnostician';
 import {
   BlockScanner,
   buildEventFromChain,
+  KeeperHubSource,
   Recorder,
   RpcCorroborator,
   type ChainReader,
@@ -57,6 +59,18 @@ export type RuntimeOptions = {
    * chain shows, and every KeeperHub-specific field is simply absent.
    */
   keeperHub?: KeeperHubClient;
+  /**
+   * Read the whole organisation's run history, not just executions Blackbox
+   * submitted. Needs the address the organisation executes as — a run record
+   * does not carry one — so it stays off until that is configured rather than
+   * filing an org's activity under a guessed signer.
+   */
+  keeperHubOrg?: {
+    orgId: string;
+    agentId: string;
+    signer: `0x${string}`;
+    range?: string;
+  };
   /**
    * Extra endpoints to consult when looking up a transaction someone else's
    * wallet broadcast.
@@ -207,6 +221,21 @@ export class Runtime {
       },
       corroboration: new RpcCorroborator({ rpcUrls: { [options.chainId]: options.rpcUrl } }),
       chain: this.reader,
+      ...(options.keeperHub && options.keeperHubOrg
+        ? {
+            keeperHubRuns: new KeeperHubSource({
+              db: options.db,
+              client: options.keeperHub,
+              orgId: options.keeperHubOrg.orgId,
+              agentId: options.keeperHubOrg.agentId,
+              signer: options.keeperHubOrg.signer,
+              ...(isSupportedChain(options.chainId) ? { fallbackChainId: options.chainId } : {}),
+              ...(options.keeperHubOrg.range ? { range: options.keeperHubOrg.range } : {}),
+              makeId: () => this.id('evt'),
+              ...(options.logger ? { logger: options.logger } : {}),
+            }),
+          }
+        : {}),
       config: options.config,
       tracker: this.tracker,
       makeId: () => this.id('evt'),

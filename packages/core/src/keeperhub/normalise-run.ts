@@ -53,6 +53,10 @@ export function normaliseRun(run: KeeperHubRun, options: NormaliseRunOptions): E
     logicalActionId: run.id,
     agentId: options.agentId,
     signer: options.signer,
+    // Everything listed here ran on a managed wallet, which is what makes a
+    // nonce-bearing rule inapplicable to it.
+    agentKind: 'keeperhub' as const,
+    ...(run.workflowId ? { workflowId: run.workflowId } : {}),
     trigger: {
       // A workflow run was started by something KeeperHub scheduled or was
       // called for; a direct run is an API call by definition. The listing does

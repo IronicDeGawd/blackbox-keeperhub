@@ -17,6 +17,9 @@ export const hexHash = z
 
 // ---------------------------------------------------------------- events
 
+export const agentKind = z.enum(['keeperhub', 'signer']);
+export type AgentKind = z.infer<typeof agentKind>;
+
 export const triggerKind = z.enum(['schedule', 'condition', 'manual', 'api', 'unknown']);
 
 /**
@@ -53,6 +56,16 @@ export const executionEventSchema = z.object({
   agentId: z.string(),
   signer: hexAddress,
   chainId: z.number().int().positive(),
+
+  /**
+   * How the agent executes. Rules declare which kinds they apply to, because
+   * the two fail differently: KeeperHub manages nonces for a `keeperhub` agent,
+   * so it cannot have a nonce gap, while a `signer` agent holding its own key
+   * can. Absent means not established rather than either kind.
+   */
+  agentKind: agentKind.optional(),
+  /** The KeeperHub workflow a run belonged to, when it was one. */
+  workflowId: z.string().optional(),
 
   trigger: z.object({
     kind: triggerKind,

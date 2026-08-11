@@ -34,6 +34,8 @@ function serialiseEvent(e: ExecutionEvent) {
     agentId: e.agentId,
     signer: e.signer.toLowerCase(),
     chainId: e.chainId,
+    agentKind: e.agentKind ?? null,
+    workflowId: e.workflowId ?? null,
     txHash: e.submission.txHash ?? null,
     nonce: e.submission.nonce ?? null,
     submittedAt: e.submission.submittedAt,
@@ -81,6 +83,8 @@ function deserialiseEvent(row: typeof executionEvents.$inferSelect): ExecutionEv
     agentId: row.agentId,
     signer: row.signer as `0x${string}`,
     chainId: row.chainId,
+    ...(row.agentKind ? { agentKind: row.agentKind as ExecutionEvent['agentKind'] } : {}),
+    ...(row.workflowId ? { workflowId: row.workflowId } : {}),
     trigger: row.trigger as ExecutionEvent['trigger'],
     simulation: {
       performed: Boolean(sim['performed']),

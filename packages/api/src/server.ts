@@ -103,6 +103,22 @@ const diagnostician = diagnosticianFromEnv(env);
 /** Answers already paid for, keyed by chain and hash. */
 const diagnosisCache = new Map<string, unknown>();
 
+/**
+ * Watching a whole organisation needs the address it executes as, which no run
+ * record carries: KeeperHub submits from a shared relayer into the org's smart
+ * account. So this stays off until an operator names that address, rather than
+ * filing their history under an address we guessed.
+ */
+const keeperHubOrg =
+  env['KH_MANAGED_WALLET_ADDRESS'] && /^0x[0-9a-fA-F]{40}$/.test(env['KH_MANAGED_WALLET_ADDRESS'])
+    ? {
+        orgId: env['KH_ORG_ID'] ?? 'default',
+        agentId: env['KEEPERHUB_AGENT_ID'] ?? 'keeperhub-org',
+        signer: env['KH_MANAGED_WALLET_ADDRESS'] as `0x${string}`,
+        ...(env['KEEPERHUB_RUNS_RANGE'] ? { range: env['KEEPERHUB_RUNS_RANGE'] } : {}),
+      }
+    : undefined;
+
 const runtime = new Runtime({
   db,
   config,
@@ -112,6 +128,7 @@ const runtime = new Runtime({
   ...(lookupRpcUrls.length > 0 ? { fallbackRpcUrls: lookupRpcUrls } : {}),
   ...(diagnostician ? { diagnostician } : {}),
   ...(keeperHub ? { keeperHub } : {}),
+  ...(keeperHubOrg ? { keeperHubOrg } : {}),
   ...(env['BLACKBOX_TICK_MS'] ? { intervalMs: Number(env['BLACKBOX_TICK_MS']) } : {}),
   logger,
 });

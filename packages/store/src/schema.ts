@@ -31,6 +31,19 @@ export const executionEvents = pgTable(
     signer: text('signer').notNull(),
     chainId: integer('chain_id').notNull(),
 
+    /**
+     * How this agent executes, and therefore which rules can apply to it.
+     *
+     * `keeperhub` means a managed wallet: KeeperHub owns gas estimation, nonce
+     * management and ordering, so such an agent has no nonce queue of its own
+     * and cannot have a nonce gap. `signer` means an agent holding its own key,
+     * which can. Null is an event recorded before the distinction existed, and
+     * reads as unknown rather than as either kind.
+     */
+    agentKind: text('agent_kind'),
+    /** The KeeperHub workflow this run belonged to, when it was one. */
+    workflowId: text('workflow_id'),
+
     // Flattened because rules filter on these; the rest stays in JSONB.
     txHash: text('tx_hash'),
     nonce: integer('nonce'),
