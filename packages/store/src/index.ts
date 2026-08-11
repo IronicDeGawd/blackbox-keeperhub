@@ -11,6 +11,7 @@ import {
   oauthClients,
   orgSessions,
   signerState,
+  webhookSecrets,
   watchedExecutions,
   watchedSigners,
   watchedTransactions,
@@ -844,4 +845,48 @@ export async function purgeExpiredAuthRequests(db: Database, now: Date): Promise
     .where(lt(oauthAuthRequests.expiresAt, now))
     .returning();
   return rows.length;
+}
+
+// --- webhook secrets --------------------------------------------------------
+
+export async function createWebhookSecret(
+  db: Database,
+  params: { secretHash: string; orgId: string; label?: string | null; at: Date },
+): Promise<void> {
+  await db.insert(webhookSecrets).values({
+    secretHash: params.secretHash,
+    orgId: params.orgId,
+    label: params.label ?? null,
+    createdAt: params.at,
+  });
+}
+
+/** Resolve a secret to the organisation that owns it, and record the use. */
+export async function useWebhookSecret(
+  db: Database,
+  secretHash: string,
+  at: Date,
+): Promise<{ orgId: string } | null> {
+  const [row] = await db
+    .select()
+    .from(webhookSecrets)
+    .where(and(eq(webhookSecrets.secretHash, secretHash), isNull(webhookSecrets.revokedAt)))
+    .limit(1);
+  if (!row) return null;
+  await db
+    .update(webhookSecrets)
+    .set({ lastUsedAt: at })
+    .where(eq(webhookSecrets.secretHash, secretHash));
+  return { orgId: row.orgId };
+}
+
+export async function revokeWebhookSecret(
+  db: Database,
+  secretHash: string,
+  at: Date,
+): Promise<void> {
+  await db
+    .update(webhookSecrets)
+    .set({ revokedAt: at })
+    .where(eq(webhookSecrets.secretHash, secretHash));
 }

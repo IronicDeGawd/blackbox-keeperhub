@@ -185,6 +185,8 @@ export class Runtime {
   /** The primary first, then any fallback, for finding a queued transaction. */
   private readonly lookupReaders: ChainReader[];
   private readonly recorder: Recorder;
+  /** Kept so a webhook can ask for a sweep now rather than at the next tick. */
+  private readonly keeperHubSource: KeeperHubSource | undefined;
   private readonly scanner: BlockScanner;
   private readonly tracker: IncidentTracker;
   private timer: NodeJS.Timeout | undefined;
@@ -209,6 +211,21 @@ export class Runtime {
     this.reader = makeFallbackReader(this.lookupReaders);
     this.tracker = new IncidentTracker({ makeId: () => this.id('inc') });
 
+    this.keeperHubSource =
+      options.keeperHub && options.keeperHubOrg
+        ? new KeeperHubSource({
+            db: options.db,
+            client: options.keeperHub,
+            orgId: options.keeperHubOrg.orgId,
+            agentId: options.keeperHubOrg.agentId,
+            signer: options.keeperHubOrg.signer,
+            ...(isSupportedChain(options.chainId) ? { fallbackChainId: options.chainId } : {}),
+            ...(options.keeperHubOrg.range ? { range: options.keeperHubOrg.range } : {}),
+            makeId: () => this.id('evt'),
+            ...(options.logger ? { logger: options.logger } : {}),
+          })
+        : undefined;
+
     this.recorder = new Recorder({
       db: options.db,
       keeperHub: options.keeperHub ?? {
@@ -228,21 +245,7 @@ export class Runtime {
       // KeeperHub key the rule simply declines, which is correct: a budget we
       // cannot read is not one we can say anything about.
       ...(options.keeperHub ? { spendLimits: options.keeperHub } : {}),
-      ...(options.keeperHub && options.keeperHubOrg
-        ? {
-            keeperHubRuns: new KeeperHubSource({
-              db: options.db,
-              client: options.keeperHub,
-              orgId: options.keeperHubOrg.orgId,
-              agentId: options.keeperHubOrg.agentId,
-              signer: options.keeperHubOrg.signer,
-              ...(isSupportedChain(options.chainId) ? { fallbackChainId: options.chainId } : {}),
-              ...(options.keeperHubOrg.range ? { range: options.keeperHubOrg.range } : {}),
-              makeId: () => this.id('evt'),
-              ...(options.logger ? { logger: options.logger } : {}),
-            }),
-          }
-        : {}),
+      ...(this.keeperHubSource ? { keeperHubRuns: this.keeperHubSource } : {}),
       config: options.config,
       tracker: this.tracker,
       makeId: () => this.id('evt'),
@@ -356,6 +359,20 @@ export class Runtime {
    * that were checked, because "nothing is wrong, and here is what I looked at"
    * is a useful answer rather than an empty one.
    */
+  /**
+   * Read the organisation's runs now, rather than at the next tick.
+   *
+   * What an inbound webhook actually triggers. The webhook carries no data we
+   * trust — it only says something happened — so the work is the same sweep the
+   * loop does, just sooner. Returns null when this deployment watches no
+   * organisation, which is a truthful answer to "did anything happen".
+   */
+  async sweepKeeperHub(): Promise<{ runsIngested: number; eventsInserted: number } | null> {
+    if (!this.keeperHubSource) return null;
+    const result = await this.keeperHubSource.ingest();
+    return { runsIngested: result.runsIngested, eventsInserted: result.eventsInserted };
+  }
+
   async diagnoseTransaction(params: { txHash: string; chainId: number }): Promise<unknown> {
     const chainId = params.chainId;
     const chain = getChain(chainId);

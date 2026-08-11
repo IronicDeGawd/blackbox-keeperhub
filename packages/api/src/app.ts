@@ -11,6 +11,7 @@ import {
   type Identity,
 } from './identity.js';
 import type { KeeperHubOAuth } from './oauth.js';
+import type { Webhooks } from './webhooks.js';
 import {
   activeSigners,
   eventsByIds,
@@ -149,6 +150,11 @@ export type AppOptions = {
    * suits a script and asks too much of a person.
    */
   oauth?: KeeperHubOAuth;
+  /**
+   * Inbound nudges. Absent means the loop is the only thing that reads runs,
+   * which is slower but not broken.
+   */
+  webhooks?: Webhooks;
   /**
    * Agents any visitor may read. Unset means all of them, which keeps a local
    * run and the public demo legible; set on a deployment that hosts more than
@@ -419,6 +425,74 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
           .send({ error: 'unauthorized', detail: 'No session.', requestId: request.id });
       }
       return { orgId: caller.orgId, agents: await agentsOwnedBy(db, caller.orgId) };
+    });
+  }
+
+  if (options.webhooks) {
+    const webhooks = options.webhooks;
+
+    /**
+     * Mint a secret for something outside to call us with.
+     *
+     * Shown once. Only its hash is stored, so a leaked database yields nothing
+     * that can be replayed — the same reasoning as the session token, and for
+     * the same kind of value.
+     */
+    app.post('/api/webhooks/keeperhub/secret', costly(5), async (request, reply) => {
+      const caller = await callerOf(request);
+      if (!caller) {
+        return reply.code(401).send({
+          error: 'unauthorized',
+          detail: 'Sign in before minting a webhook secret.',
+          requestId: request.id,
+        });
+      }
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const label = typeof body['label'] === 'string' ? body['label'].slice(0, 64) : undefined;
+      const secret = await webhooks.mint(caller.orgId, label);
+      return reply.code(201).send({
+        secret,
+        orgId: caller.orgId,
+        // Said plainly, because the caller cannot come back for it.
+        note: 'Store this now. Blackbox keeps only a hash of it.',
+      });
+    });
+
+    /**
+     * Tell Blackbox to go and look.
+     *
+     * Deliberately not a way to submit data. KeeperHub has no outbound webhook
+     * of its own — a workflow calls us from a `code/run-code` node — so
+     * anything in the body is written by whoever set that node up, and trusting
+     * it would mean an attacker with a stolen secret could invent incidents.
+     * Instead the body is ignored entirely: we authenticate the caller and then
+     * read the runs from KeeperHub ourselves.
+     *
+     * That also makes it idempotent for free. A webhook that arrives twice, or
+     * out of order, causes two sweeps of the same data, and events dedupe on
+     * (sourceId, attemptIndex) — so a duplicate can never create a second
+     * incident.
+     */
+    app.post('/api/webhooks/keeperhub', costly(60), async (request, reply) => {
+      const header = String(request.headers['authorization'] ?? '');
+      const provided = header.startsWith('Bearer ') ? header.slice(7) : undefined;
+      const org = provided ? await webhooks.verify(provided) : null;
+      if (!org) {
+        return reply.code(401).send({
+          error: 'unauthorized',
+          detail: 'A valid webhook secret is required.',
+          requestId: request.id,
+        });
+      }
+
+      const swept = await webhooks.sweep();
+      if (!swept) {
+        // Authenticated, but this deployment watches no organisation — so
+        // there was nothing to go and read. Saying so beats reporting a
+        // successful sweep of nothing.
+        return reply.code(202).send({ accepted: true, swept: false, orgId: org.orgId });
+      }
+      return { accepted: true, swept: true, orgId: org.orgId, ...swept };
     });
   }
 

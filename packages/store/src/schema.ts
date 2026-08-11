@@ -359,3 +359,24 @@ export const oauthAuthRequests = pgTable('oauth_auth_requests', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 });
+
+/**
+ * A secret that lets something outside tell Blackbox to go and look.
+ *
+ * Deliberately not a way to submit data. A caller proves it holds the secret
+ * and Blackbox then reads the run from KeeperHub itself, so nothing a caller
+ * sends can become an event. The worst a stolen secret buys is making us poll.
+ */
+export const webhookSecrets = pgTable(
+  'webhook_secrets',
+  {
+    /** SHA-256 of the secret. The secret is shown once and never stored. */
+    secretHash: text('secret_hash').primaryKey(),
+    orgId: text('org_id').notNull(),
+    label: text('label'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => ({ byOrg: index('webhook_secrets_org_idx').on(t.orgId) }),
+);

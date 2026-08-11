@@ -10,6 +10,7 @@ import {
   oauthAuthRequests,
   oauthClients,
   orgSessions,
+  webhookSecrets,
   saveIncident,
   watchedSigners,
   type Database,
@@ -17,6 +18,7 @@ import {
 import { buildApp } from './app.js';
 import { Identity } from './identity.js';
 import { KeeperHubOAuth } from './oauth.js';
+import { Webhooks } from './webhooks.js';
 import { EventBus } from './bus.js';
 import { summarise } from './serialise.js';
 
@@ -41,6 +43,7 @@ beforeEach(async () => {
   await db.delete(orgSessions);
   await db.delete(oauthAuthRequests);
   await db.delete(oauthClients);
+  await db.delete(webhookSecrets);
 });
 
 const config = (): BlackboxConfig =>
@@ -980,5 +983,178 @@ describe('scoping every read, not just the list', () => {
         })
       ).statusCode,
     ).toBe(200);
+  });
+});
+
+describe('inbound webhooks', () => {
+  const sweeper = (result: { runsIngested: number; eventsInserted: number } | null) => {
+    let calls = 0;
+    return {
+      count: () => calls,
+      sweepKeeperHub: async () => {
+        calls += 1;
+        return result;
+      },
+    };
+  };
+
+  const signedIn = async () => {
+    const identity = new Identity(db, { listKeys: async () => [{ id: 'org-a' }] });
+    const result = await identity.signIn('kh_x');
+    if (!result.ok) throw new Error('fixture sign-in failed');
+    return { identity, token: result.token };
+  };
+
+  it('mints a secret for a signed-in operator and refuses a stranger', async () => {
+    const mine = await signedIn();
+    const swept = sweeper({ runsIngested: 0, eventsInserted: 0 });
+    const server = await app({
+      identity: mine.identity,
+      webhooks: new Webhooks(db, swept),
+    });
+
+    expect(
+      (await server.inject({ method: 'POST', url: '/api/webhooks/keeperhub/secret' })).statusCode,
+    ).toBe(401);
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/webhooks/keeperhub/secret',
+      headers: { authorization: `Bearer ${mine.token}` },
+      payload: { label: 'rebalance workflow' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().secret).toMatch(/^whsec_[0-9a-f]{64}$/);
+
+    // Stored as a hash: the secret itself is not recoverable from the table.
+    const rows = await db.select().from(webhookSecrets);
+    expect(JSON.stringify(rows)).not.toContain(res.json().secret);
+  });
+
+  it('sweeps when nudged with a valid secret, and refuses without one', async () => {
+    const mine = await signedIn();
+    const swept = sweeper({ runsIngested: 2, eventsInserted: 3 });
+    const server = await app({ identity: mine.identity, webhooks: new Webhooks(db, swept) });
+    const secret = (
+      await server.inject({
+        method: 'POST',
+        url: '/api/webhooks/keeperhub/secret',
+        headers: { authorization: `Bearer ${mine.token}` },
+      })
+    ).json().secret;
+
+    expect((await server.inject({ method: 'POST', url: '/api/webhooks/keeperhub' })).statusCode).toBe(
+      401,
+    );
+    expect(
+      (
+        await server.inject({
+          method: 'POST',
+          url: '/api/webhooks/keeperhub',
+          headers: { authorization: 'Bearer whsec_wrong' },
+        })
+      ).statusCode,
+    ).toBe(401);
+    expect(swept.count()).toBe(0);
+
+    const ok = await server.inject({
+      method: 'POST',
+      url: '/api/webhooks/keeperhub',
+      headers: { authorization: `Bearer ${secret}` },
+    });
+    expect(ok.json()).toMatchObject({ accepted: true, swept: true, runsIngested: 2 });
+    expect(swept.count()).toBe(1);
+  });
+
+  /**
+   * The security property worth having: a caller cannot submit data, only ask
+   * us to read. A body claiming a fabricated run changes nothing.
+   */
+  it('ignores the body entirely, so a nudge cannot fabricate an incident', async () => {
+    const mine = await signedIn();
+    const swept = sweeper({ runsIngested: 0, eventsInserted: 0 });
+    const server = await app({ identity: mine.identity, webhooks: new Webhooks(db, swept) });
+    const secret = (
+      await server.inject({
+        method: 'POST',
+        url: '/api/webhooks/keeperhub/secret',
+        headers: { authorization: `Bearer ${mine.token}` },
+      })
+    ).json().secret;
+
+    await server.inject({
+      method: 'POST',
+      url: '/api/webhooks/keeperhub',
+      headers: { authorization: `Bearer ${secret}` },
+      payload: { runs: [{ id: 'invented', status: 'error', agentId: 'someone-else' }] },
+    });
+    expect(await db.select().from(incidents)).toHaveLength(0);
+  });
+
+  // Arriving twice must not create a second incident. It causes a second sweep
+  // of the same data, and events dedupe on (sourceId, attemptIndex).
+  it('is idempotent: a repeated nudge just sweeps again', async () => {
+    const mine = await signedIn();
+    const swept = sweeper({ runsIngested: 1, eventsInserted: 0 });
+    const server = await app({ identity: mine.identity, webhooks: new Webhooks(db, swept) });
+    const secret = (
+      await server.inject({
+        method: 'POST',
+        url: '/api/webhooks/keeperhub/secret',
+        headers: { authorization: `Bearer ${mine.token}` },
+      })
+    ).json().secret;
+
+    for (let i = 0; i < 3; i++) {
+      const res = await server.inject({
+        method: 'POST',
+        url: '/api/webhooks/keeperhub',
+        headers: { authorization: `Bearer ${secret}` },
+      });
+      expect(res.json().accepted).toBe(true);
+    }
+    expect(swept.count()).toBe(3);
+    expect(await db.select().from(incidents)).toHaveLength(0);
+  });
+
+  it('says so rather than claiming a sweep when it watches no organisation', async () => {
+    const mine = await signedIn();
+    const server = await app({ identity: mine.identity, webhooks: new Webhooks(db, sweeper(null)) });
+    const secret = (
+      await server.inject({
+        method: 'POST',
+        url: '/api/webhooks/keeperhub/secret',
+        headers: { authorization: `Bearer ${mine.token}` },
+      })
+    ).json().secret;
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/webhooks/keeperhub',
+      headers: { authorization: `Bearer ${secret}` },
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().swept).toBe(false);
+  });
+
+  it('stops honouring a revoked secret', async () => {
+    const mine = await signedIn();
+    const webhooks = new Webhooks(db, sweeper({ runsIngested: 0, eventsInserted: 0 }));
+    const server = await app({ identity: mine.identity, webhooks });
+    const secret = (
+      await server.inject({
+        method: 'POST',
+        url: '/api/webhooks/keeperhub/secret',
+        headers: { authorization: `Bearer ${mine.token}` },
+      })
+    ).json().secret;
+
+    await webhooks.revoke(secret);
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/webhooks/keeperhub',
+      headers: { authorization: `Bearer ${secret}` },
+    });
+    expect(res.statusCode).toBe(401);
   });
 });

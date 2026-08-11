@@ -78,6 +78,13 @@
       "when": 1786430878861,
       "tag": "0010_low_madame_hydra",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786432603434,
+      "tag": "0011_wooden_stingray",
+      "breakpoints": true
     }
   ]
 }

@@ -33,6 +33,7 @@ import {
 import { diagnosticianFromEnv, keeperHubFromEnv, Runtime } from './runtime.js';
 import { httpKeyVerifier, Identity } from './identity.js';
 import { KeeperHubOAuth } from './oauth.js';
+import { Webhooks } from './webhooks.js';
 
 /**
  * Composition root.
@@ -385,6 +386,8 @@ const app = await buildApp({
   bus,
   identity,
   oauth,
+  // A nudge causes the same sweep the loop does, just sooner.
+  webhooks: new Webhooks(db, runtime),
   ...(publicAgentIds ? { publicAgentIds } : {}),
   // Diagnosis spends a model call, and the route is open to anyone. The
   // background loop already refuses to explain the same incident twice for
