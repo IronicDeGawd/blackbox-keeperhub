@@ -248,7 +248,9 @@ describe('remediation playbooks', () => {
       'playbooks.applicability',
       ALL_PLAYBOOKS.map((p) => ({ id: p.id, appliesTo: p.appliesTo, executors: p.executors })),
     );
-    expect(ALL_PLAYBOOKS).toHaveLength(5);
+    // Seven since P6 (stalled workflow) and P7 (spend cap), which decline with
+    // instructions rather than acting.
+    expect(ALL_PLAYBOOKS).toHaveLength(7);
   });
 
   it('refuses a nonce-bearing playbook for a managed wallet', () => {
