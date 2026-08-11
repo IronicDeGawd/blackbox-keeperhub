@@ -65,6 +65,8 @@ export type RuntimeOptions = {
    * does not carry one — so it stays off until that is configured rather than
    * filing an org's activity under a guessed signer.
    */
+  /** Announces incidents outside the process. Absent means detection stays quiet. */
+  alerter?: { consider(incident: Incident): Promise<unknown> };
   keeperHubOrg?: {
     orgId: string;
     agentId: string;
@@ -221,6 +223,7 @@ export class Runtime {
       },
       corroboration: new RpcCorroborator({ rpcUrls: { [options.chainId]: options.rpcUrl } }),
       chain: this.reader,
+      ...(options.alerter ? { alerter: options.alerter } : {}),
       ...(options.keeperHub && options.keeperHubOrg
         ? {
             keeperHubRuns: new KeeperHubSource({

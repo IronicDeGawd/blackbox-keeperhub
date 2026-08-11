@@ -3,6 +3,7 @@ import {
   normaliseExecution,
   type BlackboxConfig,
   type ExecutionEvent,
+  type Incident,
   type KeeperHubExecution,
 } from '@blackbox/core';
 import {
@@ -47,6 +48,12 @@ export type RecorderOptions = {
    * Blackbox never submitted — the audit trail the PRD calls the input.
    */
   keeperHubRuns?: { ingest(): Promise<KeeperHubIngestResult> };
+  /**
+   * Optional. Announces incidents somewhere a person will see them. Absent
+   * means detection still works and stays inside the process — which is what
+   * every deployment did before this existed.
+   */
+  alerter?: { consider(incident: Incident): Promise<unknown> };
   config: BlackboxConfig;
   tracker: IncidentTracker;
   makeId: () => string;
@@ -341,6 +348,15 @@ export class Recorder {
         rca: incident.rca ?? null,
         remediation: incident.remediation ?? null,
       });
+
+      // After the save, so an alert never describes a state that was not
+      // persisted. The alerter decides whether this is worth saying at all.
+      try {
+        await this.options.alerter?.consider(incident);
+      } catch (error) {
+        // Delivery is not allowed to cost a detection.
+        this.options.logger?.error('alerting failed', { incidentId: incident.id, error });
+      }
     }
 
     return { created: created.length, updated: updated.length, resolved: resolved.length };

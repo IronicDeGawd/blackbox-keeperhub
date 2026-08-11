@@ -21,6 +21,15 @@ import {
   verifyUserSubmission,
   type Proposal,
 } from './proposals.js';
+import {
+  Alerter,
+  discordRender,
+  keeperHubEmailChannel,
+  logChannel,
+  slackRender,
+  webhookChannel,
+  type Channel,
+} from '@blackbox/alerter';
 import { diagnosticianFromEnv, keeperHubFromEnv, Runtime } from './runtime.js';
 
 /**
@@ -119,6 +128,47 @@ const keeperHubOrg =
       }
     : undefined;
 
+/**
+ * Where alerts go.
+ *
+ * Nothing configured means the log, so an operator running this locally still
+ * sees that an alert would have fired rather than wondering whether alerting
+ * works at all. A webhook covers Discord and Slack — both accept an incoming
+ * webhook — and email goes through KeeperHub's own SendGrid key, so it needs no
+ * credentials from the operator.
+ */
+const alertChannels: Channel[] = [logChannel(logger)];
+const webhookUrl = env['BLACKBOX_ALERT_WEBHOOK_URL'];
+if (webhookUrl) {
+  const format = (env['BLACKBOX_ALERT_WEBHOOK_FORMAT'] ?? '').toLowerCase();
+  alertChannels.push(
+    webhookChannel({
+      url: webhookUrl,
+      ...(format === 'discord' ? { render: discordRender } : {}),
+      ...(format === 'slack' ? { render: slackRender } : {}),
+    }),
+  );
+}
+if (env['BLACKBOX_ALERT_EMAIL_TO'] && keeperHub) {
+  alertChannels.push(keeperHubEmailChannel({ to: env['BLACKBOX_ALERT_EMAIL_TO'], client: keeperHub }));
+}
+
+const quietHours = env['BLACKBOX_ALERT_QUIET_HOURS']
+  ? parseQuietHours(env['BLACKBOX_ALERT_QUIET_HOURS'])
+  : undefined;
+
+const alerter = new Alerter({
+  channels: alertChannels,
+  policy: {
+    routes: alertChannels.map((c) => ({
+      channel: c.name,
+      minSeverity: (env['BLACKBOX_ALERT_MIN_SEVERITY'] ?? 'critical') as 'info' | 'warning' | 'critical',
+      ...(quietHours ? { quietHours } : {}),
+    })),
+  },
+  logger,
+});
+
 const runtime = new Runtime({
   db,
   config,
@@ -129,6 +179,7 @@ const runtime = new Runtime({
   ...(diagnostician ? { diagnostician } : {}),
   ...(keeperHub ? { keeperHub } : {}),
   ...(keeperHubOrg ? { keeperHubOrg } : {}),
+  alerter,
   ...(env['BLACKBOX_TICK_MS'] ? { intervalMs: Number(env['BLACKBOX_TICK_MS']) } : {}),
   logger,
 });
@@ -458,4 +509,17 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       process.exit(0);
     })();
   });
+}
+
+/** `22-7` or `22-7+5.5`. A malformed value is ignored rather than guessed at. */
+function parseQuietHours(
+  raw: string,
+): { start: number; end: number; utcOffsetHours?: number } | undefined {
+  const match = /^(\d{1,2})-(\d{1,2})(?:([+-][\d.]+))?$/.exec(raw.trim());
+  if (!match) return undefined;
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  if (start > 23 || end > 23) return undefined;
+  const offset = match[3] === undefined ? undefined : Number(match[3]);
+  return { start, end, ...(offset !== undefined && !Number.isNaN(offset) ? { utcOffsetHours: offset } : {}) };
 }

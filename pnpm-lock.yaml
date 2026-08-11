@@ -29,6 +29,9 @@ importers:
 
   packages/api:
     dependencies:
+      '@blackbox/alerter':
+        specifier: workspace:*
+        version: link:../alerter
       '@blackbox/chaos':
         specifier: workspace:*
         version: link:../chaos
