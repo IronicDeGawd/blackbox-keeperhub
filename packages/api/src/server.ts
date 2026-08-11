@@ -34,6 +34,7 @@ import { diagnosticianFromEnv, keeperHubFromEnv, Runtime } from './runtime.js';
 import { httpKeyVerifier, Identity } from './identity.js';
 import { KeeperHubOAuth } from './oauth.js';
 import { Webhooks } from './webhooks.js';
+import { installEventTrigger, installScheduledSweep } from './triggers.js';
 
 /**
  * Composition root.
@@ -380,6 +381,48 @@ async function loadIncident(id: string): Promise<{ row: Record<string, unknown>;
   };
 }
 
+const webhooks = new Webhooks(db, runtime);
+const publicUrl = env['BLACKBOX_PUBLIC_URL'];
+
+/**
+ * Installing a trigger needs three things: this deployment's address, a secret
+ * for the workflow to call back with, and a KeeperHub client to write the
+ * workflow. Missing any of them leaves the routes absent rather than failing
+ * halfway through somebody's organisation.
+ */
+const triggers =
+  keeperHub && publicUrl
+    ? {
+        installSchedule: async (
+          orgId: string,
+          params: { intervalSeconds?: number; cron?: string; timezone?: string },
+        ) =>
+          installScheduledSweep({
+            client: keeperHub,
+            baseUrl: publicUrl,
+            // A fresh secret per install, so revoking one trigger's access
+            // does not silence the others.
+            webhookSecret: await webhooks.mint(orgId, 'schedule trigger'),
+            ...params,
+          }),
+        installEvent: async (
+          orgId: string,
+          params: {
+            contractAddress: string;
+            eventName: string;
+            network: string;
+            contractABI?: string;
+          },
+        ) =>
+          installEventTrigger({
+            client: keeperHub,
+            baseUrl: publicUrl,
+            webhookSecret: await webhooks.mint(orgId, `event trigger ${params.eventName}`),
+            ...params,
+          }),
+      }
+    : undefined;
+
 const app = await buildApp({
   db,
   config,
@@ -387,8 +430,9 @@ const app = await buildApp({
   identity,
   oauth,
   // A nudge causes the same sweep the loop does, just sooner.
-  webhooks: new Webhooks(db, runtime),
-  ...(env['BLACKBOX_PUBLIC_URL'] ? { publicUrl: env['BLACKBOX_PUBLIC_URL'] } : {}),
+  webhooks,
+  ...(publicUrl ? { publicUrl } : {}),
+  ...(triggers ? { triggers } : {}),
   ...(publicAgentIds ? { publicAgentIds } : {}),
   // Diagnosis spends a model call, and the route is open to anyone. The
   // background loop already refuses to explain the same incident twice for

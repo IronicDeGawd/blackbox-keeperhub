@@ -158,6 +158,25 @@ export type AppOptions = {
   /** This deployment's public address, used to write the code-node snippet. */
   publicUrl?: string;
   /**
+   * Installs KeeperHub-side triggers that call this deployment. Absent means
+   * the local tick is the only thing that drives detection.
+   */
+  triggers?: {
+    installSchedule(
+      orgId: string,
+      params: { intervalSeconds?: number; cron?: string; timezone?: string },
+    ): Promise<{ workflowId: string; created: boolean }>;
+    installEvent(
+      orgId: string,
+      params: {
+        contractAddress: string;
+        eventName: string;
+        network: string;
+        contractABI?: string;
+      },
+    ): Promise<{ workflowId: string; created: boolean }>;
+  };
+  /**
    * Agents any visitor may read. Unset means all of them, which keeps a local
    * run and the public demo legible; set on a deployment that hosts more than
    * its own demo agents.
@@ -498,6 +517,88 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         return reply.code(202).send({ accepted: true, swept: false, orgId: org.orgId });
       }
       return { accepted: true, swept: true, orgId: org.orgId, ...swept };
+    });
+  }
+
+  if (options.triggers) {
+    const triggers = options.triggers;
+
+    /**
+     * Hand the loop to KeeperHub.
+     *
+     * Installs a workflow on their side that calls this deployment — on a
+     * schedule, or when a contract emits an event. Requires a signed-in
+     * operator because it writes to their organisation's workflow list.
+     */
+    app.post('/api/triggers/keeperhub', costly(10), async (request, reply) => {
+      const caller = await callerOf(request);
+      if (!caller) {
+        return reply.code(401).send({
+          error: 'unauthorized',
+          detail: 'Sign in before installing a trigger.',
+          requestId: request.id,
+        });
+      }
+
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const kind = String(body['kind'] ?? 'schedule');
+      try {
+        if (kind === 'schedule') {
+          const result = await triggers.installSchedule(caller.orgId, {
+            ...(body['intervalSeconds'] !== undefined
+              ? { intervalSeconds: Number(body['intervalSeconds']) }
+              : {}),
+            ...(typeof body['cron'] === 'string' ? { cron: body['cron'] } : {}),
+            ...(typeof body['timezone'] === 'string' ? { timezone: body['timezone'] } : {}),
+          });
+          return reply.code(201).send({ kind, ...result });
+        }
+        if (kind === 'event') {
+          const contractAddress = String(body['contractAddress'] ?? '');
+          if (!/^0x[0-9a-fA-F]{40}$/.test(contractAddress)) {
+            return reply.code(400).send({
+              error: 'invalid_address',
+              detail: `"${contractAddress}" is not a 20-byte hex address`,
+              requestId: request.id,
+            });
+          }
+          const eventName = String(body['eventName'] ?? '');
+          if (!eventName) {
+            return reply.code(400).send({
+              error: 'bad_request',
+              detail: 'eventName is required for an event trigger.',
+              requestId: request.id,
+            });
+          }
+          const result = await triggers.installEvent(caller.orgId, {
+            contractAddress,
+            eventName,
+            network: String(body['network'] ?? DEFAULT_CHAIN),
+            ...(typeof body['contractABI'] === 'string'
+              ? { contractABI: body['contractABI'] }
+              : {}),
+          });
+          return reply.code(201).send({ kind, ...result });
+        }
+        // Their Block and Transfer triggers are real, but nothing in their
+        // published source names the fields those configs expect. A workflow
+        // built on a guess would look installed and never fire.
+        return reply.code(400).send({
+          error: 'unsupported_trigger',
+          detail: `Blackbox can install "schedule" and "event" triggers. "${kind}" is not one it can configure correctly.`,
+          requestId: request.id,
+        });
+      } catch (error) {
+        const message = String((error as Error)?.message ?? error);
+        const tooSmall = (error as Error)?.name === 'ScheduleIntervalTooSmall';
+        return reply
+          .code(tooSmall ? 400 : 502)
+          .send({
+            error: tooSmall ? 'interval_too_small' : 'provider_error',
+            detail: message,
+            requestId: request.id,
+          });
+      }
     });
   }
 
