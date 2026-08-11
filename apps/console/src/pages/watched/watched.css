@@ -1,0 +1,47 @@
+.watched__prose {
+  margin: 0;
+  max-width: 82ch;
+  font-size: var(--t-body);
+}
+
+.watched__address {
+  min-width: clamp(240px, 34vw, 420px);
+}
+
+/* A dense listing table. Same hairline grid as the evidence tables. */
+.listing {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+}
+
+.listing th,
+.listing td {
+  text-align: left;
+  padding: var(--s2) var(--s4);
+  border-bottom: 1px solid var(--rule);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.listing thead th {
+  font-size: var(--t-micro);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  background: var(--surface-sunk);
+  font-weight: 400;
+}
+
+.listing tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.listing tbody tr:hover {
+  background: var(--surface-sunk);
+}
+
+.listing__actions {
+  text-align: right;
+}

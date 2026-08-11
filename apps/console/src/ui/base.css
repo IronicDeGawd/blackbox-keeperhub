@@ -1,0 +1,180 @@
+/*
+ * Base layer: reset, type, and the handful of shapes every page reuses.
+ *
+ * The look is carried by hairlines and typography — there is no border-radius
+ * outside inline code, no box-shadow anywhere, and no gradient. Emphasis is a
+ * 3px accent left-border. Adding a shadow or a rounded card here would quietly
+ * undo the whole thing.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--t-base);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+code,
+.mono {
+  font-family: var(--font-mono);
+}
+
+code {
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 1px 5px;
+  /* Relative, so code sits a little below whatever line it is set in — but
+     never below the floor, which 0.9em of a micro label would be. */
+  font-size: max(var(--t-micro), 0.9em);
+  white-space: nowrap;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* --- shared shapes ------------------------------------------------------- */
+
+/* Uppercase mono micro-label. Used for every section and column heading.
+   Section labels are real h2/h3 elements so the page can be navigated by
+   heading; the weight is pinned here so the tag change is invisible. */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: var(--t-micro);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0;
+}
+
+.eyebrow--accent {
+  color: var(--accent);
+}
+
+/* An eyebrow with a hairline running out to the right, as in the spec. */
+.eyebrow--ruled {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+.eyebrow--ruled::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+}
+
+/* The only emphasis device. Never a fill, never a shadow. */
+.panel--accent {
+  border-left: 3px solid var(--accent);
+}
+
+/* Every page is a single column of stacked sections at the design width. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  max-width: 1180px;
+}
+
+.notice {
+  padding: var(--s4);
+}
+
+/* Wide content scrolls inside its own box; the page never scrolls sideways. */
+.tablewrap {
+  overflow-x: auto;
+}
+
+.notice__lead {
+  margin: 0 0 var(--s1);
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  color: var(--ink);
+}
+
+.notice p:last-child {
+  margin-bottom: 0;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.dim {
+  color: var(--ink-faint);
+}
+
+.soft {
+  color: var(--ink-soft);
+}
+
+.crit {
+  color: var(--critical);
+}
+.warn {
+  color: var(--warning);
+}
+.ok {
+  color: var(--ok);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,0 +1,318 @@
+/*
+ * The frame: a fixed masthead over a scrolling main column, with the nav in a
+ * rail beside it. The header never leaves, because the two things it carries —
+ * whether the feed is live and which chain is active — are worth nothing if you
+ * have to scroll to check them.
+ */
+
+.shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Off screen until focused, then it lands over the masthead. */
+.skip {
+  position: absolute;
+  left: -9999px;
+  z-index: 10;
+}
+
+.skip:focus {
+  left: var(--s5);
+  top: var(--s2);
+  padding: var(--s2) var(--s3);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+}
+
+/* The skip target should not draw a focus ring when it is jumped to. */
+.shell__main:focus {
+  outline: none;
+}
+
+/* --- masthead ------------------------------------------------------------ */
+
+.masthead {
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.masthead__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s3) var(--s5);
+}
+
+.brand {
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.brand__mark {
+  color: var(--accent);
+}
+
+.masthead__spacer {
+  flex: 1;
+}
+
+/* --- chain banner -------------------------------------------------------- */
+
+.chains {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.chain {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s2);
+  border: 1px solid var(--rule-strong);
+  padding: 2px var(--s2);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.chain__tag {
+  font-size: var(--t-micro);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* A chain that spends real money is never allowed to look like the others. */
+.chain--live {
+  border-color: var(--critical);
+  color: var(--critical);
+}
+.chain--live .chain__tag {
+  color: var(--critical);
+  font-weight: 600;
+}
+
+.mainnet-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s5);
+  background: var(--surface-sunk);
+  border-top: 1px solid var(--critical);
+  border-bottom: 1px solid var(--critical);
+  border-left: 3px solid var(--critical);
+  color: var(--critical);
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+}
+
+/* --- connection ---------------------------------------------------------- */
+
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.live__dot {
+  width: 7px;
+  height: 7px;
+  background: var(--ink-faint);
+  flex: none;
+}
+
+.live--connected .live__dot {
+  background: var(--ok);
+}
+.live--connected {
+  color: var(--ok);
+}
+
+.live--connecting .live__dot,
+.live--reconnecting .live__dot {
+  background: var(--warning);
+  animation: live-pulse 1.1s ease-in-out infinite;
+}
+.live--connecting,
+.live--reconnecting {
+  color: var(--warning);
+}
+
+.live--disconnected .live__dot {
+  background: var(--critical);
+}
+.live--disconnected {
+  color: var(--critical);
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* --- stats strip --------------------------------------------------------- */
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--rule);
+  background: var(--ground);
+}
+
+.stat {
+  padding: var(--s2) var(--s5) var(--s3);
+  border-right: 1px solid var(--rule);
+  min-width: 0;
+}
+
+/* Without this the strip ends on a rule with nothing after it. */
+.stat:last-child {
+  border-right: none;
+}
+
+.stat__label {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 2px;
+}
+
+.stat__value {
+  font-family: var(--font-mono);
+  font-size: var(--t-lead);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.stat__part {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.stat__part-label {
+  font-size: var(--t-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.stat__zero {
+  color: var(--ink-faint);
+}
+
+/* --- body ---------------------------------------------------------------- */
+
+.body {
+  display: grid;
+  grid-template-columns: 172px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.rail {
+  border-right: 1px solid var(--rule);
+  padding: var(--s4) 0;
+  overflow-y: auto;
+}
+
+.rail__nav {
+  display: flex;
+  flex-direction: column;
+}
+
+.rail__link {
+  display: block;
+  padding: var(--s2) var(--s4);
+  border-left: 2px solid transparent;
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  color: var(--ink-soft);
+  text-decoration: none;
+}
+
+.rail__link:hover {
+  color: var(--ink);
+  border-left-color: var(--rule-strong);
+  text-decoration: none;
+}
+
+.rail__link--active {
+  color: var(--accent);
+  border-left-color: var(--accent);
+}
+
+.rail__note {
+  margin-top: var(--s5);
+  padding: 0 var(--s4);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+
+.shell__main {
+  overflow-y: auto;
+  min-width: 0;
+  padding: var(--s5);
+}
+
+/* Below the design width the rail stops being worth a column. */
+@media (max-width: 1100px) {
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .rail {
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+    padding: 0;
+    overflow: visible;
+  }
+  .rail__nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .rail__link {
+    border-left: none;
+    border-bottom: 2px solid transparent;
+    padding: var(--s2) var(--s4);
+  }
+  .rail__link:hover {
+    border-left: none;
+    border-bottom-color: var(--rule-strong);
+  }
+  .rail__link--active {
+    border-left: none;
+    border-bottom-color: var(--accent);
+  }
+  .rail__note {
+    display: none;
+  }
+}

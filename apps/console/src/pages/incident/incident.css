@@ -1,0 +1,524 @@
+/* The incident detail page: header, evidence, events. */
+
+.incident__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.incident__title {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+/* An h1 for the outline, but it is prose, so it keeps the body face rather
+   than picking up the mono heading treatment from base.css. */
+.incident__summary {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-weight: 400;
+  letter-spacing: normal;
+  font-size: var(--t-lead);
+  color: var(--ink);
+  max-width: 80ch;
+}
+
+.incident__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s6);
+  margin: 0;
+  padding: var(--s3) 0 0;
+  border-top: 1px solid var(--rule);
+}
+
+.incident__meta dt {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.incident__meta dd {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  color: var(--ink);
+}
+
+/* --- sections ------------------------------------------------------------ */
+
+.section {
+  padding: var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.section__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.section__title {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.section__gap {
+  flex: 1;
+}
+
+.section__empty {
+  margin: 0;
+  max-width: 80ch;
+}
+
+.subsection {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.subsection__note {
+  margin: 0;
+  max-width: 80ch;
+  font-size: var(--t-body);
+}
+
+.skeleton-panel {
+  height: 220px;
+  animation: skeleton-fade 1.4s ease-in-out infinite;
+}
+
+/* --- facts --------------------------------------------------------------- */
+
+.facts {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+}
+
+.facts th,
+.facts td {
+  text-align: left;
+  padding: 4px var(--s3) 4px 0;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+
+.facts tr:last-child th,
+.facts tr:last-child td {
+  border-bottom: none;
+}
+
+.facts th {
+  font-weight: 400;
+  color: var(--ink-faint);
+  width: 30%;
+  white-space: nowrap;
+}
+
+.facts td {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+/* The threshold the value on its left was compared against. */
+.facts__threshold {
+  color: var(--ink-soft);
+  white-space: nowrap;
+  width: 30%;
+}
+
+/* --- actions -------------------------------------------------------------- */
+
+.actions__row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  background: var(--surface-sunk);
+}
+
+.confirm__text {
+  font-size: var(--t-body);
+  color: var(--ink);
+}
+
+.button--go {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/*
+ * A refusal is an outcome. It gets a bordered panel of its own rather than a
+ * red toast, because the reason is the content.
+ */
+.refusal {
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  padding: var(--s3) var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.refusal__lead {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  color: var(--accent);
+}
+
+.refusal p {
+  margin: 0;
+  max-width: 80ch;
+}
+
+.refusal__guards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  font-size: var(--t-body);
+}
+
+/* --- propose ------------------------------------------------------------- */
+
+.propose {
+  border-left: 3px solid var(--accent);
+}
+
+.paste {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.paste__input {
+  min-width: clamp(240px, 46vw, 560px);
+}
+
+/* --- root cause analysis -------------------------------------------------- */
+
+/*
+ * Tinted and outlined so generated prose can never be read as a measured fact.
+ * This is the only place on the page where a model wrote the words.
+ */
+.rca {
+  background: var(--surface-sunk);
+  border-left: 3px solid var(--ink-faint);
+}
+
+.rca__origin {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.rca__badge {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.06em;
+  border: 1px solid var(--rule-strong);
+  padding: 1px 6px;
+  color: var(--ink-soft);
+}
+
+/* A template is not model output, and must not be dressed as one. */
+.rca__badge--template {
+  border-color: var(--ink-faint);
+  color: var(--ink-faint);
+}
+
+.rca__summary {
+  margin: 0;
+  font-size: var(--t-base);
+  line-height: 1.6;
+  max-width: 80ch;
+}
+
+.rca__list {
+  margin: 0;
+  padding-left: var(--s4);
+  max-width: 80ch;
+  font-size: var(--t-body);
+  color: var(--ink-soft);
+}
+.rca__list li {
+  margin-bottom: var(--s1);
+}
+.rca__list--timeline {
+  list-style: none;
+  padding-left: 0;
+}
+
+.rca__recommendation {
+  margin: 0;
+  font-size: var(--t-base);
+  max-width: 80ch;
+  color: var(--ink);
+}
+
+.rca__version {
+  margin: 0;
+  font-size: var(--t-micro);
+}
+
+/* --- remediation ---------------------------------------------------------- */
+
+.outcome {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: 1px solid var(--rule-strong);
+  padding: 2px var(--s2);
+  color: var(--ink-soft);
+}
+.outcome--ok {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.outcome--crit {
+  border-color: var(--critical);
+  color: var(--critical);
+}
+.outcome--warn {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+/* A declined remediation is a first-class outcome, not a muted one. */
+.outcome--accent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.attempt {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.attempt__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.attempt__status {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+}
+.attempt__status--succeeded {
+  color: var(--ok);
+}
+.attempt__status--failed {
+  color: var(--critical);
+}
+.attempt__status--skipped {
+  color: var(--accent);
+}
+
+.proof {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding: var(--s3);
+  border: 1px solid var(--rule-strong);
+  background: var(--ground);
+  overflow-x: auto;
+}
+
+/* The hash of a fix that landed. Nothing else on the page competes with it. */
+.proof--won {
+  border-color: var(--ok);
+  border-left-width: 3px;
+}
+
+.proof .explorer,
+.proof .copyable {
+  font-size: var(--t-base);
+  word-break: break-all;
+  white-space: normal;
+}
+
+.attempt__reason {
+  margin: 0;
+  padding: var(--s3);
+  border-left: 3px solid var(--accent);
+  background: var(--surface-sunk);
+  font-size: var(--t-body);
+  max-width: 80ch;
+}
+
+.attempt__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s6);
+  margin: 0;
+}
+
+.attempt__meta dt {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.attempt__meta dd {
+  margin: 2px 0 0;
+  font-size: var(--t-body);
+  color: var(--ink);
+}
+
+.guards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--s4);
+}
+
+.guards__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.guards__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s2);
+}
+
+.guard {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  border: 1px solid var(--rule);
+  padding: 1px 6px;
+  color: var(--ink-soft);
+}
+.guard--passed {
+  border-color: var(--rule-strong);
+}
+.guard--failed {
+  border-color: var(--critical);
+  color: var(--critical);
+}
+
+/* --- events -------------------------------------------------------------- */
+
+.events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.event {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: var(--s3);
+  padding: var(--s2) 0;
+  position: relative;
+}
+
+/* The thread joining one observation to the next. */
+.event:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 24px;
+  bottom: -4px;
+  width: 1px;
+  background: var(--rule);
+}
+
+.event__glyph {
+  width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--rule-strong);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-soft);
+  position: relative;
+  z-index: 1;
+}
+
+.event__glyph--detection {
+  border-color: var(--critical);
+  color: var(--critical);
+}
+.event__glyph--remediation {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.event__glyph--inclusion {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.event__glyph--rca {
+  border-color: var(--ink-faint);
+}
+
+.event__line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.event__label {
+  font-size: var(--t-body);
+  color: var(--ink);
+}
+
+.event__kind {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.event__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s4);
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}

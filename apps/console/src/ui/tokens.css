@@ -1,0 +1,98 @@
+/*
+ * Design tokens. The palette and the spacing step are taken unchanged from
+ * docs/console-spec.html so the console and its own spec are demonstrably the
+ * same object. The type scale below is the one thing added: the spec sets sizes
+ * inline in px, which does not survive a reader's own font size or a projector.
+ *
+ * The console commits to dark — index.html stamps data-theme="dark" — because
+ * it is a tool someone keeps open during an incident. Light is kept whole and
+ * working rather than deleted: the spec rules out a *toggle*, not a palette.
+ */
+
+:root {
+  --ground: #f6f7f9;
+  --surface: #ffffff;
+  --surface-sunk: #edeff3;
+  --ink: #14171d;
+  --ink-soft: #4a515e;
+  /*
+   * Darkened from the spec's #767e8c, which fell to 3.55:1 on --surface-sunk —
+   * under AA. This is the colour of every eyebrow, stat label and timestamp,
+   * always set at the 0.75rem floor, so it is the one that has to hold up.
+   */
+  --ink-faint: #656c7a;
+  --rule: #dbdfe6;
+  --rule-strong: #c3c9d4;
+  --accent: #d24608;
+  --accent-soft: #fbede6;
+  --critical: #c22b2b;
+  --warning: #a66a00;
+  --ok: #1f7a4d;
+  --code-bg: #f1f3f7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --ground: #101317;
+    --surface: #171b21;
+    --surface-sunk: #1d222a;
+    --ink: #e7eaef;
+    --ink-soft: #a8b0bc;
+    --ink-faint: #868e9c; /* lifted for AA on --surface-sunk */
+    --rule: #2a3039;
+    --rule-strong: #3a424e;
+    --accent: #ff7a3d;
+    --accent-soft: #2a1a12;
+    --critical: #f2685f;
+    --warning: #d9a036;
+    --ok: #4fbe87;
+    --code-bg: #1b2028;
+  }
+}
+
+:root[data-theme='dark'] {
+  --ground: #101317;
+  --surface: #171b21;
+  --surface-sunk: #1d222a;
+  --ink: #e7eaef;
+  --ink-soft: #a8b0bc;
+  --ink-faint: #868e9c; /* lifted for AA on --surface-sunk */
+  --rule: #2a3039;
+  --rule-strong: #3a424e;
+  --accent: #ff7a3d;
+  --accent-soft: #2a1a12;
+  --critical: #f2685f;
+  --warning: #d9a036;
+  --ok: #4fbe87;
+  --code-bg: #1b2028;
+}
+
+:root {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  /*
+   * Type scale. Every size in the console comes from this list and nothing
+   * else, in rem rather than px so a reader who has raised their browser's
+   * base size gets a bigger console rather than the same cramped one.
+   *
+   * 0.75rem is the floor. Below that the mono labels stop being readable on a
+   * projector, and this is a thing people watch someone else drive.
+   */
+  --t-micro: 0.75rem; /* 12px — eyebrows, tags, column heads */
+  --t-small: 0.8125rem; /* 13px — dense secondary text */
+  --t-body: 0.875rem; /* 14px — table and panel body */
+  --t-base: 0.9375rem; /* 15px — document default */
+  --t-lead: 1.0625rem; /* 17px — section leads */
+  --t-title: 1.375rem; /* 22px — page titles */
+  --t-display: 1.875rem; /* 30px — the landing statement, once */
+
+  /* A 4px step. Density is the point, so the scale starts tight. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 22px;
+  --s6: 32px;
+  --s7: 48px;
+}
