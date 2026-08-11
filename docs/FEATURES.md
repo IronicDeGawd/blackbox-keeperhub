@@ -405,6 +405,81 @@ been reported as not held whenever no execution record came back — which is
 every simulation. **Fixed**, and the observed value is now carried through as
 evidence.
 
+## Second audit — 2026-08-12, after the ownership change
+
+81 checks across four harnesses, **all passing** after the fixes below.
+
+| Sweep | Result |
+| --- | --- |
+| `tools/audit/http-audit.sh` | 40/40 |
+| `tools/audit/connect-audit.sh` | 20/20 |
+| `tools/audit/tenant-audit.mjs` (a real second KeeperHub org) | 10/10 |
+| `tools/audit/mcp-audit.mjs` | 11/11 |
+
+Four findings, all fixed and verified live. Three shared one root: acting was
+locked down, and the things that had relied on it being open were not brought
+along.
+
+### 14. This deployment could not act on its own demo agents
+
+**Severity: high.** `keeperhub-org` was never claimed, and "unowned means
+nobody" includes its owner. Verified with our own organisation's session:
+`403 Sign in as the organisation that owns keeperhub-org to remediate it`. A
+judge would have watched an incident appear and found that nobody on earth
+could fix it.
+
+**Fixed.** The deployment claims its own demo agents at startup, under the same
+organisation id a sign-in with its key produces. Live: the session now owns
+`keeperhub-org`, acknowledging its incident returns 200, and an anonymous
+caller still gets 403.
+
+### 15. The MCP write tools became unusable
+
+**Severity: high.** `BlackboxClient` had no way to carry a session token, so
+`watch_address` and `request_remediation` could no longer succeed against a
+deployment with identity configured. They had worked only because everything
+was open.
+
+**Fixed.** The client takes a token, read from `BLACKBOX_TOKEN` by the stdio
+entry point, and reports whether it is signed in.
+
+### 16. An MCP tool threw instead of answering
+
+**Severity: high.** `callTool` returned argument-validation errors as readable
+results for a stated reason — a thrown error ends the agent's turn — but every
+error the API itself returned escaped. A 401 killed the turn instead of saying
+"sign in".
+
+**Fixed.** Any refusal comes back as `isError` carrying the server's own
+detail, and an unauthenticated caller is told which variable to set. Live:
+`watch_address was refused: Sign in to watch an address…`.
+
+### 17. Rows nobody owns could never be removed
+
+**Severity: medium.** Addresses registered anonymously, before registration
+needed an account, have no owner — so the ownership rule stranded them, while
+each cost a comparison against every transaction in every block for as long as
+the deployment lives.
+
+**Fixed.** A row whose agent nobody owns may be removed by any signed-in
+caller; an owned one still answers only to its owner; an anonymous caller still
+cannot. Verified live on the orphaned `0x…dEaD` row.
+
+### 18. One organisation, two identities *(open)*
+
+**Severity: high, not yet fixed.** Signing in with an organisation key gives an
+org id derived from the *lowest key id*; signing in through OAuth gives
+KeeperHub's own `org` claim. The same operator is therefore two tenants
+depending on which door they used, and an agent claimed through one is
+invisible to the other.
+
+Confirmed against the live API that the key path cannot resolve the real id:
+`GET /api/keys` carries no organisation field, and `GET /api/organizations`
+refuses an organisation key (it wants a browser session). The likely fix is to
+derive one identity from both — deriving the same lowest-key-id from an OAuth
+token, if `/api/keys` accepts `mcp:read` — or to record an alias linking the
+two the first time an operator uses both.
+
 ### 13. An open incident was filed again on every restart
 
 **Severity: high.** The tracker holds open incidents in memory and never read
