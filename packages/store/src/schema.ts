@@ -380,3 +380,64 @@ export const webhookSecrets = pgTable(
   },
   (t) => ({ byOrg: index('webhook_secrets_org_idx').on(t.orgId) }),
 );
+
+/**
+ * An operator's KeeperHub account, connected so Blackbox can read their runs.
+ *
+ * The credential is a refresh token with `mcp:read` and nothing else, so it can
+ * watch and cannot execute, transfer, or spend. It is encrypted rather than
+ * hashed because it has to be replayed to KeeperHub intact.
+ *
+ * Two clocks end a connection. Theirs is a rolling 30-day idle timeout, reset
+ * by every refresh, so an active connection never expires on their side. Ours
+ * is `expires_at`: stamped once at connect, never extended, and the only thing
+ * that puts a bound on how long we hold somebody else's credential.
+ */
+export const keeperhubConnections = pgTable(
+  'keeperhub_connections',
+  {
+    orgId: text('org_id').primaryKey(),
+    /** AES-256-GCM ciphertext. Rotates on every refresh — see `secrets.ts`. */
+    refreshTokenEnc: text('refresh_token_enc').notNull(),
+    /** What we were actually granted, which may be less than we asked for. */
+    scope: text('scope').notNull(),
+    /** The KeeperHub user who connected it, for the console to name. */
+    subject: text('subject'),
+    connectedAt: timestamp('connected_at', { withTimezone: true }).notNull(),
+    /** Ours, absolute, 7–60 days. Not extended by a refresh, deliberately. */
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    lastRefreshedAt: timestamp('last_refreshed_at', { withTimezone: true }),
+    lastSweptAt: timestamp('last_swept_at', { withTimezone: true }),
+    /** `active` | `needs_reauth` | `disconnected`. */
+    status: text('status').notNull(),
+    lastError: text('last_error'),
+    /** Consecutive refresh failures. Reset on success. */
+    failureCount: integer('failure_count').notNull().default(0),
+  },
+  (t) => ({ byStatus: index('keeperhub_connections_status_idx').on(t.status) }),
+);
+
+/**
+ * One workflow the operator asked Blackbox to watch.
+ *
+ * Nothing is watched on connect. An operator picks, the way a repository is
+ * picked when connecting to a deploy service, so a fresh connection is inert
+ * until somebody says what matters. Rows survive a disconnect, so reconnecting
+ * restores the choices instead of asking again.
+ */
+export const watchedWorkflows = pgTable(
+  'watched_workflows',
+  {
+    orgId: text('org_id').notNull(),
+    workflowId: text('workflow_id').notNull(),
+    /** Their name for it, refreshed on sweep so the console does not go stale. */
+    name: text('name'),
+    active: boolean('active').notNull().default(true),
+    connectedAt: timestamp('connected_at', { withTimezone: true }).notNull(),
+    lastRunAt: timestamp('last_run_at', { withTimezone: true }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.orgId, t.workflowId] }),
+    byOrg: index('watched_workflows_org_idx').on(t.orgId),
+  }),
+);

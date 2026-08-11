@@ -11,6 +11,8 @@ import {
   oauthClients,
   orgSessions,
   signerState,
+  keeperhubConnections,
+  watchedWorkflows,
   webhookSecrets,
   watchedExecutions,
   watchedSigners,
@@ -926,4 +928,255 @@ export async function recentAgentKinds(
     }
   }
   return [...seen.entries()].map(([agentId, agentKind]) => ({ agentId, agentKind }));
+}
+
+// --- KeeperHub connections ---------------------------------------------------
+
+export type ConnectionStatus = 'active' | 'needs_reauth' | 'disconnected';
+
+export interface KeeperhubConnection {
+  orgId: string;
+  refreshTokenEnc: string;
+  scope: string;
+  subject: string | null;
+  connectedAt: Date;
+  expiresAt: Date;
+  lastRefreshedAt: Date | null;
+  lastSweptAt: Date | null;
+  status: ConnectionStatus;
+  lastError: string | null;
+  failureCount: number;
+}
+
+const asStatus = (s: string): ConnectionStatus =>
+  s === 'active' || s === 'needs_reauth' || s === 'disconnected' ? s : 'disconnected';
+
+const asConnection = (row: typeof keeperhubConnections.$inferSelect): KeeperhubConnection => ({
+  ...row,
+  status: asStatus(row.status),
+});
+
+/**
+ * Store a freshly authorised connection.
+ *
+ * Reconnecting overwrites the credential and restarts both clocks, but leaves
+ * the watched workflows alone — an operator re-authorising should not have to
+ * choose again.
+ */
+export async function saveKeeperhubConnection(
+  db: Database,
+  params: {
+    orgId: string;
+    refreshTokenEnc: string;
+    scope: string;
+    subject?: string | null;
+    at: Date;
+    expiresAt: Date;
+  },
+): Promise<void> {
+  const values = {
+    orgId: params.orgId,
+    refreshTokenEnc: params.refreshTokenEnc,
+    scope: params.scope,
+    subject: params.subject ?? null,
+    connectedAt: params.at,
+    expiresAt: params.expiresAt,
+    lastRefreshedAt: null,
+    status: 'active' as const,
+    lastError: null,
+    failureCount: 0,
+  };
+  await db
+    .insert(keeperhubConnections)
+    .values(values)
+    .onConflictDoUpdate({ target: keeperhubConnections.orgId, set: values });
+}
+
+export async function getKeeperhubConnection(
+  db: Database,
+  orgId: string,
+): Promise<KeeperhubConnection | null> {
+  const [row] = await db
+    .select()
+    .from(keeperhubConnections)
+    .where(eq(keeperhubConnections.orgId, orgId))
+    .limit(1);
+  return row ? asConnection(row) : null;
+}
+
+/** Connections the sweep should read from: active, and not past our own expiry. */
+export async function listSweepableConnections(
+  db: Database,
+  now: Date,
+): Promise<KeeperhubConnection[]> {
+  const rows = await db
+    .select()
+    .from(keeperhubConnections)
+    .where(and(eq(keeperhubConnections.status, 'active'), gte(keeperhubConnections.expiresAt, now)));
+  return rows.map(asConnection);
+}
+
+/**
+ * Persist the token KeeperHub handed back on a refresh.
+ *
+ * Their refresh tokens rotate: the one we just sent is dead. So this write is
+ * not housekeeping — losing it loses the connection, which is why the caller
+ * writes before using the new access token rather than after.
+ */
+export async function recordConnectionRefresh(
+  db: Database,
+  params: { orgId: string; refreshTokenEnc: string; at: Date },
+): Promise<void> {
+  await db
+    .update(keeperhubConnections)
+    .set({
+      refreshTokenEnc: params.refreshTokenEnc,
+      lastRefreshedAt: params.at,
+      failureCount: 0,
+      lastError: null,
+    })
+    .where(eq(keeperhubConnections.orgId, params.orgId));
+}
+
+export async function recordConnectionSweep(
+  db: Database,
+  orgId: string,
+  at: Date,
+): Promise<void> {
+  await db
+    .update(keeperhubConnections)
+    .set({ lastSweptAt: at })
+    .where(eq(keeperhubConnections.orgId, orgId));
+}
+
+/** A dead refresh token does not recover by being asked again. Stop sweeping. */
+export async function markConnectionNeedsReauth(
+  db: Database,
+  orgId: string,
+  reason: string,
+): Promise<void> {
+  await db
+    .update(keeperhubConnections)
+    .set({ status: 'needs_reauth', lastError: reason })
+    .where(eq(keeperhubConnections.orgId, orgId));
+}
+
+/** A transient failure: counted, but the connection stays live. */
+export async function recordConnectionFailure(
+  db: Database,
+  orgId: string,
+  reason: string,
+): Promise<number> {
+  const [row] = await db
+    .update(keeperhubConnections)
+    .set({ failureCount: sql`${keeperhubConnections.failureCount} + 1`, lastError: reason })
+    .where(eq(keeperhubConnections.orgId, orgId))
+    .returning();
+  return row?.failureCount ?? 0;
+}
+
+/**
+ * Our own clock running out.
+ *
+ * Nothing is deleted: the operator reconnects and their workflow choices are
+ * still there. Returns who was expired, so they can be told.
+ */
+export async function expireDueConnections(db: Database, now: Date): Promise<string[]> {
+  const rows = await db
+    .update(keeperhubConnections)
+    .set({ status: 'needs_reauth', lastError: 'The connection reached the lifetime chosen when it was created.' })
+    .where(and(eq(keeperhubConnections.status, 'active'), lt(keeperhubConnections.expiresAt, now)))
+    .returning({ orgId: keeperhubConnections.orgId });
+  return rows.map((r) => r.orgId);
+}
+
+/**
+ * Disconnect: forget the credential and stop.
+ *
+ * KeeperHub exposes no revocation endpoint, so this deletes our copy and
+ * nothing more. Saying that plainly is better than claiming a revocation we
+ * cannot perform.
+ */
+export async function disconnectKeeperhub(db: Database, orgId: string): Promise<void> {
+  await db
+    .update(keeperhubConnections)
+    .set({ refreshTokenEnc: '', status: 'disconnected', lastError: null })
+    .where(eq(keeperhubConnections.orgId, orgId));
+}
+
+// --- watched workflows -------------------------------------------------------
+
+export interface WatchedWorkflow {
+  orgId: string;
+  workflowId: string;
+  name: string | null;
+  active: boolean;
+  connectedAt: Date;
+  lastRunAt: Date | null;
+}
+
+/** Start watching workflows. Re-adding one that was stopped turns it back on. */
+export async function watchWorkflows(
+  db: Database,
+  params: { orgId: string; workflows: { workflowId: string; name?: string | null }[]; at: Date },
+): Promise<void> {
+  if (params.workflows.length === 0) return;
+  await db
+    .insert(watchedWorkflows)
+    .values(
+      params.workflows.map((w) => ({
+        orgId: params.orgId,
+        workflowId: w.workflowId,
+        name: w.name ?? null,
+        active: true,
+        connectedAt: params.at,
+      })),
+    )
+    .onConflictDoUpdate({
+      target: [watchedWorkflows.orgId, watchedWorkflows.workflowId],
+      set: { active: true, name: sql`excluded.name` },
+    });
+}
+
+export async function unwatchWorkflow(
+  db: Database,
+  orgId: string,
+  workflowId: string,
+): Promise<boolean> {
+  const rows = await db
+    .update(watchedWorkflows)
+    .set({ active: false })
+    .where(
+      and(eq(watchedWorkflows.orgId, orgId), eq(watchedWorkflows.workflowId, workflowId)),
+    )
+    .returning({ workflowId: watchedWorkflows.workflowId });
+  return rows.length > 0;
+}
+
+export async function listWatchedWorkflows(
+  db: Database,
+  orgId: string,
+  opts: { activeOnly?: boolean } = {},
+): Promise<WatchedWorkflow[]> {
+  const where =
+    opts.activeOnly === true
+      ? and(eq(watchedWorkflows.orgId, orgId), eq(watchedWorkflows.active, true))
+      : eq(watchedWorkflows.orgId, orgId);
+  return db.select().from(watchedWorkflows).where(where).orderBy(asc(watchedWorkflows.workflowId));
+}
+
+/** A run landed. Keeps the console's "last seen" honest, and their name fresh. */
+export async function recordWorkflowRun(
+  db: Database,
+  params: { orgId: string; workflowId: string; name?: string | null; at: Date },
+): Promise<void> {
+  await db
+    .update(watchedWorkflows)
+    .set(params.name ? { lastRunAt: params.at, name: params.name } : { lastRunAt: params.at })
+    .where(
+      and(
+        eq(watchedWorkflows.orgId, params.orgId),
+        eq(watchedWorkflows.workflowId, params.workflowId),
+      ),
+    );
 }

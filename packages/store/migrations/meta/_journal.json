@@ -85,6 +85,13 @@
       "when": 1786432603434,
       "tag": "0011_wooden_stingray",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786468436979,
+      "tag": "0012_spooky_leopardon",
+      "breakpoints": true
     }
   ]
 }
