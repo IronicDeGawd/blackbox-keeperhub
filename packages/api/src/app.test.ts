@@ -487,6 +487,18 @@ describe('config', () => {
     });
     expect(body.remediation.budget.maxGasWeiPerHour).toBeTypeOf('string');
   });
+
+  // So the console can say why a rule an operator expected is not listed for
+  // their agent, instead of silently never firing it.
+  it('publishes which rules can fire for each kind of agent', async () => {
+    const body = (await (await app({})).inject({ url: '/api/config' })).json();
+    expect(body.rules.signer).toContain('R2');
+    // A managed wallet has no nonce queue of its own and pays no gas of its
+    // own, so neither NONCE_GAP nor SIGNER_GAS_STARVED can happen to one.
+    expect(body.rules.keeperhub).not.toContain('R2');
+    expect(body.rules.keeperhub).not.toContain('R6');
+    expect(body.rules.keeperhub).toContain('R4');
+  });
 });
 
 describe('summarise', () => {

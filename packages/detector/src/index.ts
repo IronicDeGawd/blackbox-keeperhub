@@ -1,4 +1,4 @@
-import type { ExecutionEvent, RuleId } from '@blackbox/core';
+import type { AgentKind, ExecutionEvent, RuleId } from '@blackbox/core';
 import { ALL_RULES } from './rules.js';
 import type { IncidentDraft, Rule, RuleContext } from './types.js';
 
@@ -25,6 +25,11 @@ const SUPPRESSES: ReadonlyArray<{ specific: RuleId; general: RuleId }> = [
   { specific: 'R3', general: 'R1' },
 ];
 
+/** Which rules can fire for an agent of this kind. Used by the console and API. */
+export function rulesFor(kind: AgentKind, rules: readonly Rule[] = ALL_RULES): RuleId[] {
+  return rules.filter((r) => r.appliesTo.includes(kind)).map((r) => r.id);
+}
+
 export function evaluateRules(
   window: readonly ExecutionEvent[],
   ctx: RuleContext,
@@ -32,6 +37,10 @@ export function evaluateRules(
 ): EvaluatedDraft[] {
   const fired = new Map<RuleId, IncidentDraft>();
   for (const rule of rules) {
+    // A rule that cannot apply to this kind of agent is not merely unlikely to
+    // fire — it has no evidence to reason from, and anything it produced would
+    // describe a failure the agent cannot have.
+    if (ctx.agentKind && !rule.appliesTo.includes(ctx.agentKind)) continue;
     const draft = rule.evaluate(window, ctx);
     if (draft) fired.set(rule.id, draft);
   }

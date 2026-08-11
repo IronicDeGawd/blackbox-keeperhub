@@ -274,6 +274,17 @@ export class Recorder {
      * for an incident the agent cannot have.
      */
     const managed = window.some((e) => e.agentKind === 'keeperhub');
+    /**
+     * Established from what was actually recorded, not configured. A window
+     * with no kind on any event leaves this undefined, and every rule is
+     * offered the window — the old behaviour, which is right for an agent we
+     * have not classified.
+     */
+    const agentKind = managed
+      ? ('keeperhub' as const)
+      : window.some((e) => e.agentKind === 'signer')
+        ? ('signer' as const)
+        : undefined;
 
     // The gap is derived from what we observed being submitted, not from
     // pending minus latest: a queued transaction does not raise the pending
@@ -296,6 +307,7 @@ export class Recorder {
       agentId: target.agentId,
       signer: target.signer,
       chainId: target.chainId,
+      ...(agentKind ? { agentKind } : {}),
       corroboration: {
         ...corroboration,
         ...(consecutiveGapPolls !== undefined ? { consecutiveGapPolls } : {}),

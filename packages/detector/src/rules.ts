@@ -22,6 +22,14 @@ function nonceResolved(window: readonly ExecutionEvent[], nonce: number | undefi
 
 export const R1: Rule = {
   id: 'R1',
+  /**
+   * A managed wallet can be slow, but not *stuck* in the sense this rule means.
+   * Its evidence is a nonce that has not advanced past a pending submission,
+   * and a KeeperHub run carries no nonce of the agent's own — the pending it
+   * reports is "the workflow has not finished", which is a different claim.
+   * That one belongs to EXECUTION_STALLED, planned as R9.
+   */
+  appliesTo: ['signer'],
   evaluate(window, ctx) {
     const candidates = latestBySubmission(window).filter(
       (e) =>
@@ -107,6 +115,10 @@ export function findNonceGap(
 
 export const R2: Rule = {
   id: 'R2',
+  // KeeperHub owns nonce management, so a managed wallet has no queue of its
+  // own to gap. The recorder does not even gather the reading — see
+  // `corroboration.managedNonces`.
+  appliesTo: ['signer'],
   evaluate(window, ctx) {
     const corr = ctx.corroboration;
     if (corr?.latestNonce === undefined) return null;
@@ -143,6 +155,14 @@ export const R2: Rule = {
 
 export const R3: Rule = {
   id: 'R3',
+  /**
+   * KeeperHub chooses the fee, so an underpriced bid there is the platform's
+   * mistake rather than the operator's — but it is still the operator's
+   * transaction sitting unmined, and worth saying so. Requires a submitted
+   * `maxFeePerGas`, which only reaches us for a managed wallet once fees are
+   * read back from the chain.
+   */
+  appliesTo: ['signer', 'keeperhub'],
   evaluate(window, ctx) {
     const baseFee = ctx.corroboration?.baseFeeAtDetection;
     if (baseFee === undefined) return null;
@@ -185,6 +205,10 @@ export const R3: Rule = {
 
 export const R4: Rule = {
   id: 'R4',
+  // The strongest rule for a managed wallet: KeeperHub pre-flights every write
+  // and refuses what it expects to revert, so a revert that reached a block is
+  // state drift by construction rather than by inference.
+  appliesTo: ['signer', 'keeperhub'],
   evaluate(window) {
     // The highest-value class: the world changed between simulation and
     // inclusion. KeeperHub pre-flights and refuses to submit calls it expects
@@ -232,6 +256,8 @@ export const R4: Rule = {
 
 export const R5: Rule = {
   id: 'R5',
+  // Repeated failure of one action is agnostic to who holds the key.
+  appliesTo: ['signer', 'keeperhub'],
   evaluate(window, ctx) {
     const cutoff = ctx.now.getTime() - ctx.detection.retryStormWindowMs;
     const byAction = new Map<string, ExecutionEvent[]>();
@@ -286,6 +312,14 @@ export const R5: Rule = {
 
 export const R6: Rule = {
   id: 'R6',
+  /**
+   * A managed wallet does not pay its own gas — KeeperHub sponsors execution,
+   * which is why its runs come back `sponsored: true`. The balance this rule
+   * reads is not what funds the agent, so running out of it is not what stops
+   * the agent working. The equivalent signal there is the organisation's spend
+   * cap, planned as R8.
+   */
+  appliesTo: ['signer'],
   evaluate(window, ctx) {
     const balance = ctx.corroboration?.signerBalance;
     if (balance === undefined) return null;
@@ -330,6 +364,9 @@ export const R6: Rule = {
 
 export const R7: Rule = {
   id: 'R7',
+  // Positional evidence about a block, which says nothing about who signed.
+  // Cannot fire for either kind today: nothing populates `ctx.inclusion`.
+  appliesTo: ['signer', 'keeperhub'],
   evaluate(window, ctx) {
     const analysis = ctx.inclusion;
     if (!analysis) return null;

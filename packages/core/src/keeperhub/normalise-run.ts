@@ -50,7 +50,18 @@ export function normaliseRun(run: KeeperHubRun, options: NormaliseRunOptions): E
   const revertReason = extractRevertReason(run.error);
 
   const base = {
-    logicalActionId: run.id,
+    /**
+     * Retries of one action, as KeeperHub expresses them.
+     *
+     * A workflow that fails and runs again produces a *new* run with a new id,
+     * so keying on the run id would make every retry its own logical action and
+     * R5 could never see a storm on a managed wallet. The workflow is the
+     * action; the runs are the attempts. R5 only counts failures inside its
+     * window, so a healthy schedule firing hourly never accumulates.
+     *
+     * A direct execution has no workflow, and each call is its own action.
+     */
+    logicalActionId: run.workflowId ?? run.id,
     agentId: options.agentId,
     signer: options.signer,
     // Everything listed here ran on a managed wallet, which is what makes a

@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { CHAINS, getChain, type BlackboxConfig } from '@blackbox/core';
+import { rulesFor } from '@blackbox/detector';
 import {
   activeSigners,
   eventsByIds,
@@ -208,6 +209,18 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         maxRemediationsPerHour: config.remediation.budget.maxRemediationsPerHour,
         maxGasWeiPerHour: config.remediation.budget.maxGasWeiPerHour.toString(),
       },
+    },
+    /**
+     * Which rules can fire for which kind of agent.
+     *
+     * A KeeperHub agent runs on a managed wallet whose nonces and gas the
+     * platform owns, so the rules built on those have nothing to say about it.
+     * Publishing this stops the console offering a detection that cannot
+     * happen, and lets an operator see why a rule they expected is absent.
+     */
+    rules: {
+      keeperhub: rulesFor('keeperhub'),
+      signer: rulesFor('signer'),
     },
     // The console hides controls it cannot drive rather than showing buttons
     // that 404.

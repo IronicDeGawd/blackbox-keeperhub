@@ -118,6 +118,30 @@ describe('normaliseRun', () => {
     ]);
   });
 
+  /**
+   * A workflow that fails and runs again is a new run with a new id. Keying the
+   * logical action on the run id would make every retry its own action, and
+   * RETRY_STORM could never see a storm on a managed wallet.
+   */
+  it('groups retries of one workflow under the workflow, not the run', () => {
+    const first = { ...find('workflow', 'error'), id: 'run-1' };
+    const second = { ...find('workflow', 'error'), id: 'run-2' };
+    const opts = { ...options, fallbackChainId: CHAIN_IDS.sepolia };
+    const [a] = normaliseRun(first, opts);
+    const [b] = normaliseRun(second, opts);
+    expect(a?.logicalActionId).toBe(b?.logicalActionId);
+    expect(a?.logicalActionId).toBe(first.workflowId);
+    // Still distinct events, so they count as two attempts rather than one.
+    expect(a?.sourceId).not.toBe(b?.sourceId);
+  });
+
+  it('keeps each direct execution its own action, having no workflow', () => {
+    const a = normaliseRun({ ...find('direct', 'success'), id: 'd-1' }, options)[0];
+    const b = normaliseRun({ ...find('direct', 'success'), id: 'd-2' }, options)[0];
+    expect(a?.logicalActionId).toBe('d-1');
+    expect(b?.logicalActionId).toBe('d-2');
+  });
+
   it('produces events the store will accept', () => {
     for (const run of runs) {
       for (const event of normaliseRun(run, { ...options, fallbackChainId: CHAIN_IDS.sepolia })) {

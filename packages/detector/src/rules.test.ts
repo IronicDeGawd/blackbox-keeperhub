@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { blackboxConfigSchema, detectionFor, CHAIN_IDS } from '@blackbox/core';
 import { findNonceGap, R1, R2, R3, R4, R5, R6, R7 } from './rules.js';
-import { evaluateRules } from './index.js';
+import { evaluateRules, rulesFor } from './index.js';
 import { at, evt, resetSeq, SIGNER, T0 } from './fixtures.js';
 import type { RuleContext } from './types.js';
 
@@ -380,5 +380,38 @@ describe('findNonceGap', () => {
 
   it('does not invent a hole for a submission at the next nonce', () => {
     expect(findNonceGap([evt({ status: 'pending', nonce: 7 })], 7).missingNonces).toEqual([]);
+  });
+});
+
+describe('which rules apply to which kind of agent', () => {
+  // A rule is skipped for a kind it cannot reason about, not merely unlikely to
+  // fire — the evidence it needs does not exist for that agent.
+  it('offers a managed wallet only the rules its evidence can support', () => {
+    expect(rulesFor('keeperhub')).toEqual(['R3', 'R4', 'R5', 'R7']);
+    expect(rulesFor('signer')).toEqual(['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7']);
+  });
+
+  it('does not report a stuck transaction for a managed wallet', () => {
+    const e = evt({ status: 'pending', nonce: 5, submittedAt: T0 });
+    expect(evaluateRules([e], ctx()).map((d) => d.ruleId)).toContain('R1');
+    expect(evaluateRules([e], ctx({ agentKind: 'keeperhub' }))).toEqual([]);
+  });
+
+  it('does not report a nonce gap for a managed wallet', () => {
+    const window = [evt({ status: 'pending', nonce: 9, submittedAt: T0 })];
+    const corroboration = { latestNonce: 7, consecutiveGapPolls: 5 };
+    expect(evaluateRules(window, ctx({ corroboration })).map((d) => d.ruleId)).toContain('R2');
+    expect(evaluateRules(window, ctx({ agentKind: 'keeperhub', corroboration }))).toEqual([]);
+  });
+
+  it('still reports state drift for a managed wallet, which is its strongest signal', () => {
+    const e = evt({ status: 'reverted', nonce: 5, simulation: { performed: true, success: true } });
+    expect(evaluateRules([e], ctx({ agentKind: 'keeperhub' })).map((d) => d.ruleId)).toEqual(['R4']);
+  });
+
+  // An agent we have not classified is offered everything, as before.
+  it('withholds nothing when the kind was never established', () => {
+    const e = evt({ status: 'pending', nonce: 5, submittedAt: T0 });
+    expect(evaluateRules([e], ctx()).map((d) => d.ruleId)).toEqual(['R1']);
   });
 });
