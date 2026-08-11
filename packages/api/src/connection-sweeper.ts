@@ -140,6 +140,9 @@ export class ConnectionSweeper {
         },
       },
       orgId,
+      // Kept apart from `keeperhub:{orgId}`, which belongs to the env-based
+      // sweep: the same organisation read two ways needs two positions.
+      cursorKey: `keeperhub:conn:${orgId}`,
       agentId: (run) => agentIdForRun(orgId, run),
       workflowIds: watched.map((w) => w.workflowId),
       signer,

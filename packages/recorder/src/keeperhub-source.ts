@@ -36,6 +36,16 @@ export type KeeperHubSourceOptions = {
   /** Scopes the cursor. One organisation, one position. */
   orgId: string;
   /**
+   * Overrides that scope.
+   *
+   * Two sources can read the same organisation — a deployment sweeping its own
+   * org, and an operator who connected that same account — and they read it
+   * differently: different workflows kept, different agent labels. Sharing one
+   * position would let whichever swept first move the mark past runs the other
+   * had never seen.
+   */
+  cursorKey?: string;
+  /**
    * Whose incidents these runs become in the console. A function when each
    * watched workflow should be its own agent.
    */
@@ -98,7 +108,7 @@ export class KeeperHubSource {
   }
 
   get cursorKey(): string {
-    return `keeperhub:${this.options.orgId}`;
+    return this.options.cursorKey ?? `keeperhub:${this.options.orgId}`;
   }
 
   /**

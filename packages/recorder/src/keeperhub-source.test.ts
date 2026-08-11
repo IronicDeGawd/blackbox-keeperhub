@@ -299,6 +299,20 @@ describe('KeeperHubSource', () => {
     });
   });
 
+  /**
+   * The same organisation can be read twice — once by a deployment sweeping
+   * its own, once by the operator who connected that account — and the two
+   * keep different workflows. One shared position would let whichever swept
+   * first move the mark past runs the other had never seen.
+   */
+  it('keeps a separate position when asked to', async () => {
+    const client = lister([run({ id: 'a', startedAt: '2026-08-10T10:00:00.000Z' })]);
+    await source(client, { cursorKey: 'keeperhub:conn:org-1' }).ingest();
+
+    expect(await getCursor(db, 'keeperhub:conn:org-1')).toBe('2026-08-10T10:00:00.000Z');
+    expect(await getCursor(db, 'keeperhub:org-1')).toBeNull();
+  });
+
   it('files each workflow under its own agent when asked to', async () => {
     const client = lister([
       run({ id: 'a', startedAt: '2026-08-10T10:00:00.000Z', workflowId: 'wf-1' }),
