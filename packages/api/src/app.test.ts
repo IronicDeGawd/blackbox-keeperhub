@@ -721,11 +721,37 @@ describe('ownership', () => {
     expect(byAnonymous.statusCode).toBe(403);
   });
 
-  // An unclaimed agent stays open, which is what keeps the public demo working.
-  it('leaves an unclaimed agent actionable by anyone', async () => {
+  /**
+   * Unowned means nobody, not everybody. Remediation spends — a KeeperHub
+   * execution burns the organisation's quota, its gas credits and its daily
+   * spending cap — so a stranger must not be able to trigger one against an
+   * agent nobody has taken responsibility for.
+   */
+  it('refuses to remediate an unclaimed agent for an anonymous caller', async () => {
     await saveIncident(db, row({ agentId: 'demo' }) as never);
     const res = await (
       await app({ identity: identityFor(['k1']), remediate: async () => ({ accepted: true, guards: [] }) })
+    ).inject({ method: 'POST', url: '/api/incidents/inc-1/remediate' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().detail).toContain('Sign in');
+  });
+
+  /** Reading is the part that stays open, and it must keep working. */
+  it('still lets anyone read that incident', async () => {
+    await saveIncident(db, row({ agentId: 'demo' }) as never);
+    const server = await app({ identity: identityFor(['k1']) });
+    expect((await server.inject({ url: '/api/incidents/inc-1' })).statusCode).toBe(200);
+    expect((await server.inject({ url: '/api/incidents' })).json().total).toBe(1);
+  });
+
+  /**
+   * A local run has no identity configured, so it has no notion of ownership
+   * either. Locking it would only get in the way of the person developing it.
+   */
+  it('leaves everything open where no identity is configured', async () => {
+    await saveIncident(db, row({ agentId: 'demo' }) as never);
+    const res = await (
+      await app({ remediate: async () => ({ accepted: true, guards: [] }) })
     ).inject({ method: 'POST', url: '/api/incidents/inc-1/remediate' });
     expect(res.statusCode).toBe(202);
   });
@@ -1231,6 +1257,54 @@ describe('managing a connection, over HTTP', () => {
     expect(res.json().contested).toEqual(['wf-1']);
   });
 
+  /**
+   * The proof that a workflow is yours. A signature cannot give it — there is
+   * nothing to sign — so the credential does: a token lists only its own
+   * organisation's workflows. Without this check, naming an id would be enough
+   * to own an agent belonging to somebody else.
+   */
+  it('refuses a workflow that is not on this account', async () => {
+    const server = await instance();
+    const headers = await connected(server);
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/connections/keeperhub/workflows',
+      headers,
+      payload: { workflows: ['wf-1', 'someone-elses-workflow'] },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().detail).toContain('someone-elses-workflow');
+    // Nothing partially applied: the good id in the same request is not watched.
+    expect(await listWatchedWorkflows(db, 'org-9')).toEqual([]);
+  });
+
+  it('stores KeeperHub\'s name for it, not one the caller supplied', async () => {
+    const server = await instance();
+    const headers = await connected(server);
+    await server.inject({
+      method: 'POST',
+      url: '/api/connections/keeperhub/workflows',
+      headers,
+      payload: { workflows: [{ id: 'wf-1', name: 'Something I made up' }] },
+    });
+    expect((await listWatchedWorkflows(db, 'org-9'))[0]?.name).toBe('Rebalance');
+  });
+
+  /** Unverifiable is not the same as allowed. */
+  it('refuses to claim anything when their side cannot be read', async () => {
+    const server = await instance({ workflowsStatus: 500 });
+    const headers = await connected(server);
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/connections/keeperhub/workflows',
+      headers,
+      payload: { workflows: ['wf-1'] },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(await listWatchedWorkflows(db, 'org-9')).toEqual([]);
+  });
+
   it('refuses an empty pick rather than silently watching nothing', async () => {
     const server = await instance();
     const headers = await connected(server);
@@ -1699,12 +1773,18 @@ describe('signing in with a wallet', () => {
    * The point of the whole thing: after proving the key, that wallet — and
    * nobody else — can act on the agents it signs for.
    */
-  it('claims the agents that address already signs for', async () => {
+  it('claims the agents that address signs for', async () => {
     const server = await instance();
-    // Registered anonymously first, exactly as a wallet-signed chaos run does.
+
+    // Signing comes first now: registration needs an account, and proving the
+    // key *is* the account for an agent that belongs to no KeeperHub org.
+    const res = await signIn(server);
+    const auth = { authorization: `Bearer ${res.json().token}` };
+
     await server.inject({
       method: 'POST',
       url: '/api/watched',
+      headers: auth,
       payload: {
         signer: account.address,
         chainId: CHAIN_IDS.sepolia,
@@ -1712,8 +1792,8 @@ describe('signing in with a wallet', () => {
       },
     });
 
-    const res = await signIn(server);
-    expect(res.json().agents).toContain('self-signed-demo');
+    const session = await server.inject({ url: '/api/auth/session', headers: auth });
+    expect(session.json().agents).toContain('self-signed-demo');
 
     await saveIncident(db, row({ agentId: 'self-signed-demo' }) as never);
     // The owner may act.
@@ -1722,7 +1802,7 @@ describe('signing in with a wallet', () => {
         await server.inject({
           method: 'POST',
           url: '/api/incidents/inc-1/remediate',
-          headers: { authorization: `Bearer ${res.json().token}` },
+          headers: auth,
         })
       ).statusCode,
     ).toBe(202);
@@ -1742,18 +1822,23 @@ describe('audit finding 2 — claiming an address someone already watches', () =
   };
 
   /**
-   * The hole the audit found: an anonymous visitor watches an address first,
-   * and its owner can then never take ownership of their own agent.
+   * The hole the audit found: somebody watches an address first, and the
+   * operator who arrives later can then never take ownership of their own
+   * agent. Anonymous registration is gone, but the same address can still be
+   * watched by two organisations under two agent ids, so the claim must
+   * happen on the *agent* rather than on the row.
    */
   it('claims the agent even when the row already exists', async () => {
     const mine = await signedIn('org-a');
     const server = await app({ identity: mine.identity });
 
-    // Anonymous first, exactly as a wallet-signed chaos run registers.
+    // Someone else got to this address first, under their own agent id.
+    const earlier = await signedIn('org-earlier');
     await server.inject({
       method: 'POST',
       url: '/api/watched',
-      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'already-there' },
+      headers: { authorization: `Bearer ${earlier.token}` },
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'someone-elses' },
     });
 
     const second = await server.inject({
@@ -1783,16 +1868,20 @@ describe('audit finding 2 — claiming an address someone already watches', () =
   it('still refuses to rewrite the existing row', async () => {
     const mine = await signedIn('org-a');
     const server = await app({ identity: mine.identity });
+    const earlier = await signedIn('org-earlier');
     await server.inject({
       method: 'POST',
       url: '/api/watched',
+      headers: { authorization: `Bearer ${earlier.token}` },
       payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'first', label: 'original' },
     });
     await server.inject({
       method: 'POST',
       url: '/api/watched',
       headers: { authorization: `Bearer ${mine.token}` },
-      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'first', label: 'rewritten' },
+      // A different agent id, so this is not refused for ownership — the point
+      // is that the row somebody else created keeps its label either way.
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'mine-too', label: 'rewritten' },
     });
     const rows = await db.select().from(watchedSigners);
     expect(rows[0]?.label).toBe('original');

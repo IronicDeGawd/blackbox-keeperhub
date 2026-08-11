@@ -7,6 +7,7 @@ import {
   agentsOwnedBy,
   claimAgent,
   mayAct,
+  mayRemediate,
   type Caller,
   type Identity,
 } from './identity.js';
@@ -392,6 +393,22 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     const header = String(request.headers['authorization'] ?? '');
     const token = header.startsWith('Bearer ') ? header.slice(7) : undefined;
     return options.identity.caller(token);
+  };
+
+  /**
+   * May this caller spend on this agent?
+   *
+   * With no identity configured there is no notion of ownership on this
+   * deployment — that is a local run, where locking everything would only get
+   * in the way. Where identity *is* configured, an unowned agent answers to
+   * nobody and a claimed one answers to its owner.
+   */
+  const mayRemediateHere = async (
+    agentId: string,
+    request: { headers: Record<string, unknown> },
+  ): Promise<boolean> => {
+    if (!options.identity) return true;
+    return mayRemediate(db, agentId, await callerOf(request));
   };
 
   /**
@@ -837,16 +854,73 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
           });
         }
 
+        /**
+         * Check every id against the account's own workflows before believing
+         * any of it.
+         *
+         * This is what makes the claim below mean something. Ownership of a
+         * KeeperHub workflow cannot be proved by signature the way an address
+         * can, so the proof is the credential: a token lists only the
+         * workflows of the organisation that issued it. Without this check an
+         * operator could name somebody else's workflow id and take ownership
+         * of an agent they have nothing to do with.
+         */
+        const token = await connections.accessTokenFor(caller.orgId);
+        if (!token.ok) {
+          return reply.code(token.reason === 'unavailable' ? 502 : 409).send({
+            error: token.reason,
+            detail: token.detail,
+            requestId: request.id,
+          });
+        }
+
+        let theirs: { id: string; name: string }[];
+        try {
+          theirs = await new KeeperHubClient({
+            accessToken: token.accessToken,
+            ...(options.keeperHubApiUrl ? { baseUrl: options.keeperHubApiUrl } : {}),
+            ...(options.keeperHubFetch ? { fetchImpl: options.keeperHubFetch } : {}),
+          }).listWorkflows();
+        } catch (error) {
+          // Unverifiable is not the same as allowed. Refuse rather than claim
+          // on the strength of a list we could not read.
+          return reply.code(502).send({
+            error: 'provider_unavailable',
+            detail: String((error as Error)?.message ?? error),
+            requestId: request.id,
+          });
+        }
+
+        const byId = new Map(theirs.map((w) => [w.id, w.name]));
+        const unknown = workflows.filter((w) => !byId.has(w.workflowId)).map((w) => w.workflowId);
+        if (unknown.length > 0) {
+          return reply.code(403).send({
+            error: 'not_your_workflow',
+            detail: `Not among this KeeperHub account's workflows: ${unknown.join(', ')}.`,
+            requestId: request.id,
+          });
+        }
+
         const at = new Date();
-        await watchWorkflows(db, { orgId: caller.orgId, workflows, at });
+        // Their name for it, not one the caller supplied, so the console shows
+        // what KeeperHub shows.
+        await watchWorkflows(db, {
+          orgId: caller.orgId,
+          workflows: workflows.map((w) => ({
+            workflowId: w.workflowId,
+            name: byId.get(w.workflowId) ?? null,
+          })),
+          at,
+        });
 
         /**
          * Claim each workflow's agent for this organisation.
          *
-         * Picking a workflow to watch is already the act of saying it is
-         * yours, so making the operator claim it again by hand would be asking
-         * twice. A workflow another tenant already claimed stays theirs — that
-         * is reported rather than overridden.
+         * Picking a workflow is already the act of saying it is yours, and the
+         * check above is what makes that a fact rather than an assertion, so
+         * asking the operator to claim it again by hand would be asking twice.
+         * A workflow another tenant already claimed stays theirs — reported
+         * rather than overridden.
          */
         const contested: string[] = [];
         for (const workflow of workflows) {
@@ -1128,10 +1202,10 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     }
     // Acknowledging silences an alarm. On somebody else's agent that is not a
     // small rudeness — it is hiding a live failure from the people who own it.
-    if (!(await mayAct(db, row.agentId, await callerOf(request)))) {
+    if (!(await mayRemediateHere(row.agentId, request))) {
       return reply.code(403).send({
         error: 'forbidden',
-        detail: `Agent ${row.agentId} belongs to another organisation.`,
+        detail: `Sign in as the organisation that owns ${row.agentId} to acknowledge it.`,
         requestId: request.id,
       });
     }
@@ -1153,14 +1227,15 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       }
 
       /**
-       * Remediation spends real gas on someone's agent. An unclaimed agent is
-       * open — that is what keeps the public demo working — but a claimed one
-       * answers only to the organisation that claimed it.
+       * Remediation spends: a KeeperHub execution consumes the organisation's
+       * quota, its gas credits and its daily spending cap; a held key spends
+       * its balance. So this needs an owner, and an unowned agent means
+       * nobody rather than everybody.
        */
-      if (!(await mayAct(db, row.agentId, await callerOf(request)))) {
+      if (!(await mayRemediateHere(row.agentId, request))) {
         return reply.code(403).send({
           error: 'forbidden',
-          detail: `Agent ${row.agentId} belongs to another organisation.`,
+          detail: `Sign in as the organisation that owns ${row.agentId} to remediate it.`,
           requestId: request.id,
         });
       }
@@ -1197,7 +1272,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       }
       // Recording a remediation writes to somebody's history and closes their
       // incident. Only the owner may say what fixed their agent.
-      if (!(await mayAct(db, incident.agentId, await callerOf(request)))) {
+      if (!(await mayRemediateHere(incident.agentId, request))) {
         return reply.code(403).send({
           error: 'forbidden',
           detail: `Agent ${incident.agentId} belongs to another organisation.`,
@@ -1247,16 +1322,19 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   });
 
   // --- watching an arbitrary address ---------------------------------------
-  // The route that makes this usable by someone who did not build it: register
-  // any address and its transactions are discovered by block scanning.
+  // Register an address and its transactions are discovered by block scanning.
+  // Signing in first is the price of admission: an operator connects KeeperHub
+  // or proves an address with a signature, and either way arrives with an
+  // organisation. Registration then names an owner from the first moment, so
+  // no agent exists that nobody is responsible for.
 
   /**
    * A watched address is a standing cost, not a one-off write.
    *
    * The block scanner loads every active signer on every tick and matches it
    * against every transaction in every new block, for as long as the
-   * deployment lives. Anyone can register anything here, so the registry needs
-   * a ceiling and a rule about who may rename what.
+   * deployment lives. So the registry needs a ceiling, an account behind every
+   * entry, and a rule about who may rename what.
    */
   const MAX_WATCHED = 500;
   const short = (value: unknown, max = 64): string => String(value ?? '').slice(0, max);
@@ -1351,6 +1429,21 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   });
 
   app.post('/api/watched', costly(20), async (request, reply) => {
+    /**
+     * Anonymous registration used to be allowed so a visitor could try the
+     * product without an account. It also made ownership a land grab: the
+     * first caller to name an agent owned it, whether or not it was theirs.
+     * Reading is still open to everyone; adding to the registry is not.
+     */
+    const caller = await callerOf(request);
+    if (options.identity && !caller) {
+      return reply.code(401).send({
+        error: 'unauthorized',
+        detail: 'Sign in to watch an address. Reading incidents needs no account.',
+        requestId: request.id,
+      });
+    }
+
     const body = (request.body ?? {}) as Record<string, unknown>;
     const signer = String(body['signer'] ?? '');
     if (!/^0x[0-9a-fA-F]{40}$/.test(signer)) {
@@ -1376,7 +1469,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       chainId,
       agentId: String(body['agentId'] ?? signer.slice(0, 10)),
       label: String(body['label'] ?? ''),
-      caller: await callerOf(request),
+      caller,
     });
     if (!result.registered) {
       const forbidden = result.code === 'forbidden';
@@ -1512,7 +1605,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     const existing = (await activeSigners(db)).find(
       (r) => r.signer === signer.toLowerCase() && r.chainId === chainId,
     );
-    if (existing && !(await mayAct(db, existing.agentId, await callerOf(request)))) {
+    if (existing && !(await mayRemediateHere(existing.agentId, request))) {
       return reply.code(403).send({
         error: 'forbidden',
         detail: `Agent ${existing.agentId} belongs to another organisation.`,

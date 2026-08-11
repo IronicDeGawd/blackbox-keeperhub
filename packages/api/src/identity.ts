@@ -182,11 +182,12 @@ export async function ownerOf(db: Database, agentId: string): Promise<string | n
 }
 
 /**
- * May this caller act on this agent?
+ * May this caller take this agent, or add to it?
  *
- * An unclaimed agent is actionable by anyone, which is what keeps the public
- * demo working and lets a first-time operator use the thing before signing in.
- * A claimed agent is actionable only by its owner.
+ * An unowned agent is claimable — otherwise no agent could ever come into
+ * existence. Registration requires a session, so in practice the first caller
+ * to name an agent also becomes its owner, and there is no window in which one
+ * exists with nobody responsible for it.
  */
 export async function mayAct(
   db: Database,
@@ -196,4 +197,26 @@ export async function mayAct(
   const owner = await ownerOf(db, agentId);
   if (!owner) return true;
   return caller?.orgId === owner;
+}
+
+/**
+ * May this caller *spend* on this agent?
+ *
+ * A different question from `mayAct`, and it used to share the same answer.
+ * Remediation sends a real transaction: through KeeperHub it consumes the
+ * organisation's execution quota, its gas credits and its daily spending cap;
+ * from a held key it spends that key's balance. None of that is something an
+ * unidentified caller should be able to trigger against somebody else's agent.
+ *
+ * So **unowned means nobody**, not everybody. Reading stays open to all —
+ * incidents, the ledger, the diagnosis — because reading costs nothing and
+ * showing the work is the point. Acting needs an account.
+ */
+export async function mayRemediate(
+  db: Database,
+  agentId: string,
+  caller: Caller | null,
+): Promise<boolean> {
+  if (!caller) return false;
+  return (await ownerOf(db, agentId)) === caller.orgId;
 }
