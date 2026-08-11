@@ -4,6 +4,7 @@ import { blackboxConfigSchema, CHAIN_IDS, type BlackboxConfig } from '@blackbox/
 import {
   createDb,
   getKeeperhubConnection,
+  ingestCursors,
   keeperhubConnections,
   listWatchedWorkflows,
   watchedWorkflows,
@@ -23,6 +24,7 @@ import { buildApp } from './app.js';
 import { Identity } from './identity.js';
 import { KeeperHubOAuth } from './oauth.js';
 import { Connections } from './connections.js';
+import { Demo } from './demo.js';
 import { keyFrom } from './secrets.js';
 import { Webhooks } from './webhooks.js';
 import { WalletAuth } from './wallet-auth.js';
@@ -54,6 +56,7 @@ beforeEach(async () => {
   await db.delete(webhookSecrets);
   await db.delete(watchedWorkflows);
   await db.delete(keeperhubConnections);
+  await db.delete(ingestCursors);
 });
 
 const config = (): BlackboxConfig =>
@@ -508,6 +511,7 @@ describe('config', () => {
       signerHealth: false,
       proposeRemediation: false,
       connectKeeperHub: false,
+      demo: false,
     });
     expect(body.remediation.budget.maxGasWeiPerHour).toBeTypeOf('string');
   });
@@ -1045,6 +1049,58 @@ describe('connecting an account, over HTTP', () => {
       url: `/api/auth/keeperhub/callback?code=abc&state=${state}&connect=1&days=60`,
     });
     expect(await getKeeperhubConnection(db, 'org-9')).toBeNull();
+  });
+});
+
+describe('the public demo button', () => {
+  const stub = () => {
+    const executed: string[] = [];
+    return {
+      executed,
+      listWorkflows: async () => [{ id: 'wf-demo', name: 'blackbox/demo/insufficient-funds' }],
+      createWorkflow: async () => ({ id: 'wf-demo' }),
+      executeWorkflow: async (id: string) => {
+        executed.push(id);
+        return { executionId: `exec-${executed.length}`, status: 'running' };
+      },
+    };
+  };
+
+  const instance = async (client = stub()) =>
+    app({ demo: new Demo({ db, client, chainId: CHAIN_IDS.sepolia }) });
+
+  it('does not exist where this deployment has nothing of its own to break', async () => {
+    const res = await (await app()).inject({ method: 'POST', url: '/api/demo/run' });
+    expect(res.statusCode).toBe(404);
+    expect((await (await app()).inject({ url: '/api/config' })).json().capabilities.demo).toBe(false);
+  });
+
+  /** The one thing an anonymous caller may cause rather than merely read. */
+  it('runs for a visitor with no account', async () => {
+    const client = stub();
+    const res = await (await instance(client)).inject({ method: 'POST', url: '/api/demo/run' });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ ran: true, workflowId: 'wf-demo' });
+    expect(client.executed).toEqual(['wf-demo']);
+  });
+
+  it('refuses the next press for everybody, not per caller', async () => {
+    const server = await instance();
+    await server.inject({ method: 'POST', url: '/api/demo/run' });
+    const second = await server.inject({ method: 'POST', url: '/api/demo/run' });
+
+    expect(second.statusCode).toBe(429);
+    expect(second.json().detail).toContain('for everybody');
+    expect(typeof second.json().nextAllowedAt).toBe('string');
+  });
+
+  it('tells a console whether the button is pressable', async () => {
+    const server = await instance();
+    const before = await server.inject({ url: '/api/demo' });
+    expect(before.json()).toMatchObject({ available: true, ready: true, scope: 'global', spendsGas: false });
+
+    await server.inject({ method: 'POST', url: '/api/demo/run' });
+    expect((await server.inject({ url: '/api/demo' })).json().ready).toBe(false);
   });
 });
 

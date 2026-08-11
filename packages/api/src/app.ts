@@ -19,6 +19,7 @@ import {
   MIN_LIFETIME_DAYS,
   type Connections,
 } from './connections.js';
+import { DEMO_COOLDOWN_MS, type Demo } from './demo.js';
 import { codeNodeSnippet, type Webhooks } from './webhooks.js';
 import type { WalletAuth } from './wallet-auth.js';
 import {
@@ -174,6 +175,12 @@ export type AppOptions = {
   connections?: Connections;
   /** Whether this deployment reads an organisation of its own, from the env. */
   sweepsOwnOrg?: boolean;
+  /**
+   * The one button a visitor may press without an account. Absent means the
+   * route does not exist, which is right for a deployment with no KeeperHub
+   * organisation of its own to break.
+   */
+  demo?: Demo;
   /** Overrides the KeeperHub API base, for tests and for a staging provider. */
   keeperHubApiUrl?: string;
   /** Injected transport for reads on a connection's behalf; tests use it. */
@@ -328,6 +335,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       proposeRemediation: Boolean(options.proposals),
       /** Whether an operator can connect their own account at all. */
       connectKeeperHub: Boolean(options.connections),
+      /** Whether a visitor may induce a failure without an account. */
+      demo: Boolean(options.demo),
     },
     /**
      * What this deployment actually reads.
@@ -1322,6 +1331,50 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       })),
     };
   });
+
+  if (options.demo) {
+    const demo = options.demo;
+
+    /**
+     * Break something on purpose, on our own organisation.
+     *
+     * Deliberately the one thing an anonymous caller may *cause* rather than
+     * merely read. It induces a real KeeperHub run that fails before
+     * submission, so a visitor watches detection happen instead of reading a
+     * finished incident — and it spends no gas, touches nobody else's
+     * organisation, and is bounded by a cooldown shared by everyone.
+     */
+    app.post('/api/demo/run', async (request, reply) => {
+      const result = await demo.run();
+      if (!result.ran) {
+        return reply.code(429).send({
+          error: 'cooling_down',
+          detail: `The demo runs at most once every ${DEMO_COOLDOWN_MS / 60_000} minutes, for everybody. Try again in ${result.retryAfterSeconds}s.`,
+          nextAllowedAt: result.nextAllowedAt,
+          requestId: request.id,
+        });
+      }
+      return reply.code(202).send({
+        ...result,
+        detail:
+          'A KeeperHub run was started that asks to transfer more than the wallet holds. It will be refused before submission, and Blackbox reads the refusal from the audit trail.',
+      });
+    });
+
+    /** So a console can render the button disabled rather than guess. */
+    app.get('/api/demo', async () => {
+      const nextAllowedAt = await demo.nextAllowedAt();
+      return {
+        available: true,
+        cooldownSeconds: DEMO_COOLDOWN_MS / 1000,
+        /** Shared by everyone: the limit bounds our execution quota. */
+        scope: 'global',
+        nextAllowedAt: nextAllowedAt.toISOString(),
+        ready: nextAllowedAt.getTime() <= Date.now(),
+        spendsGas: false,
+      };
+    });
+  }
 
   // --- watching an arbitrary address ---------------------------------------
   // Register an address and its transactions are discovered by block scanning.

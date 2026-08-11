@@ -46,6 +46,7 @@ import { diagnosticianFromEnv, keeperHubFromEnv, Runtime } from './runtime.js';
 import { httpKeyVerifier, Identity } from './identity.js';
 import { KeeperHubOAuth } from './oauth.js';
 import { Connections } from './connections.js';
+import { Demo } from './demo.js';
 import { keyFrom } from './secrets.js';
 import { Webhooks } from './webhooks.js';
 import { WalletAuth } from './wallet-auth.js';
@@ -518,6 +519,23 @@ if (env['BLACKBOX_EVENT_WEBHOOK_URL']) {
  */
 const triggerAvailability = keeperHub ? await triggersAvailable(keeperHub) : undefined;
 
+/**
+ * The one button a visitor may press without an account.
+ *
+ * Needs a KeeperHub organisation of our own to break, so it is absent on a
+ * deployment that has none — better no button than one that 500s. It induces a
+ * pre-flight failure, which costs an execution and no gas.
+ */
+const demo =
+  keeperHub && env['BLACKBOX_DEMO'] !== 'false'
+    ? new Demo({
+        db,
+        client: keeperHub,
+        chainId,
+        sweep: () => runtime.sweepKeeperHub(),
+      })
+    : undefined;
+
 const app = await buildApp({
   db,
   config,
@@ -525,6 +543,7 @@ const app = await buildApp({
   identity,
   oauth,
   ...(connections ? { connections } : {}),
+  ...(demo ? { demo } : {}),
   sweepsOwnOrg: Boolean(keeperHubOrg),
   ...(env['KEEPERHUB_API_URL'] ? { keeperHubApiUrl: env['KEEPERHUB_API_URL'] } : {}),
   /**
