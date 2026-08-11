@@ -1014,6 +1014,259 @@ describe('connecting an account, over HTTP', () => {
   });
 });
 
+describe('managing a connection, over HTTP', () => {
+  const metadata = {
+    issuer: 'https://provider.test',
+    authorization_endpoint: 'https://provider.test/oauth/authorize',
+    token_endpoint: 'https://provider.test/api/oauth/token',
+    registration_endpoint: 'https://provider.test/api/oauth/register',
+  };
+  const jwt = (claims: Record<string, unknown>) =>
+    ['h', Buffer.from(JSON.stringify(claims)).toString('base64url'), 's'].join('.');
+
+  /** Their side: the token endpoint, plus the workflow list a picker needs. */
+  const provider = (over: { workflowsStatus?: number } = {}) => {
+    const impl = (async (url: string) => {
+      if (url.endsWith('/.well-known/oauth-authorization-server')) {
+        return new Response(JSON.stringify(metadata), { status: 200 });
+      }
+      if (url === metadata.registration_endpoint) {
+        return new Response(JSON.stringify({ client_id: 'client-1' }), { status: 201 });
+      }
+      if (url === metadata.token_endpoint) {
+        return new Response(
+          JSON.stringify({
+            access_token: jwt({ sub: 'u1', org: 'org-9', exp: Math.floor(Date.now() / 1000) + 900 }),
+            refresh_token: 'refresh-next',
+            scope: 'mcp:read',
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith('/workflows')) {
+        if (over.workflowsStatus) return new Response('nope', { status: over.workflowsStatus });
+        return new Response(
+          JSON.stringify([
+            { id: 'wf-1', name: 'Rebalance', enabled: true },
+            { id: 'wf-2', name: 'Harvest', enabled: false },
+          ]),
+          { status: 200 },
+        );
+      }
+      return new Response('', { status: 404 });
+    }) as unknown as typeof fetch;
+    return impl;
+  };
+
+  const instance = async (over: { workflowsStatus?: number } = {}) => {
+    const fetchImpl = provider(over);
+    const oauth = new KeeperHubOAuth({
+      db,
+      baseUrl: 'https://blackbox.test',
+      issuer: 'https://provider.test',
+      fetchImpl,
+    });
+    return app({
+      identity: new Identity(db, { listKeys: async () => [{ id: 'k1' }] }),
+      oauth,
+      connections: new Connections({ db, oauth, key: keyFrom('f'.repeat(64)) }),
+      keeperHubApiUrl: 'https://provider.test/api',
+      keeperHubFetch: fetchImpl,
+    });
+  };
+
+  /** Connect through the real flow, so the session and the credential agree. */
+  const connected = async (server: FastifyInstance, query = 'connect=1') => {
+    const started = await server.inject({ url: `/api/auth/keeperhub/start?${query}` });
+    const state = new globalThis.URL(started.json().url).searchParams.get('state');
+    const callback = await server.inject({
+      url: `/api/auth/keeperhub/callback?code=abc&state=${state}`,
+    });
+    return { authorization: `Bearer ${callback.json().token}` };
+  };
+
+  it('says nothing is connected before anyone connects', async () => {
+    const server = await instance();
+    const started = await server.inject({ url: '/api/auth/keeperhub/start' });
+    const state = new globalThis.URL(started.json().url).searchParams.get('state');
+    const cb = await server.inject({ url: `/api/auth/keeperhub/callback?code=abc&state=${state}` });
+    const headers = { authorization: `Bearer ${cb.json().token}` };
+
+    const res = await server.inject({ url: '/api/connections/keeperhub', headers });
+    expect(res.json()).toMatchObject({ connected: false, watching: [] });
+  });
+
+  it('needs a session, since a connection belongs to an organisation', async () => {
+    const server = await instance();
+    expect((await server.inject({ url: '/api/connections/keeperhub' })).statusCode).toBe(401);
+    expect(
+      (await server.inject({ url: '/api/connections/keeperhub/workflows' })).statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await server.inject({
+          method: 'POST',
+          url: '/api/connections/keeperhub/workflows',
+          payload: { workflows: ['wf-1'] },
+        })
+      ).statusCode,
+    ).toBe(401);
+  });
+
+  it('reports the connection, its lifetime, and what disconnecting can do', async () => {
+    const server = await instance();
+    const headers = await connected(server, 'connect=1&days=7');
+
+    const res = await server.inject({ url: '/api/connections/keeperhub', headers });
+    expect(res.json()).toMatchObject({
+      connected: true,
+      status: 'active',
+      scope: 'mcp:read',
+      revocation: 'local_only',
+      watching: [],
+    });
+    expect(typeof res.json().expiresAt).toBe('string');
+  });
+
+  it('lists their workflows, marking the ones already watched', async () => {
+    const server = await instance();
+    const headers = await connected(server);
+
+    await server.inject({
+      method: 'POST',
+      url: '/api/connections/keeperhub/workflows',
+      headers,
+      payload: { workflows: [{ id: 'wf-1', name: 'Rebalance' }] },
+    });
+
+    const res = await server.inject({ url: '/api/connections/keeperhub/workflows', headers });
+    expect(res.json().workflows).toEqual([
+      { id: 'wf-1', name: 'Rebalance', enabled: true, watched: true },
+      { id: 'wf-2', name: 'Harvest', enabled: false, watched: false },
+    ]);
+  });
+
+  it('reports their side being unavailable rather than an empty list', async () => {
+    const server = await instance({ workflowsStatus: 500 });
+    const headers = await connected(server);
+    const res = await server.inject({ url: '/api/connections/keeperhub/workflows', headers });
+    expect(res.statusCode).toBe(502);
+  });
+
+  it('will not choose workflows for an organisation that never connected', async () => {
+    const server = await instance();
+    const started = await server.inject({ url: '/api/auth/keeperhub/start' });
+    const state = new globalThis.URL(started.json().url).searchParams.get('state');
+    const cb = await server.inject({ url: `/api/auth/keeperhub/callback?code=abc&state=${state}` });
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/connections/keeperhub/workflows',
+      headers: { authorization: `Bearer ${cb.json().token}` },
+      payload: { workflows: ['wf-1'] },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('takes plain ids as well as objects', async () => {
+    const server = await instance();
+    const headers = await connected(server);
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/connections/keeperhub/workflows',
+      headers,
+      payload: { workflows: ['wf-1', { id: 'wf-2', name: 'Harvest' }] },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().watching.map((w: { workflowId: string }) => w.workflowId)).toEqual([
+      'wf-1',
+      'wf-2',
+    ]);
+  });
+
+  it('refuses an empty pick rather than silently watching nothing', async () => {
+    const server = await instance();
+    const headers = await connected(server);
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/connections/keeperhub/workflows',
+      headers,
+      payload: { workflows: [] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('stops watching one, and says so when there was nothing to stop', async () => {
+    const server = await instance();
+    const headers = await connected(server);
+    await server.inject({
+      method: 'POST',
+      url: '/api/connections/keeperhub/workflows',
+      headers,
+      payload: { workflows: ['wf-1'] },
+    });
+
+    const stopped = await server.inject({
+      method: 'DELETE',
+      url: '/api/connections/keeperhub/workflows/wf-1',
+      headers,
+    });
+    expect(stopped.statusCode).toBe(200);
+    expect((await server.inject({ url: '/api/connections/keeperhub', headers })).json().watching)
+      .toEqual([]);
+
+    const missing = await server.inject({
+      method: 'DELETE',
+      url: '/api/connections/keeperhub/workflows/wf-never',
+      headers,
+    });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it('disconnects, and does not claim to have revoked anything', async () => {
+    const server = await instance();
+    const headers = await connected(server);
+
+    const res = await server.inject({ method: 'DELETE', url: '/api/connections/keeperhub', headers });
+    expect(res.json().note).toContain('no way for us to revoke it there');
+    expect((await server.inject({ url: '/api/connections/keeperhub', headers })).json()).toMatchObject(
+      { connected: false },
+    );
+    expect(await getKeeperhubConnection(db, 'org-9')).toMatchObject({ refreshTokenEnc: '' });
+  });
+
+  /** One operator managing another's connection is the failure that matters. */
+  it('manages the caller\'s own organisation and no other', async () => {
+    const server = await instance();
+    const headers = await connected(server);
+    await server.inject({
+      method: 'POST',
+      url: '/api/connections/keeperhub/workflows',
+      headers,
+      payload: { workflows: ['wf-1'] },
+    });
+
+    // A second tenant: the same deployment, a different organisation. Its org
+    // id comes from the key it signed in with, not from anything it can name.
+    const signIn = await server.inject({
+      method: 'POST',
+      url: '/api/auth/keeperhub',
+      payload: { orgKey: 'kh_someone_else' },
+    });
+    const other = { authorization: `Bearer ${signIn.json().token}` };
+    const res = await server.inject({ url: '/api/connections/keeperhub', headers: other });
+    expect(res.json()).toMatchObject({ connected: false, watching: [] });
+
+    const steal = await server.inject({
+      method: 'DELETE',
+      url: '/api/connections/keeperhub/workflows/wf-1',
+      headers: other,
+    });
+    expect(steal.statusCode).toBe(404);
+    expect(await listWatchedWorkflows(db, 'org-9', { activeOnly: true })).toHaveLength(1);
+  });
+});
+
 describe('scoping every read, not just the list', () => {
   const signedIn = async (orgKeyId: string) => {
     const identity = new Identity(db, { listKeys: async () => [{ id: orgKeyId }] });

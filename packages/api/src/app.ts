@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
-import { CHAINS, getChain, type BlackboxConfig } from '@blackbox/core';
+import { CHAINS, getChain, KeeperHubClient, type BlackboxConfig } from '@blackbox/core';
 import { rulesFor } from '@blackbox/detector';
 import {
   agentsOwnedBy,
@@ -17,6 +17,9 @@ import type { WalletAuth } from './wallet-auth.js';
 import {
   activeSigners,
   eventsByIds,
+  listWatchedWorkflows,
+  unwatchWorkflow,
+  watchWorkflows,
   getIncident,
   ledgerForIncident,
   listAgents,
@@ -160,6 +163,10 @@ export type AppOptions = {
    * then watched nothing.
    */
   connections?: Connections;
+  /** Overrides the KeeperHub API base, for tests and for a staging provider. */
+  keeperHubApiUrl?: string;
+  /** Injected transport for reads on a connection's behalf; tests use it. */
+  keeperHubFetch?: typeof fetch;
   /**
    * Inbound nudges. Absent means the loop is the only thing that reads runs,
    * which is slower but not broken.
@@ -632,6 +639,180 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       }
       return { orgId: caller.orgId, agents: await agentsOwnedBy(db, caller.orgId) };
     });
+
+    if (options.connections) {
+      const connections = options.connections;
+
+      /**
+       * Everything below manages the caller's own connection and nobody
+       * else's: the organisation comes from the session, never from the
+       * request, so there is no id to tamper with.
+       */
+      const requireCaller = async (
+        request: { headers: Record<string, unknown>; id: string },
+        reply: { code: (n: number) => { send: (b: unknown) => unknown } },
+      ) => {
+        const caller = await callerOf(request);
+        if (!caller) {
+          reply.code(401).send({
+            error: 'unauthorized',
+            detail: 'Sign in to manage a KeeperHub connection.',
+            requestId: request.id,
+          });
+          return null;
+        }
+        return caller;
+      };
+
+      /** Is this organisation connected, since when, and in what state. */
+      app.get('/api/connections/keeperhub', async (request, reply) => {
+        const caller = await requireCaller(request, reply);
+        if (!caller) return;
+
+        const connection = await connections.get(caller.orgId);
+        if (!connection || connection.status === 'disconnected') {
+          return { connected: false, orgId: caller.orgId, watching: [] };
+        }
+        return {
+          connected: connection.status === 'active',
+          orgId: caller.orgId,
+          status: connection.status,
+          scope: connection.scope,
+          connectedAt: connection.connectedAt.toISOString(),
+          expiresAt: connection.expiresAt.toISOString(),
+          lastRefreshedAt: connection.lastRefreshedAt?.toISOString() ?? null,
+          lastSweptAt: connection.lastSweptAt?.toISOString() ?? null,
+          lastError: connection.lastError,
+          watching: await listWatchedWorkflows(db, caller.orgId, { activeOnly: true }),
+          /**
+           * Stated rather than implied: disconnecting deletes our copy of the
+           * credential and cannot invalidate it on KeeperHub, because they
+           * expose no endpoint that would.
+           */
+          revocation: 'local_only',
+        };
+      });
+
+      /** Their workflows, for the operator to pick from. */
+      app.get('/api/connections/keeperhub/workflows', costly(30), async (request, reply) => {
+        const caller = await requireCaller(request, reply);
+        if (!caller) return;
+
+        const token = await connections.accessTokenFor(caller.orgId);
+        if (!token.ok) {
+          return reply.code(token.reason === 'unavailable' ? 502 : 409).send({
+            error: token.reason,
+            detail: token.detail,
+            requestId: request.id,
+          });
+        }
+
+        const watched = new Map(
+          (await listWatchedWorkflows(db, caller.orgId)).map((w) => [w.workflowId, w]),
+        );
+        const client = new KeeperHubClient({
+          accessToken: token.accessToken,
+          ...(options.keeperHubApiUrl ? { baseUrl: options.keeperHubApiUrl } : {}),
+          ...(options.keeperHubFetch ? { fetchImpl: options.keeperHubFetch } : {}),
+        });
+        try {
+          const workflows = await client.listWorkflows();
+          return {
+            workflows: workflows.map((w) => ({
+              id: w.id,
+              name: w.name,
+              enabled: w.enabled ?? null,
+              watched: watched.get(w.id)?.active === true,
+            })),
+          };
+        } catch (error) {
+          return reply.code(502).send({
+            error: 'provider_unavailable',
+            detail: String((error as Error)?.message ?? error),
+            requestId: request.id,
+          });
+        }
+      });
+
+      /**
+       * Pick what to watch.
+       *
+       * Nothing is watched on connect, so this is the step that makes a
+       * connection do anything at all.
+       */
+      app.post('/api/connections/keeperhub/workflows', async (request, reply) => {
+        const caller = await requireCaller(request, reply);
+        if (!caller) return;
+
+        const connection = await connections.get(caller.orgId);
+        if (!connection || connection.status === 'disconnected') {
+          return reply.code(409).send({
+            error: 'not_connected',
+            detail: 'Connect a KeeperHub account before choosing workflows.',
+            requestId: request.id,
+          });
+        }
+
+        const body = (request.body ?? {}) as Record<string, unknown>;
+        const raw = Array.isArray(body['workflows']) ? body['workflows'] : [];
+        const workflows = raw
+          .map((entry) =>
+            typeof entry === 'string'
+              ? { workflowId: entry }
+              : {
+                  workflowId: String((entry as Record<string, unknown>)?.['id'] ?? ''),
+                  name:
+                    typeof (entry as Record<string, unknown>)?.['name'] === 'string'
+                      ? String((entry as Record<string, unknown>)['name'])
+                      : null,
+                },
+          )
+          .filter((w) => w.workflowId !== '');
+
+        if (workflows.length === 0) {
+          return reply.code(400).send({
+            error: 'bad_request',
+            detail: 'Name at least one workflow to watch.',
+            requestId: request.id,
+          });
+        }
+
+        await watchWorkflows(db, { orgId: caller.orgId, workflows, at: new Date() });
+        return reply
+          .code(201)
+          .send({ watching: await listWatchedWorkflows(db, caller.orgId, { activeOnly: true }) });
+      });
+
+      /** Stop watching one. Remembered, so re-picking it costs nothing. */
+      app.delete('/api/connections/keeperhub/workflows/:id', async (request, reply) => {
+        const caller = await requireCaller(request, reply);
+        if (!caller) return;
+
+        const id = String((request.params as Record<string, string>)['id'] ?? '');
+        const stopped = await unwatchWorkflow(db, caller.orgId, id);
+        if (!stopped) {
+          return reply.code(404).send({
+            error: 'not_found',
+            detail: `"${id}" is not among the workflows this organisation watches.`,
+            requestId: request.id,
+          });
+        }
+        return { stopped: id };
+      });
+
+      /** Disconnect: forget the credential and stop reading. */
+      app.delete('/api/connections/keeperhub', async (request, reply) => {
+        const caller = await requireCaller(request, reply);
+        if (!caller) return;
+
+        await connections.disconnect(caller.orgId);
+        return {
+          disconnected: true,
+          // Honest about the limit rather than implying more happened.
+          note: 'Blackbox has deleted its copy. KeeperHub exposes no way for us to revoke it there.',
+        };
+      });
+    }
   }
 
   if (options.webhooks) {

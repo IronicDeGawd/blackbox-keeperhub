@@ -17,6 +17,13 @@ export type KeeperHubClientOptions = {
   baseUrl?: string;
   /** `kh_` organisation key. The `wfb_` webhook key will NOT work for execution. */
   orgKey?: string;
+  /**
+   * An OAuth access token, for reading on behalf of an operator who connected
+   * their account. Sent as a bearer token exactly like an organisation key, but
+   * named apart because it is a different thing: scoped to reading, short
+   * lived, and belonging to somebody else.
+   */
+  accessToken?: string;
   /** Session cookie from `login()`. Needed for dashboard-scoped endpoints. */
   cookie?: string;
   fetchImpl?: typeof fetch;
@@ -43,7 +50,7 @@ export class KeeperHubClient {
 
   constructor(options: KeeperHubClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
-    this.orgKey = options.orgKey;
+    this.orgKey = options.orgKey ?? options.accessToken;
     this.cookie = options.cookie;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }

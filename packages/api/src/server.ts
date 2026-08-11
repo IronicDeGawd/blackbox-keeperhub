@@ -522,6 +522,7 @@ const app = await buildApp({
   identity,
   oauth,
   ...(connections ? { connections } : {}),
+  ...(env['KEEPERHUB_API_URL'] ? { keeperHubApiUrl: env['KEEPERHUB_API_URL'] } : {}),
   /**
    * Named after this deployment, so a signature collected here is useless
    * anywhere else. Falls back to the host header's absence rather than
