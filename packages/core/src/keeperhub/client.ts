@@ -1,4 +1,10 @@
-import { keeperHubExecutionSchema, type KeeperHubExecution } from './types.js';
+import {
+  keeperHubExecutionSchema,
+  keeperHubRunPageSchema,
+  type KeeperHubExecution,
+  type KeeperHubRunPage,
+  type KeeperHubRunStatus,
+} from './types.js';
 
 export type SignMessage = (message: string) => Promise<string>;
 
@@ -408,6 +414,50 @@ export class KeeperHubClient {
       error: res.body.execution.error,
       logs: (res.body.logs ?? []) as never[],
     };
+  }
+
+  /**
+   * List runs for the organisation — workflow and direct alike.
+   *
+   * The only listing endpoint KeeperHub has. `/api/executions` does not exist
+   * (it answers 404), and `/execute/{id}/status` needs an id you already know,
+   * so this is what turns Blackbox from a submitter that watches its own calls
+   * into a monitor that sees everything an org ran.
+   *
+   * `range` defaults to 24h *on the server*, so it is passed explicitly here:
+   * omitting it silently hides anything older than a day, which looks exactly
+   * like an org with no activity.
+   */
+  async listRuns(
+    params: {
+      cursor?: string;
+      limit?: number;
+      status?: KeeperHubRunStatus;
+      source?: 'workflow' | 'direct';
+      /** `1h` | `24h` | `7d` | `30d`. Anything else is ignored by the server. */
+      range?: string;
+    } = {},
+  ): Promise<KeeperHubRunPage> {
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.status) query.set('status', params.status);
+    if (params.source) query.set('source', params.source);
+    query.set('range', params.range ?? '7d');
+
+    const res = await this.request<unknown>(`/analytics/runs?${query.toString()}`);
+    if (res.status !== 200) throw new KeeperHubError('listRuns failed', res.status, res.body);
+    const parsed = keeperHubRunPageSchema.safeParse(res.body);
+    if (!parsed.success) {
+      throw new KeeperHubError(
+        `Unrecognised runs page: ${parsed.error.issues
+          .map((i) => `${i.path.join('.')} ${i.message}`)
+          .join('; ')}`,
+        200,
+        res.body,
+      );
+    }
+    return parsed.data;
   }
 
   async getExecutionStatus(executionId: string): Promise<KeeperHubExecution> {

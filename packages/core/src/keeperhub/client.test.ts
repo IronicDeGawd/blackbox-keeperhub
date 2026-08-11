@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { KeeperHubClient, KeeperHubError } from './client.js';
 import success from './fixtures/direct-execution-success.json' with { type: 'json' };
+import runsPage from './fixtures/analytics-runs-page.json' with { type: 'json' };
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -136,5 +137,45 @@ describe('org key vs webhook key', () => {
     await client.createOrgKey('a', async () => '0x');
     await client.createWebhookKey('b', async () => '0x');
     expect(paths).toEqual(['/api/keys', '/api/api-keys']);
+  });
+});
+
+describe('listRuns', () => {
+  const capture = () => {
+    const urls: string[] = [];
+    const impl = vi.fn(async (url: string) => {
+      urls.push(url);
+      return jsonResponse(runsPage);
+    }) as unknown as typeof fetch;
+    return { urls, impl };
+  };
+
+  it('reads the live page shape', async () => {
+    const { impl } = capture();
+    const page = await clientWith(impl).listRuns();
+    expect(page.runs).toHaveLength(runsPage.runs.length);
+    // A direct run carries only a hash; a workflow run carries a verified receipt.
+    const workflow = page.runs.find((r) => r.source === 'workflow' && r.status === 'success');
+    expect(workflow?.transactionHashes?.[0]?.verified).toBe(true);
+    const direct = page.runs.find((r) => r.source === 'direct' && r.status === 'success');
+    expect(direct?.transactionHashes?.[0]?.verified).toBeUndefined();
+  });
+
+  // The server defaults to 24h, which silently hides everything older.
+  it('always sends an explicit range', async () => {
+    const { urls, impl } = capture();
+    const client = clientWith(impl);
+    await client.listRuns();
+    await client.listRuns({ range: '30d', cursor: '2026-08-10T00:00:00.000Z', limit: 100 });
+    expect(new URL(urls[0]!).searchParams.get('range')).toBe('7d');
+    const second = new URL(urls[1]!).searchParams;
+    expect(second.get('range')).toBe('30d');
+    expect(second.get('cursor')).toBe('2026-08-10T00:00:00.000Z');
+    expect(second.get('limit')).toBe('100');
+  });
+
+  it('refuses a page it cannot recognise', async () => {
+    const impl = vi.fn(async () => jsonResponse({ runs: [{ id: 1 }] })) as unknown as typeof fetch;
+    await expect(clientWith(impl).listRuns()).rejects.toThrow(/Unrecognised runs page/);
   });
 });
