@@ -79,6 +79,21 @@ export function normaliseRun(run: KeeperHubRun, options: NormaliseRunOptions): E
         ...(run.workflowId ? { workflowId: run.workflowId } : {}),
         ...(run.workflowName ? { workflowName: run.workflowName } : {}),
         ...(run.directType ? { directType: run.directType } : {}),
+        /**
+         * How far the workflow got before it stopped, and what kind of failure
+         * it was. A run that fails at the same step every time is a broken
+         * definition rather than an unlucky chain — which is the whole
+         * distinction WORKFLOW_MISCONFIGURED exists to draw, and there is no
+         * node id on a run that produced no transaction to draw it from.
+         */
+        ...(run.completedSteps !== null && run.completedSteps !== undefined
+          ? { completedSteps: run.completedSteps }
+          : {}),
+        ...(run.errorType ? { errorType: run.errorType } : {}),
+        ...(run.errorCategory ? { errorCategory: run.errorCategory } : {}),
+        ...(run.durationMs !== null && run.durationMs !== undefined
+          ? { durationMs: run.durationMs }
+          : {}),
       },
     },
     /**

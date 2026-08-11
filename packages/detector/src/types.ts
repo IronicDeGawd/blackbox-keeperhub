@@ -28,6 +28,14 @@ export type Corroboration = {
    * read `latestNonce` and draw a conclusion the address cannot support.
    */
   managedNonces?: boolean;
+  /**
+   * The organisation's daily execution budget, as KeeperHub reports it.
+   *
+   * `dailyCapWei` is null when no cap is configured, which is not the same as a
+   * cap of zero — it means the question does not apply, and SPEND_CAP_EXHAUSTED
+   * must decline rather than treat "no limit" as "limit reached".
+   */
+  spendCap?: { dailyCapWei: bigint | null; dailyUsedWei: bigint };
 };
 
 /**

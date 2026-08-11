@@ -23,6 +23,10 @@ export type EvaluatedDraft = IncidentDraft & {
  */
 const SUPPRESSES: ReadonlyArray<{ specific: RuleId; general: RuleId }> = [
   { specific: 'R3', general: 'R1' },
+  // R10 says "this workflow is broken and retrying will not help"; R5 only
+  // says "this keeps failing". Both describe one problem, and the specific one
+  // carries the instruction worth acting on.
+  { specific: 'R10', general: 'R5' },
 ];
 
 /** Which rules can fire for an agent of this kind. Used by the console and API. */

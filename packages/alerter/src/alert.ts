@@ -153,6 +153,22 @@ function describe(cls: IncidentClass, facts: Record<string, unknown>): string {
       return 'signer is out of gas';
     case 'ADVERSE_INCLUSION':
       return 'received less than simulated';
+    case 'EXECUTION_STALLED': {
+      const minutes = Math.round(Number(facts['stalledMs'] ?? 0) / 60_000);
+      const name = facts['workflowName'];
+      return `${name ? `workflow "${String(name)}"` : 'a workflow'} has not finished in ${minutes}m`;
+    }
+    case 'WORKFLOW_MISCONFIGURED': {
+      const count = Number(facts['failureCount'] ?? 0);
+      const reason = Array.isArray(facts['distinctReasons']) ? facts['distinctReasons'][0] : null;
+      return `workflow rejected ${count} times before reaching the chain${reason ? `: ${String(reason)}` : ''}`;
+    }
+    case 'SPEND_CAP_EXHAUSTED': {
+      const pct = Math.round(Number(facts['usedRatio'] ?? 0) * 100);
+      return facts['exhausted'] === true
+        ? 'daily spending cap reached — executions have stopped'
+        : `daily spending cap ${pct}% used`;
+    }
   }
 }
 

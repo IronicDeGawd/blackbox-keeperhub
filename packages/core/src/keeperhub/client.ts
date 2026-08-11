@@ -460,6 +460,34 @@ export class KeeperHubClient {
     return parsed.data;
   }
 
+  /**
+   * The organisation's daily execution budget and what it has spent today.
+   *
+   * `dailyCapWei` is null when no cap is configured. That is not a cap of zero
+   * and must not be read as one — it means the organisation has no limit, and
+   * an alert about reaching a limit that does not exist would be nonsense.
+   */
+  async getSpendingLimits(): Promise<{
+    dailyCapWei: string | null;
+    dailyUsedWei: string | null;
+    dailySolanaCapLamports: string | null;
+    dailySolanaUsedLamports: string | null;
+  }> {
+    const res = await this.request<Record<string, unknown>>('/analytics/spend-cap');
+    if (res.status !== 200) {
+      throw new KeeperHubError('getSpendingLimits failed', res.status, res.body);
+    }
+    const body = res.body ?? {};
+    const str = (key: string): string | null =>
+      typeof body[key] === 'string' ? (body[key] as string) : null;
+    return {
+      dailyCapWei: str('dailyCapWei'),
+      dailyUsedWei: str('dailyUsedWei'),
+      dailySolanaCapLamports: str('dailySolanaCapLamports'),
+      dailySolanaUsedLamports: str('dailySolanaUsedLamports'),
+    };
+  }
+
   async getExecutionStatus(executionId: string): Promise<KeeperHubExecution> {
     return (await this.getExecutionStatusWithHint(executionId)).execution;
   }

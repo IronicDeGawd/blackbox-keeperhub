@@ -411,6 +411,187 @@ export const R7: Rule = {
   },
 };
 
-export const ALL_RULES: readonly Rule[] = [R1, R2, R3, R4, R5, R6, R7];
+
+// ── R8 · SPEND_CAP_EXHAUSTED ────────────────────────────────────────────────
+
+/**
+ * The managed-wallet equivalent of running out of gas.
+ *
+ * A KeeperHub organisation has a daily execution budget it sponsors from. When
+ * that budget is spent, every subsequent execution fails for a reason no chain
+ * read explains — the transactions simply stop being submitted. An operator
+ * watching the chain sees nothing at all, which is the worst kind of outage:
+ * silent.
+ *
+ * It warns before the cliff rather than at it. At 100% the agent has already
+ * stopped working, and an alert that arrives then is a post-mortem.
+ */
+export const R8: Rule = {
+  id: 'R8',
+  // A signer-kind agent pays its own gas; SIGNER_GAS_STARVED is its version of
+  // this, and reads a balance rather than someone else's budget.
+  appliesTo: ['keeperhub'],
+  evaluate(_window, ctx) {
+    const cap = ctx.corroboration?.spendCap;
+    // No cap configured is not a cap of zero. It means the question does not
+    // apply to this organisation, and answering it anyway would report an
+    // outage that cannot happen.
+    if (!cap || cap.dailyCapWei === null || cap.dailyCapWei === 0n) return null;
+
+    const ratio = Number((cap.dailyUsedWei * 10_000n) / cap.dailyCapWei) / 10_000;
+    if (ratio < ctx.detection.spendCapWarnRatio) return null;
+
+    const exhausted = cap.dailyUsedWei >= cap.dailyCapWei;
+    return {
+      class: 'SPEND_CAP_EXHAUSTED',
+      ruleId: 'R8',
+      // Exhausted means the agent has stopped. Approaching means it will.
+      severity: exhausted ? 'critical' : 'warning',
+      confidence: 0.95,
+      // Reported by the platform rather than derived from events, so there is
+      // no event to cite. Saying so beats citing an unrelated one.
+      eventIds: [],
+      facts: {
+        dailyCapWei: cap.dailyCapWei.toString(),
+        dailyUsedWei: cap.dailyUsedWei.toString(),
+        remainingWei: (cap.dailyCapWei - cap.dailyUsedWei).toString(),
+        usedRatio: Math.round(ratio * 1000) / 1000,
+        warnRatio: ctx.detection.spendCapWarnRatio,
+        exhausted,
+      },
+    };
+  },
+};
+
+// ── R9 · EXECUTION_STALLED ──────────────────────────────────────────────────
+
+/**
+ * A workflow that started and never finished.
+ *
+ * Chain scanning cannot see this, because a stalled run may have produced no
+ * transaction at all — it can hang on a condition, a wait, or a step that never
+ * returns. STUCK_TRANSACTION is the version of this for something that reached
+ * a mempool; this one is for work that never got that far.
+ *
+ * The threshold is much longer than the stuck one on purpose: a multi-step
+ * workflow legitimately takes minutes, and calling that stalled would make the
+ * rule a nuisance rather than a signal.
+ */
+export const R9: Rule = {
+  id: 'R9',
+  appliesTo: ['keeperhub'],
+  evaluate(window, ctx) {
+    const stalled = latestBySubmission(window).filter(
+      (e) =>
+        e.outcome.status === 'pending' &&
+        ctx.now.getTime() - e.submission.submittedAt.getTime() > ctx.detection.executionStalledMs &&
+        // A later attempt of the same action reaching a terminal state means the
+        // work completed; only the record of this attempt is stale.
+        !window.some((other) => other.logicalActionId === e.logicalActionId && isTerminal(other)),
+    );
+    const event = stalled[0];
+    if (!event) return null;
+
+    const detail = event.trigger.detail ?? {};
+    const stalledMs = ctx.now.getTime() - event.submission.submittedAt.getTime();
+    return {
+      class: 'EXECUTION_STALLED',
+      ruleId: 'R9',
+      // Nothing is burning, but the agent has silently stopped doing its job.
+      severity: 'warning',
+      confidence: 0.9,
+      eventIds: [event.id],
+      facts: {
+        workflowId: detail['workflowId'] ?? null,
+        workflowName: detail['workflowName'] ?? null,
+        stalledMs,
+        executionStalledMs: ctx.detection.executionStalledMs,
+        completedSteps: detail['completedSteps'] ?? null,
+        // Present when a transaction was submitted and the run still did not
+        // finish, which points at confirmation rather than at the workflow.
+        txHash: event.submission.txHash ?? null,
+      },
+    };
+  },
+};
+
+// ── R10 · WORKFLOW_MISCONFIGURED ────────────────────────────────────────────
+
+/**
+ * A workflow that is broken rather than unlucky.
+ *
+ * The distinction that matters to whoever has to fix it: repeated failures that
+ * never reached the chain are a definition problem — a bad address, a wrong
+ * ABI, an argument that cannot be satisfied — and no amount of retrying will
+ * help. RETRY_STORM says "this keeps failing"; this says "and it will keep
+ * failing until you change it", which is a different instruction.
+ *
+ * Requires every counted failure to be a pre-flight rejection, so a workflow
+ * failing because the chain moved is not accused of being misconfigured. It
+ * suppresses RETRY_STORM when both fire, being the more specific of the two.
+ */
+export const R10: Rule = {
+  id: 'R10',
+  appliesTo: ['keeperhub'],
+  evaluate(window, ctx) {
+    const cutoff = ctx.now.getTime() - ctx.detection.retryStormWindowMs;
+    const byWorkflow = new Map<string, ExecutionEvent[]>();
+    for (const e of window) {
+      if (e.submission.submittedAt.getTime() < cutoff) continue;
+      // Rejected means KeeperHub refused to submit it: no gas spent, no block
+      // involved, nothing about the chain to blame.
+      if (e.outcome.status !== 'rejected') continue;
+      const workflowId = e.workflowId;
+      if (!workflowId) continue;
+      const list = byWorkflow.get(workflowId) ?? [];
+      list.push(e);
+      byWorkflow.set(workflowId, list);
+    }
+
+    for (const [workflowId, failures] of byWorkflow) {
+      if (failures.length < ctx.detection.workflowNodeFailures) continue;
+
+      const steps = new Set(
+        failures.map((e) => e.trigger.detail?.['completedSteps']).filter((s) => s !== undefined),
+      );
+      const reasons = [
+        ...new Set(
+          failures
+            .map((e) => e.simulation.revertReason ?? e.outcome.revertReason)
+            .filter((r): r is string => Boolean(r)),
+        ),
+      ];
+
+      return {
+        class: 'WORKFLOW_MISCONFIGURED',
+        ruleId: 'R10',
+        severity: 'critical',
+        // Failing at the same step every time is a definition problem; failing
+        // at different steps is the same conclusion held less firmly.
+        confidence: steps.size === 1 ? 0.9 : 0.75,
+        eventIds: failures.map((e) => e.id),
+        facts: {
+          workflowId,
+          workflowName: failures[0]?.trigger.detail?.['workflowName'] ?? null,
+          failureCount: failures.length,
+          workflowNodeFailures: ctx.detection.workflowNodeFailures,
+          windowMs: ctx.detection.retryStormWindowMs,
+          // The step it stopped at, when every failure agrees on one.
+          failingAfterSteps: steps.size === 1 ? [...steps][0] : null,
+          distinctFailingSteps: steps.size,
+          distinctReasons: reasons,
+          errorTypes: [
+            ...new Set(
+              failures.map((e) => e.trigger.detail?.['errorType']).filter((t) => t !== undefined),
+            ),
+          ],
+        },
+      };
+    }
+    return null;
+  },
+};
+
+export const ALL_RULES: readonly Rule[] = [R1, R2, R3, R4, R5, R6, R7, R8, R9, R10];
 
 export type { IncidentDraft, RuleContext };

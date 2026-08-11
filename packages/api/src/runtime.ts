@@ -224,6 +224,10 @@ export class Runtime {
       corroboration: new RpcCorroborator({ rpcUrls: { [options.chainId]: options.rpcUrl } }),
       chain: this.reader,
       ...(options.alerter ? { alerter: options.alerter } : {}),
+      // The same client, in the one role SPEND_CAP_EXHAUSTED needs. Without a
+      // KeeperHub key the rule simply declines, which is correct: a budget we
+      // cannot read is not one we can say anything about.
+      ...(options.keeperHub ? { spendLimits: options.keeperHub } : {}),
       ...(options.keeperHub && options.keeperHubOrg
         ? {
             keeperHubRuns: new KeeperHubSource({

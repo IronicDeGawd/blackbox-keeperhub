@@ -15,6 +15,26 @@ const detectionSchema = z.object({
   retryStormWindowMs: z.number().int().positive().default(300_000),
   gasStarvedMultiple: z.number().positive().default(3),
   slippageToleranceBps: z.number().int().nonnegative().default(50),
+  /**
+   * How long a KeeperHub run may sit unfinished before it is a problem.
+   *
+   * Much longer than `stuckThresholdMs`, and deliberately so: that one measures
+   * a transaction waiting for a block, while this measures a whole workflow —
+   * which may legitimately wait on a confirmation, a retry, or several steps.
+   * Ten minutes is long enough that a healthy multi-step run never trips it.
+   */
+  executionStalledMs: z.number().int().positive().default(600_000),
+  /**
+   * Failures at one workflow node before it is called misconfigured rather than
+   * unlucky. Three is enough that a single bad block or a transient RPC error
+   * does not accuse an operator's workflow of being broken.
+   */
+  workflowNodeFailures: z.number().int().min(2).default(3),
+  /**
+   * Fraction of the daily spend cap at which the agent is warned. At 1.0 it has
+   * already stopped working, which is too late to be useful.
+   */
+  spendCapWarnRatio: z.number().min(0).max(1).default(0.8),
 });
 
 export type DetectionConfig = z.infer<typeof detectionSchema>;

@@ -54,6 +54,14 @@ export type RecorderOptions = {
    * every deployment did before this existed.
    */
   alerter?: { consider(incident: Incident): Promise<unknown> };
+  /**
+   * Reads the organisation's daily execution budget, for SPEND_CAP_EXHAUSTED.
+   * Absent means that rule declines rather than guesses, which is correct: a
+   * budget we cannot read is not a budget we can say anything about.
+   */
+  spendLimits?: {
+    getSpendingLimits(): Promise<{ dailyCapWei: string | null; dailyUsedWei: string | null }>;
+  };
   config: BlackboxConfig;
   tracker: IncidentTracker;
   makeId: () => string;
@@ -308,6 +316,24 @@ export class Recorder {
       });
     }
 
+    /**
+     * Read once per evaluation, and only for a managed wallet — a signer-kind
+     * agent pays its own gas, so an organisation budget says nothing about it.
+     * A failure here degrades to no spend-cap rule rather than no evaluation.
+     */
+    let spendCap: { dailyCapWei: bigint | null; dailyUsedWei: bigint } | undefined;
+    if (managed && this.options.spendLimits) {
+      try {
+        const limits = await this.options.spendLimits.getSpendingLimits();
+        spendCap = {
+          dailyCapWei: limits.dailyCapWei === null ? null : BigInt(limits.dailyCapWei),
+          dailyUsedWei: BigInt(limits.dailyUsedWei ?? '0'),
+        };
+      } catch (error) {
+        this.options.logger?.error('spend cap read failed', { error });
+      }
+    }
+
     const ctx: RuleContext = {
       now,
       detection: detectionFor(this.options.config, target.chainId),
@@ -321,6 +347,7 @@ export class Recorder {
         // Without this, a rule reading `latestNonce` cannot tell a wallet whose
         // nonces the agent controls from one whose nonces it does not.
         ...(managed ? { managedNonces: true } : {}),
+        ...(spendCap ? { spendCap } : {}),
       },
     };
 
