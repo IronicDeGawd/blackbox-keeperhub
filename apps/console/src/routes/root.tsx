@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { Outlet, createRootRoute } from '@tanstack/react-router';
 import { store, useConsole } from '../lib/store';
 import { ChainBanner, ConnectionDot, MainnetWarning, Rail, StatsStrip } from '../ui/shell';
+import { SessionControl } from '../ui/SessionControl';
+import { adoptSessionFromFragment } from '../lib/session';
 import '../ui/shell.css';
 
 /**
@@ -15,6 +17,15 @@ function Shell(): React.JSX.Element {
   const { config, stats, connection } = useConsole();
 
   useEffect(() => {
+    /**
+     * "Connect KeeperHub" returns the operator with `#token=…&orgId=…` in the
+     * fragment — browsers do not send fragments to servers and proxies do not
+     * log them, which is why the API puts it there. Taken and erased at once,
+     * so a live credential does not sit in the address bar or in history.
+     */
+    if (adoptSessionFromFragment(window.location)) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
     store.start();
   }, []);
 
@@ -34,6 +45,7 @@ function Shell(): React.JSX.Element {
           </span>
           <ChainBanner chains={chains} />
           <span className="masthead__spacer" />
+          <SessionControl capabilities={config?.capabilities ?? null} />
           <ConnectionDot state={connection} />
         </div>
         <MainnetWarning chains={chains} />

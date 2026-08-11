@@ -203,3 +203,21 @@
     border-bottom: none;
   }
 }
+
+/* --- the one thing a visitor can cause ----------------------------------- */
+
+.demo {
+  margin-top: 1.25rem;
+}
+
+.demo__note,
+.demo__message {
+  margin: 0.5rem 0 0;
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+  max-width: 68ch;
+}
+
+.demo__message {
+  color: var(--ink);
+}

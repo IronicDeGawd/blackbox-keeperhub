@@ -219,11 +219,36 @@ export type ChainConfig = {
 };
 
 export type Capabilities = {
+  /** Blackbox holds a key or a KeeperHub org, and can submit a fix itself. */
   remediate: boolean;
+  /** Server-signed chaos. False wherever the deployment holds no key. */
   chaos: boolean;
+  /**
+   * Chaos the visitor signs from their own wallet. True on the public
+   * deployment precisely *because* it holds no key — so this, not `chaos`, is
+   * what gates the panel a visitor can actually use.
+   */
+  signChaos: boolean;
   diagnose: boolean;
   signerHealth: boolean;
   proposeRemediation: boolean;
+  /** An operator may connect their own KeeperHub account. */
+  connectKeeperHub: boolean;
+  /** A visitor may induce a real failure on this deployment's own org. */
+  demo: boolean;
+};
+
+/** What this deployment actually reads, said plainly at /api/config. */
+export type ConnectionsConfig = {
+  available: boolean;
+  detail?: string;
+  sweepsOwnOrg: boolean;
+  lifetimeDays?: { min: number; max: number; default: number };
+  scope?: string;
+  /** `local_only`: disconnecting deletes our copy and cannot revoke theirs. */
+  revocation?: string;
+  connected?: number;
+  mine?: { status: string; expiresAt: string; watching: number } | null;
 };
 
 export type AppConfig = {
@@ -234,9 +259,15 @@ export type AppConfig = {
     maxAttempts: number;
     signerAllowlist: string[];
     chainAllowlist: number[];
-    budget: { maxRemediationsPerHour: number; maxGasWeiPerHour: string };
+    budget: {
+      maxRemediationsPerHour: number;
+      maxGasWeiPerHour: string;
+      /** Per agent — which for a KeeperHub agent means per workflow. */
+      maxRemediationsPerDayPerAgent?: number;
+    };
   };
   capabilities: Capabilities;
+  connections?: ConnectionsConfig;
 };
 
 // ---------------------------------------------------------------- remediation
@@ -358,6 +389,42 @@ export type ChaosContext = {
   signerBalanceWei: string;
   targets: Record<string, string | null>;
   items: ChaosScenario[];
+};
+
+/**
+ * A failure planned for the caller's own wallet to sign.
+ *
+ * The transactions carry an absolute nonce, because occupying one specific
+ * nonce is the whole point of some of these — so a wallet that helpfully
+ * re-nonces produces something that costs money and induces nothing.
+ */
+export type ChaosPlan = {
+  scenario: string;
+  chainId: number;
+  signer: string;
+  induces?: string;
+  expect?: string;
+  expectedDetectionSeconds?: number;
+  steps: {
+    order: number;
+    label: string;
+    explanation: string;
+    transaction: {
+      to: string;
+      value: string;
+      data: string | null;
+      nonce: number;
+      maxFeePerGas: string;
+      maxPriorityFeePerGas: string;
+      gas?: string;
+      chainId: number;
+    } | null;
+    waitForInclusion?: boolean;
+  }[];
+  /** True once the address is registered, so the loop runs unattended. */
+  watching?: boolean;
+  /** A stated refusal — not an error. */
+  declined?: string | null;
 };
 
 export type ChaosRun = {

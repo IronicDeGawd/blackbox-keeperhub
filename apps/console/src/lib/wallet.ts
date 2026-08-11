@@ -48,6 +48,28 @@ export async function connectWallet(): Promise<WalletConnection> {
   return { address, chainId };
 }
 
+/**
+ * Sign a message to prove an address. Nothing is sent to a chain.
+ *
+ * `personal_sign` takes the message first and the address second — the reverse
+ * of `eth_sign`, which is deprecated for good reason. The message is passed as
+ * text rather than hex so the wallet shows the operator what they are signing,
+ * which is the entire point of the challenge wording.
+ */
+export async function signMessage(message: string, address: string): Promise<string> {
+  const wallet = provider();
+  if (!wallet) throw new Error('No injected wallet was found in this browser.');
+
+  const signature = (await wallet.request({
+    method: 'personal_sign',
+    params: [message, address],
+  })) as string;
+  if (typeof signature !== 'string' || !signature.startsWith('0x')) {
+    throw new Error('The wallet returned no signature.');
+  }
+  return signature;
+}
+
 export async function switchChain(chainId: number): Promise<void> {
   const wallet = provider();
   if (!wallet) throw new Error('No injected wallet was found in this browser.');

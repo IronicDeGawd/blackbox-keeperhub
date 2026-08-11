@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { chainName } from '../../lib/explorer';
 import { store } from '../../lib/store';
+import { onSession, signedIn as isSignedIn } from '../../lib/session';
 import type { Capabilities, ChainConfig, IncidentDetail, RemediateResponse } from '../../lib/types';
 
 /**
@@ -30,8 +31,19 @@ export function Actions({
   const [result, setResult] = useState<RemediateResponse | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
 
+  const [signedIn, setSignedIn] = useState(isSignedIn());
+  useEffect(() => onSession((s) => setSignedIn(s !== null)), []);
+
   const settled = incident.status === 'resolved' || incident.status === 'acknowledged';
   const canRemediate = capabilities?.remediate === true;
+  /**
+   * Acting spends: a remediation consumes an organisation's KeeperHub quota,
+   * its gas credits and its daily cap, so the API answers only to the account
+   * that owns the agent. Said here rather than discovered by pressing a button
+   * that returns 403.
+   */
+  const canAct = signedIn;
+
 
   if (settled && !canRemediate) return null;
 
@@ -69,13 +81,21 @@ export function Actions({
         <h2 className="eyebrow eyebrow--accent">Actions</h2>
       </header>
 
+      {!canAct ? (
+        <p className="actions__note">
+          Connect your KeeperHub account to act on this incident. Reading it needs no
+          account; acknowledging or remediating answers to the organisation that owns{' '}
+          <span className="mono">{incident.agentId}</span>.
+        </p>
+      ) : null}
+
       <div className="actions__row">
         {!settled ? (
           <button
             type="button"
             className="button"
             onClick={() => void acknowledge()}
-            disabled={busy !== null}
+            disabled={busy !== null || !canAct}
           >
             {busy === 'acknowledge' ? 'Acknowledging…' : 'Acknowledge'}
           </button>
@@ -86,7 +106,7 @@ export function Actions({
             type="button"
             className="button"
             onClick={() => setConfirming(true)}
-            disabled={busy !== null}
+            disabled={busy !== null || !canAct}
           >
             Remediate now
           </button>

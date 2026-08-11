@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useConsole } from '../../lib/store';
+import { DemoButton } from '../../ui/DemoButton';
 import type { Capabilities } from '../../lib/types';
 import './landing.css';
 
@@ -46,7 +47,9 @@ const DESTINATIONS: Destination[] = [
     to: '/chaos',
     label: 'Chaos',
     line: 'Break something on a testnet on purpose, then watch it get caught, explained and fixed.',
-    needs: 'chaos',
+    // `signChaos`, not `chaos`: the public deployment holds no key, so the
+    // panel it *can* offer is the one the visitor signs themselves.
+    needs: 'signChaos',
   },
 ];
 
@@ -96,7 +99,7 @@ const STEPS: { n: string; head: string; body: string }[] = [
   {
     n: '02',
     head: 'Detect',
-    body: 'Seven rules, R1 to R7, fire on measured facts. Detection is deterministic — no model decides whether something is wrong.',
+    body: 'Ten rules, R1 to R10, fire on measured facts — including three that only a KeeperHub-managed wallet can trigger. Detection is deterministic: no model decides whether something is wrong.',
   },
   {
     n: '03',
@@ -134,6 +137,7 @@ export function Landing(): React.JSX.Element {
           Every remediation is a real transaction with a retrievable hash. There are no simulated
           remediations anywhere in the product.
         </p>
+        {capabilities?.demo ? <DemoButton /> : null}
       </section>
 
       <section>

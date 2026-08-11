@@ -522,3 +522,11 @@
   color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
 }
+
+/* Said before the buttons, not after a refused click. */
+.actions__note {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+  max-width: 62ch;
+}

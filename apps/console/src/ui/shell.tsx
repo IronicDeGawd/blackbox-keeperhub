@@ -128,7 +128,15 @@ const DESTINATIONS: Destination[] = [
   { to: '/incidents', label: 'Incidents' },
   { to: '/inspect', label: 'Inspect', needs: 'diagnose' },
   { to: '/watched', label: 'Watched' },
-  { to: '/chaos', label: 'Chaos', needs: 'chaos' },
+  /**
+   * Gated on `signChaos`, not `chaos`.
+   *
+   * The public deployment holds no key, so `chaos` is false there by design —
+   * and gating on it hid the one thing a visitor is meant to do. The panel
+   * plans a failure for the visitor's own wallet to sign, which is exactly
+   * what `signChaos` reports.
+   */
+  { to: '/chaos', label: 'Chaos', needs: 'signChaos' },
 ];
 
 /**
