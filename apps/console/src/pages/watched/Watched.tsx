@@ -2,9 +2,67 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { chainName } from '../../lib/explorer';
 import { useConsole } from '../../lib/store';
-import type { WatchedAddress } from '../../lib/types';
+import type { Agent, ChainConfig, SignerHealth, WatchedAddress } from '../../lib/types';
+import { formatWei } from '../../lib/format';
 import { CopyableAddress, RelativeTime } from '../../ui/primitives';
 import './watched.css';
+
+/**
+ * What the chain says about one address, right now.
+ *
+ * Asked for a row at a time. Each call is an RPC lookup, and firing one per
+ * address the moment the page loads would spend a burst of them to answer a
+ * question nobody had asked yet.
+ */
+function Health({ signer, chainId }: { signer: string; chainId: number }): React.JSX.Element {
+  const [health, setHealth] = useState<SignerHealth | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  const check = async (): Promise<void> => {
+    setBusy(true);
+    setFailed(null);
+    try {
+      setHealth(await api.signerHealth(signer, chainId));
+    } catch (cause) {
+      setFailed(cause instanceof ApiError ? cause.detail : (cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (failed) return <span className="crit">{failed}</span>;
+
+  if (!health) {
+    return (
+      <button type="button" className="linkbutton" onClick={() => void check()} disabled={busy}>
+        {busy ? 'reading…' : 'check'}
+      </button>
+    );
+  }
+
+  const wedged = health.missingNonces.length > 0;
+  return (
+    <span className="watched__health">
+      <span className="num">{formatWei(health.balanceWei)}</span>
+      <span className="dim">nonce</span>
+      <span className="num">{health.latestNonce}</span>
+      {health.pendingNonce !== health.latestNonce ? (
+        <span className="warn num">{health.pendingNonce} pending</span>
+      ) : null}
+      {wedged ? (
+        <span className="crit">gap at {health.missingNonces.join(', ')}</span>
+      ) : (
+        <span className="ok">no gap</span>
+      )}
+      {health.runwayActions !== null ? (
+        <span className={health.runwayActions < 5 ? 'warn' : 'dim'}>
+          ~{health.runwayActions} left
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 /**
  * Addresses Blackbox discovers transactions for by scanning blocks.
@@ -204,6 +262,7 @@ export function Watched(): React.JSX.Element {
                 <th>Agent</th>
                 <th>Label</th>
                 <th>Watching since</th>
+                <th>Health</th>
                 <th />
               </tr>
             </thead>
@@ -218,6 +277,9 @@ export function Watched(): React.JSX.Element {
                   <td className={entry.label ? '' : 'dim'}>{entry.label ?? 'none'}</td>
                   <td>
                     <RelativeTime at={entry.registeredAt} />
+                  </td>
+                  <td>
+                    <Health signer={entry.signer} chainId={entry.chainId} />
                   </td>
                   <td className="listing__actions">
                     <button
@@ -236,6 +298,85 @@ export function Watched(): React.JSX.Element {
             </tbody>
           </table>
         )}
+      </div>
+
+      <Agents chains={chains} />
+    </section>
+  );
+}
+
+/**
+ * Who Blackbox thinks it is watching, and what it is allowed to do about it.
+ *
+ * An agent is the thing incidents are raised against; a watched address is one
+ * of the ways an agent is discovered. They are listed together because the
+ * question people actually ask — "so can it fix this one?" — is answered by the
+ * agent row, not the address row.
+ *
+ * The list is already filtered by the server to what the caller may read, so an
+ * anonymous visitor sees the public ones and an operator sees their own.
+ */
+function Agents({ chains }: { chains: ChainConfig[] }): React.JSX.Element | null {
+  const [items, setItems] = useState<Agent[] | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void api
+      .agents()
+      .then((result) => {
+        if (live) setItems(result.items);
+      })
+      .catch(() => {
+        if (live) setItems([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  if (items === null || items.length === 0) return null;
+
+  return (
+    <section className="watched__agents">
+      <h2 className="eyebrow eyebrow--ruled">Agents</h2>
+      <div className="tablewrap">
+        <table className="listing">
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th>Signs from</th>
+              <th>Chains</th>
+              <th>Open</th>
+              <th>Remediation</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((agent) => (
+              <tr key={agent.agentId}>
+                <td>
+                  <span className="mono">{agent.agentId}</span>
+                  {agent.label ? <span className="dim"> · {agent.label}</span> : null}
+                </td>
+                <td>
+                  {agent.signers.map((signer) => (
+                    <CopyableAddress key={signer} value={signer} />
+                  ))}
+                </td>
+                <td>{agent.chainIds.map((id) => chainName(chains, id)).join(', ')}</td>
+                <td className={agent.openIncidents > 0 ? 'crit num' : 'dim num'}>
+                  {agent.openIncidents}
+                </td>
+                {/*
+                 * The distinction the whole ownership model exists for: an
+                 * agent Blackbox can act on, versus one it can only explain.
+                 */}
+                <td className={agent.selfRemediation ? 'ok' : 'dim'}>
+                  {agent.selfRemediation ? 'can be executed' : 'proposal only'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </section>
   );

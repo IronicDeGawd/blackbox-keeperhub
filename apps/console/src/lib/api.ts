@@ -1,5 +1,6 @@
 import { authHeader, setSession, type Session } from './session';
 import type {
+  Agent,
   AppConfig,
   ChaosContext,
   ChaosPlan,
@@ -14,6 +15,7 @@ import type {
   RemediateResponse,
   RemediationPlan,
   RemediationTxResult,
+  SignerHealth,
   Stats,
   WatchedAddress,
 } from './types';
@@ -240,6 +242,18 @@ export const api = {
   },
 
   // --- the public demo ------------------------------------------------------
+
+  /** Every agent the caller may read: unclaimed ones, and their own. */
+  agents: (init?: RequestInit): Promise<{ items: Agent[] }> => request('/api/agents', init),
+
+  /**
+   * Nonce, balance and pending state for one address, measured now.
+   *
+   * Costs an RPC lookup per call, so it is asked for a row at a time rather
+   * than for a whole list on load.
+   */
+  signerHealth: (signer: string, chainId: number, init?: RequestInit): Promise<SignerHealth> =>
+    request(`/api/signers/${encodeURIComponent(signer)}/health?chainId=${chainId}`, init),
 
   /**
    * The connection this organisation holds, and what it watches.

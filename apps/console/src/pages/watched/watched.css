@@ -45,3 +45,23 @@
 .listing__actions {
   text-align: right;
 }
+
+/* --- health and agents --------------------------------------------------- */
+
+/* Reads as one measured line rather than five separate facts. */
+.watched__health {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+}
+
+.watched__agents {
+  margin-top: var(--s6);
+}
+
+.watched__agents .listing {
+  margin-top: var(--s4);
+}

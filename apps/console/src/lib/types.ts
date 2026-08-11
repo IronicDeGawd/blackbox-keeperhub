@@ -251,6 +251,32 @@ export type ConnectionsConfig = {
   mine?: { status: string; expiresAt: string; watching: number } | null;
 };
 
+/**
+ * An agent as Blackbox knows it: the addresses it signs from, where it runs,
+ * and whether a fix for it can be executed rather than only proposed.
+ */
+export type Agent = {
+  agentId: string;
+  signers: string[];
+  chainIds: number[];
+  openIncidents: number;
+  label: string | null;
+  selfRemediation: boolean;
+};
+
+/** Measured, not inferred — every field here is read from a chain. */
+export type SignerHealth = {
+  signer: string;
+  chainId: number;
+  balanceWei: string;
+  latestNonce: number;
+  pendingNonce: number;
+  missingNonces: number[];
+  /** How many more actions the balance affords, when that can be worked out. */
+  runwayActions: number | null;
+  openIncidents: IncidentSummary[];
+};
+
 /** A KeeperHub workflow this organisation has picked. Their name, not ours. */
 export type WatchedWorkflow = {
   orgId: string;
