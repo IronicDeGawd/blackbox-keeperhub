@@ -49,9 +49,43 @@ export type OAuthOptions = {
   now?: () => Date;
 };
 
+/**
+ * What the provider handed back, beyond identity.
+ *
+ * `refreshToken` is present only when the operator asked to connect their
+ * account rather than merely sign in. It is returned rather than stored here so
+ * that the caller decides — this module knows about OAuth, not about what
+ * Blackbox chooses to keep.
+ */
+export type Grant = {
+  refreshToken: string | null;
+  /** What was actually granted, which may be less than was asked for. */
+  scope: string;
+};
+
 export type CompleteResult =
-  | { ok: true; orgId: string; subject: string; returnTo: string | null }
+  | ({
+      ok: true;
+      orgId: string;
+      subject: string;
+      returnTo: string | null;
+      /** Non-null when the operator asked to connect, with their chosen days. */
+      connectDays: number | null;
+    } & Grant)
   | { ok: false; reason: 'unknown_state' | 'exchange_failed' | 'no_org' };
+
+export type RefreshResult =
+  | { ok: true; accessToken: string; refreshToken: string | null; scope: string }
+  /** `invalid_grant`: the token is dead and asking again will not revive it. */
+  | { ok: false; reason: 'invalid_grant' | 'exchange_failed'; detail: string };
+
+type TokenResponse = {
+  access_token?: string;
+  refresh_token?: string;
+  scope?: string;
+  error?: string;
+  error_description?: string;
+};
 
 export class KeeperHubOAuth {
   private readonly fetchImpl: typeof fetch;
@@ -132,8 +166,15 @@ export class KeeperHubOAuth {
     return body.client_id;
   }
 
-  /** Begin a sign-in: returns the URL to send the operator to. */
-  async start(returnTo?: string): Promise<{ url: string; state: string }> {
+  /**
+   * Begin a sign-in: returns the URL to send the operator to.
+   *
+   * `connectDays` marks this as a request to *connect* the account rather than
+   * only sign in, and carries the lifetime the operator chose. It is remembered
+   * on this server rather than round-tripped through the browser, so nobody can
+   * turn a sign-in into a connection by editing a link.
+   */
+  async start(returnTo?: string, connectDays?: number): Promise<{ url: string; state: string }> {
     const metadata = await this.discover();
     const clientId = await this.clientId();
 
@@ -148,6 +189,7 @@ export class KeeperHubOAuth {
       codeVerifier,
       redirectUri: this.redirectUri,
       ...(returnTo ? { returnTo } : {}),
+      ...(connectDays === undefined ? {} : { connectDays }),
       at,
       expiresAt: new Date(at.getTime() + REQUEST_TTL_MS),
     });
@@ -173,8 +215,10 @@ export class KeeperHubOAuth {
    * anyone else would have to be treated as a claim rather than a fact, which
    * is exactly why one is never accepted from a caller.
    *
-   * The token itself is not kept. Identity is all that was asked for, and a
-   * stored token is a credential to lose.
+   * The access token is not kept — it is short-lived and identity is all a
+   * sign-in asked for. The refresh token is returned to the caller, which keeps
+   * it only when the operator asked to connect their account so that Blackbox
+   * can go on reading their runs.
    */
   async complete(params: { state: string; code: string }): Promise<CompleteResult> {
     const request = await takeAuthRequest(this.options.db, params.state, this.now());
@@ -196,14 +240,72 @@ export class KeeperHubOAuth {
     });
     if (!res.ok) return { ok: false, reason: 'exchange_failed' };
 
-    const body = (await res.json()) as { access_token?: string };
+    const body = (await res.json()) as TokenResponse;
     const claims = body.access_token ? readJwtClaims(body.access_token) : null;
     const orgId = typeof claims?.['org'] === 'string' ? claims['org'] : null;
     const subject = typeof claims?.['sub'] === 'string' ? claims['sub'] : '';
     if (!orgId) return { ok: false, reason: 'no_org' };
 
-    return { ok: true, orgId, subject, returnTo: request.returnTo };
+    return {
+      ok: true,
+      orgId,
+      subject,
+      returnTo: request.returnTo,
+      connectDays: request.connectDays,
+      refreshToken: body.refresh_token ?? null,
+      scope: body.scope ?? claimedScope(claims) ?? this.options.scope ?? DEFAULT_SCOPE,
+    };
   }
+
+  /**
+   * Trade a refresh token for a fresh access token.
+   *
+   * KeeperHub rotates: the token sent here is deleted on their side and a new
+   * one issued, so the reply is not optional to persist — losing it loses the
+   * connection. The caller writes the new token before using the access token,
+   * which is why this returns rather than stores.
+   *
+   * `invalid_grant` is separated from every other failure because the two
+   * deserve opposite treatment. A network error is worth retrying; a dead grant
+   * is not, and retrying it only delays telling the operator to reconnect.
+   */
+  async refresh(refreshToken: string): Promise<RefreshResult> {
+    const metadata = await this.discover();
+    const clientId = await this.clientId();
+
+    const res = await this.fetchImpl(metadata.token_endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: clientId,
+      }).toString(),
+    });
+
+    const body = (await res.json().catch(() => ({}))) as TokenResponse;
+    if (!res.ok || !body.access_token) {
+      const detail = body.error_description ?? body.error ?? `HTTP ${res.status}`;
+      // Their 401 on an unknown token means the same thing as invalid_grant.
+      const dead = body.error === 'invalid_grant' || res.status === 400 || res.status === 401;
+      return { ok: false, reason: dead ? 'invalid_grant' : 'exchange_failed', detail };
+    }
+
+    return {
+      ok: true,
+      accessToken: body.access_token,
+      refreshToken: body.refresh_token ?? null,
+      scope: body.scope ?? claimedScope(readJwtClaims(body.access_token)) ?? '',
+    };
+  }
+}
+
+/** Some providers state the scope only inside the token. Read it if so. */
+function claimedScope(claims: Record<string, unknown> | null): string | null {
+  const scope = claims?.['scope'];
+  if (typeof scope === 'string') return scope;
+  if (Array.isArray(scope)) return scope.filter((s) => typeof s === 'string').join(' ');
+  return null;
 }
 
 /**

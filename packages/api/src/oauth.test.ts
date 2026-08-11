@@ -174,4 +174,126 @@ describe('connect with KeeperHub', () => {
     expect(readJwtClaims('not-a-jwt')).toBeNull();
     expect(readJwtClaims('a.!!!.c')).toBeNull();
   });
+
+  it('hands back the refresh token and the scope actually granted', async () => {
+    const { impl } = provider({
+      token: {
+        access_token: jwt({ sub: 'user-1', org: 'org-9' }),
+        refresh_token: 'refresh-1',
+        scope: 'mcp:read',
+      },
+    });
+    const oauth = make(impl);
+    const { state } = await oauth.start();
+    expect(await oauth.complete({ state, code: 'c' })).toMatchObject({
+      ok: true,
+      refreshToken: 'refresh-1',
+      scope: 'mcp:read',
+    });
+  });
+
+  /** Signing in is not connecting: no refresh token means nothing to store. */
+  it('says plainly when no refresh token came back', async () => {
+    const { impl } = provider();
+    const oauth = make(impl);
+    const { state } = await oauth.start();
+    expect(await oauth.complete({ state, code: 'c' })).toMatchObject({
+      ok: true,
+      refreshToken: null,
+    });
+  });
+
+  it('falls back to the scope inside the token when the reply omits it', async () => {
+    const { impl } = provider({
+      token: { access_token: jwt({ sub: 'u', org: 'org-9', scope: 'mcp:read' }) },
+    });
+    const oauth = make(impl);
+    const { state } = await oauth.start();
+    expect(await oauth.complete({ state, code: 'c' })).toMatchObject({ scope: 'mcp:read' });
+  });
+});
+
+describe('trading a refresh token', () => {
+  let db: Database;
+  let close: () => Promise<void>;
+
+  beforeAll(() => {
+    ({ db, close } = createDb(URL_));
+  });
+  afterAll(async () => {
+    await close();
+  });
+  beforeEach(async () => {
+    await db.delete(oauthClients);
+  });
+
+  const make = (impl: typeof fetch): KeeperHubOAuth =>
+    new KeeperHubOAuth({
+      db,
+      baseUrl: 'https://blackbox.test',
+      issuer: 'https://provider.test',
+      fetchImpl: impl,
+    });
+
+  it('sends the refresh grant and returns the new pair', async () => {
+    const { calls, impl } = provider({
+      token: { access_token: jwt({ org: 'org-9' }), refresh_token: 'refresh-2', scope: 'mcp:read' },
+    });
+    const result = await make(impl).refresh('refresh-1');
+
+    expect(result).toMatchObject({ ok: true, refreshToken: 'refresh-2', scope: 'mcp:read' });
+    const exchange = calls.find((c) => c.url === metadata.token_endpoint);
+    expect(exchange?.body).toContain('grant_type=refresh_token');
+    expect(exchange?.body).toContain('refresh_token=refresh-1');
+  });
+
+  /**
+   * The distinction that matters: a dead grant must not be retried, and a
+   * transient fault must not cost somebody their connection.
+   */
+  it('separates a dead grant from a provider having a bad day', async () => {
+    const dead = provider({
+      tokenStatus: 400,
+      token: { error: 'invalid_grant', error_description: 'Refresh token not found' },
+    });
+    expect(await make(dead.impl).refresh('stale')).toMatchObject({
+      ok: false,
+      reason: 'invalid_grant',
+      detail: 'Refresh token not found',
+    });
+
+    const down = provider({ tokenStatus: 503, token: { error: 'unavailable' } });
+    expect(await make(down.impl).refresh('refresh-1')).toMatchObject({
+      ok: false,
+      reason: 'exchange_failed',
+    });
+  });
+
+  it('treats a 401 as a dead grant, since that is what it means here', async () => {
+    const { impl } = provider({ tokenStatus: 401, token: {} });
+    expect(await make(impl).refresh('stale')).toMatchObject({ reason: 'invalid_grant' });
+  });
+
+  it('refuses a 200 that carries no access token', async () => {
+    const { impl } = provider({ token: { refresh_token: 'refresh-2' } });
+    expect(await make(impl).refresh('refresh-1')).toMatchObject({ ok: false });
+  });
+
+  it('does not choke on a reply that is not JSON', async () => {
+    const impl = (async (url: string) => {
+      if (url.endsWith('/.well-known/oauth-authorization-server')) {
+        return new Response(JSON.stringify(metadata), { status: 200 });
+      }
+      if (url === metadata.registration_endpoint) {
+        return new Response(JSON.stringify({ client_id: 'client-1' }), { status: 201 });
+      }
+      return new Response('<html>gateway timeout</html>', { status: 504 });
+    }) as unknown as typeof fetch;
+
+    expect(await make(impl).refresh('refresh-1')).toMatchObject({
+      ok: false,
+      reason: 'exchange_failed',
+      detail: 'HTTP 504',
+    });
+  });
 });

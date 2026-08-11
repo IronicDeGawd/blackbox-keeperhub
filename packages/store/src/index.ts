@@ -808,6 +808,7 @@ export async function saveAuthRequest(
     codeVerifier: string;
     redirectUri: string;
     returnTo?: string | null;
+    connectDays?: number | null;
     at: Date;
     expiresAt: Date;
   },
@@ -817,6 +818,7 @@ export async function saveAuthRequest(
     codeVerifier: params.codeVerifier,
     redirectUri: params.redirectUri,
     returnTo: params.returnTo ?? null,
+    connectDays: params.connectDays ?? null,
     createdAt: params.at,
     expiresAt: params.expiresAt,
   });
@@ -833,7 +835,12 @@ export async function takeAuthRequest(
   db: Database,
   state: string,
   now: Date,
-): Promise<{ codeVerifier: string; redirectUri: string; returnTo: string | null } | null> {
+): Promise<{
+  codeVerifier: string;
+  redirectUri: string;
+  returnTo: string | null;
+  connectDays: number | null;
+} | null> {
   const [row] = await db
     .delete(oauthAuthRequests)
     .where(eq(oauthAuthRequests.state, state))
@@ -844,6 +851,7 @@ export async function takeAuthRequest(
     codeVerifier: row.codeVerifier,
     redirectUri: row.redirectUri,
     returnTo: row.returnTo,
+    connectDays: row.connectDays,
   };
 }
 

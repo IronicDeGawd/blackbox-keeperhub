@@ -45,6 +45,8 @@ import {
 import { diagnosticianFromEnv, keeperHubFromEnv, Runtime } from './runtime.js';
 import { httpKeyVerifier, Identity } from './identity.js';
 import { KeeperHubOAuth } from './oauth.js';
+import { Connections } from './connections.js';
+import { keyFrom } from './secrets.js';
 import { Webhooks } from './webhooks.js';
 import { WalletAuth } from './wallet-auth.js';
 import { installEventTrigger, installScheduledSweep, triggersAvailable } from './triggers.js';
@@ -215,6 +217,24 @@ const oauth = new KeeperHubOAuth({
   baseUrl: env['BLACKBOX_PUBLIC_URL'] ?? `http://127.0.0.1:${env['PORT'] ?? '8080'}`,
   ...(env['KEEPERHUB_OAUTH_CLIENT_ID'] ? { clientId: env['KEEPERHUB_OAUTH_CLIENT_ID'] } : {}),
 });
+
+/**
+ * Connected KeeperHub accounts, if this deployment can keep a credential.
+ *
+ * Without `BLACKBOX_ENCRYPTION_KEY` there is nowhere safe to put a refresh
+ * token, so connecting is refused rather than done in the clear. Sign-in still
+ * works; it simply grants identity and no ingestion.
+ */
+const connections = env['BLACKBOX_ENCRYPTION_KEY']
+  ? new Connections({
+      db,
+      oauth,
+      key: keyFrom(env['BLACKBOX_ENCRYPTION_KEY']),
+      onNeedsReauth: (orgId, reason) => {
+        console.warn(`[connections] ${orgId} needs re-authorising: ${reason}`);
+      },
+    })
+  : undefined;
 
 const runtime = new Runtime({
   db,
@@ -501,6 +521,7 @@ const app = await buildApp({
   bus,
   identity,
   oauth,
+  ...(connections ? { connections } : {}),
   /**
    * Named after this deployment, so a signature collected here is useless
    * anywhere else. Falls back to the host header's absence rather than

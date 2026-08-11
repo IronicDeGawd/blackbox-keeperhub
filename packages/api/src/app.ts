@@ -11,6 +11,7 @@ import {
   type Identity,
 } from './identity.js';
 import type { KeeperHubOAuth } from './oauth.js';
+import { lifetimeDays, MAX_LIFETIME_DAYS, MIN_LIFETIME_DAYS, type Connections } from './connections.js';
 import { codeNodeSnippet, type Webhooks } from './webhooks.js';
 import type { WalletAuth } from './wallet-auth.js';
 import {
@@ -152,6 +153,13 @@ export type AppOptions = {
    * suits a script and asks too much of a person.
    */
   oauth?: KeeperHubOAuth;
+  /**
+   * Stores connected KeeperHub accounts. Absent means sign-in still works and
+   * "connect" is refused rather than quietly downgraded to a sign-in — an
+   * operator who asked us to watch their workflows should not be told yes and
+   * then watched nothing.
+   */
+  connections?: Connections;
   /**
    * Inbound nudges. Absent means the loop is the only thing that reads runs,
    * which is slower but not broken.
@@ -386,9 +394,41 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
             requestId: request.id,
           });
         }
+
+        /**
+         * `connect=1` asks for more than a sign-in: it asks Blackbox to keep a
+         * read-only credential so it can go on reading this organisation's
+         * runs. Refused outright when this deployment cannot store one, since
+         * silently signing them in instead would promise a watch that never
+         * happens — which is exactly the gap this whole flow closes.
+         */
+        const wantsConnection = q['connect'] === '1' || q['connect'] === 'true';
+        if (wantsConnection && !options.connections) {
+          return reply.code(501).send({
+            error: 'not_configured',
+            detail:
+              'This deployment cannot store a connection; set BLACKBOX_ENCRYPTION_KEY to enable it.',
+            requestId: request.id,
+          });
+        }
+        const days = wantsConnection ? lifetimeDays(Number(q['days'])) : undefined;
+
         try {
-          const started = await oauth.start(returnTo);
-          return { url: started.url };
+          const started = await oauth.start(returnTo, days);
+          return {
+            url: started.url,
+            ...(days === undefined
+              ? {}
+              : {
+                  connect: {
+                    days,
+                    min: MIN_LIFETIME_DAYS,
+                    max: MAX_LIFETIME_DAYS,
+                    /** Said plainly: this is what the credential can and cannot do. */
+                    scope: 'mcp:read',
+                  },
+                }),
+          };
         } catch (error) {
           return reply.code(502).send({
             error: 'provider_unavailable',
@@ -432,6 +472,38 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
                 : 'KeeperHub declined the exchange.',
             requestId: request.id,
           });
+        }
+
+        /**
+         * Store the credential *before* the session exists.
+         *
+         * Their refresh tokens rotate, so a session handed out for a
+         * connection that failed to persist would be a caller believing their
+         * workflows are watched when the only credential for them is gone.
+         */
+        if (result.connectDays !== null && options.connections) {
+          if (!result.refreshToken) {
+            return reply.code(502).send({
+              error: 'no_refresh_token',
+              detail: 'KeeperHub returned no refresh token, so the account cannot be connected.',
+              requestId: request.id,
+            });
+          }
+          try {
+            await options.connections.connect({
+              orgId: result.orgId,
+              refreshToken: result.refreshToken,
+              scope: result.scope,
+              subject: result.subject,
+              days: result.connectDays,
+            });
+          } catch (error) {
+            return reply.code(500).send({
+              error: 'connection_not_stored',
+              detail: String((error as Error)?.message ?? error),
+              requestId: request.id,
+            });
+          }
         }
 
         const session = await identity.signInWithOrg({

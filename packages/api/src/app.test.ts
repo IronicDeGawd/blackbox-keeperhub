@@ -3,6 +3,10 @@ import type { FastifyInstance } from 'fastify';
 import { blackboxConfigSchema, CHAIN_IDS, type BlackboxConfig } from '@blackbox/core';
 import {
   createDb,
+  getKeeperhubConnection,
+  keeperhubConnections,
+  listWatchedWorkflows,
+  watchedWorkflows,
   incidents,
   recordRemediationAttempt,
   remediationLedger,
@@ -18,6 +22,8 @@ import {
 import { buildApp } from './app.js';
 import { Identity } from './identity.js';
 import { KeeperHubOAuth } from './oauth.js';
+import { Connections } from './connections.js';
+import { keyFrom } from './secrets.js';
 import { Webhooks } from './webhooks.js';
 import { WalletAuth } from './wallet-auth.js';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -46,6 +52,8 @@ beforeEach(async () => {
   await db.delete(oauthAuthRequests);
   await db.delete(oauthClients);
   await db.delete(webhookSecrets);
+  await db.delete(watchedWorkflows);
+  await db.delete(keeperhubConnections);
 });
 
 const config = (): BlackboxConfig =>
@@ -873,6 +881,136 @@ describe('connect with KeeperHub, over HTTP', () => {
     });
     expect(res.statusCode).toBe(401);
     expect(res.json().detail).toContain('expired or was already used');
+  });
+
+  /**
+   * Connecting asks for more than signing in: it asks Blackbox to keep a
+   * credential. A deployment that cannot keep one must say so, because signing
+   * the operator in instead would promise a watch that never happens.
+   */
+  it('refuses to connect when this deployment cannot store a credential', async () => {
+    const res = await (await instance()).inject({
+      url: '/api/auth/keeperhub/start?connect=1',
+    });
+    expect(res.statusCode).toBe(501);
+    expect(res.json().detail).toContain('BLACKBOX_ENCRYPTION_KEY');
+  });
+
+  it('still signs people in without one', async () => {
+    const res = await (await instance()).inject({ url: '/api/auth/keeperhub/start' });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('connecting an account, over HTTP', () => {
+  const metadata = {
+    issuer: 'https://provider.test',
+    authorization_endpoint: 'https://provider.test/oauth/authorize',
+    token_endpoint: 'https://provider.test/api/oauth/token',
+    registration_endpoint: 'https://provider.test/api/oauth/register',
+  };
+  const jwt = (claims: Record<string, unknown>) =>
+    ['h', Buffer.from(JSON.stringify(claims)).toString('base64url'), 's'].join('.');
+
+  const impl = ((withRefreshToken: boolean) =>
+    (async (url: string) => {
+      if (url.endsWith('/.well-known/oauth-authorization-server')) {
+        return new Response(JSON.stringify(metadata), { status: 200 });
+      }
+      if (url === metadata.registration_endpoint) {
+        return new Response(JSON.stringify({ client_id: 'client-1' }), { status: 201 });
+      }
+      if (url === metadata.token_endpoint) {
+        return new Response(
+          JSON.stringify({
+            access_token: jwt({ sub: 'u1', org: 'org-9' }),
+            ...(withRefreshToken ? { refresh_token: 'refresh-1' } : {}),
+            scope: 'mcp:read',
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response('', { status: 404 });
+    }) as unknown as typeof fetch) as (withRefreshToken: boolean) => typeof fetch;
+
+  const instance = async (withRefreshToken = true) => {
+    const fetchImpl = impl(withRefreshToken);
+    const oauth = new KeeperHubOAuth({
+      db,
+      baseUrl: 'https://blackbox.test',
+      issuer: 'https://provider.test',
+      fetchImpl,
+    });
+    return app({
+      identity: new Identity(db, { listKeys: async () => [{ id: 'k1' }] }),
+      oauth,
+      connections: new Connections({ db, oauth, key: keyFrom('e'.repeat(64)) }),
+    });
+  };
+
+  const connect = async (server: Awaited<ReturnType<typeof instance>>, query: string) => {
+    const started = await server.inject({ url: `/api/auth/keeperhub/start?${query}` });
+    const state = new globalThis.URL(started.json().url).searchParams.get('state');
+    const callback = await server.inject({
+      url: `/api/auth/keeperhub/callback?code=abc&state=${state}`,
+    });
+    return { started, callback };
+  };
+
+  it('states the lifetime and the scope before the operator leaves', async () => {
+    const server = await instance();
+    const started = await server.inject({ url: '/api/auth/keeperhub/start?connect=1&days=45' });
+    expect(started.json().connect).toMatchObject({ days: 45, min: 7, max: 60, scope: 'mcp:read' });
+  });
+
+  it('clamps a lifetime outside the range rather than refusing', async () => {
+    const server = await instance();
+    const started = await server.inject({ url: '/api/auth/keeperhub/start?connect=1&days=900' });
+    expect(started.json().connect.days).toBe(60);
+  });
+
+  it('stores the connection, active, with the chosen lifetime', async () => {
+    const server = await instance();
+    const { callback } = await connect(server, 'connect=1&days=7');
+    expect(callback.statusCode).toBe(201);
+
+    const row = await getKeeperhubConnection(db, 'org-9');
+    expect(row?.status).toBe('active');
+    expect(row?.scope).toBe('mcp:read');
+    expect(row?.refreshTokenEnc).not.toContain('refresh-1');
+    const life = (row!.expiresAt.getTime() - row!.connectedAt.getTime()) / (24 * 60 * 60 * 1000);
+    expect(Math.round(life)).toBe(7);
+  });
+
+  it('watches nothing until the operator picks', async () => {
+    const server = await instance();
+    await connect(server, 'connect=1');
+    expect(await listWatchedWorkflows(db, 'org-9')).toEqual([]);
+  });
+
+  /** Signing in keeps nothing, even though the same flow could have. */
+  it('keeps no credential for a plain sign-in', async () => {
+    const server = await instance();
+    await connect(server, 'returnTo=/incidents');
+    expect(await getKeeperhubConnection(db, 'org-9')).toBeNull();
+  });
+
+  it('refuses to pretend when the provider returns no refresh token', async () => {
+    const server = await instance(false);
+    const { callback } = await connect(server, 'connect=1');
+    expect(callback.statusCode).toBe(502);
+    expect(await getKeeperhubConnection(db, 'org-9')).toBeNull();
+  });
+
+  /** The intent lives on this server, so a doctored callback cannot add it. */
+  it('cannot be turned into a connection by editing the link', async () => {
+    const server = await instance();
+    const started = await server.inject({ url: '/api/auth/keeperhub/start' });
+    const state = new globalThis.URL(started.json().url).searchParams.get('state');
+    await server.inject({
+      url: `/api/auth/keeperhub/callback?code=abc&state=${state}&connect=1&days=60`,
+    });
+    expect(await getKeeperhubConnection(db, 'org-9')).toBeNull();
   });
 });
 

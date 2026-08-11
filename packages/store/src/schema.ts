@@ -356,6 +356,12 @@ export const oauthAuthRequests = pgTable('oauth_auth_requests', {
   redirectUri: text('redirect_uri').notNull(),
   /** Where to send the operator once they are signed in. */
   returnTo: text('return_to'),
+  /**
+   * Set when the operator asked to *connect* their account rather than only
+   * sign in, and how long they chose to let the connection live. Null means a
+   * plain sign-in, which keeps no credential at all.
+   */
+  connectDays: integer('connect_days'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 });

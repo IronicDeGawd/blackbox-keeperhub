@@ -92,6 +92,13 @@
       "when": 1786468436979,
       "tag": "0012_spooky_leopardon",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786468980233,
+      "tag": "0013_dark_psynapse",
+      "breakpoints": true
     }
   ]
 }
