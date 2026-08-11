@@ -8,21 +8,21 @@
 }
 
 .pagehead__title {
-  font-size: 20px;
+  font-size: var(--t-title);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
 .scanline {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-micro);
   color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
 }
 
 .linkbutton {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-micro);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -35,7 +35,7 @@
 
 .button {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--t-small);
   letter-spacing: 0.06em;
   color: var(--ink);
   border: 1px solid var(--rule-strong);
@@ -57,7 +57,7 @@
 
 .banner {
   padding: var(--s3) var(--s4);
-  font-size: 13px;
+  font-size: var(--t-body);
 }
 
 .banner--stale {
@@ -66,7 +66,7 @@
 .banner--stale strong {
   color: var(--warning);
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--t-body);
 }
 
 .state {
@@ -79,7 +79,7 @@
 .state__lead {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 14px;
+  font-size: var(--t-base);
   color: var(--ink);
 }
 
@@ -113,7 +113,7 @@
 
 .filter__label {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--t-micro);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -121,7 +121,7 @@
 
 .filter__control {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--t-small);
   color: var(--ink);
   background: var(--ground);
   border: 1px solid var(--rule-strong);
@@ -135,7 +135,7 @@
 
 .filters__clear {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-micro);
   color: var(--accent);
   border-bottom: 1px solid var(--accent);
 }
@@ -225,7 +225,7 @@
 
 .row__sev {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-micro);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -239,7 +239,7 @@
 
 .row__who {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--t-small);
   color: var(--ink-soft);
   display: inline-flex;
   align-items: center;
@@ -250,13 +250,13 @@
 
 .row__chain {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-micro);
   color: var(--ink-faint);
   white-space: nowrap;
 }
 
 .row__summary {
-  font-size: 13px;
+  font-size: var(--t-body);
   color: var(--ink-soft);
   overflow: hidden;
   text-overflow: ellipsis;

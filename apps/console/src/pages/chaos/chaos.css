@@ -1,11 +1,11 @@
 .banner--testnet {
   border-left: 3px solid var(--ok);
   padding: var(--s3) var(--s4);
-  font-size: 13px;
+  font-size: var(--t-body);
 }
 .banner--testnet strong {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--t-small);
   letter-spacing: 0.1em;
   color: var(--ok);
 }
@@ -39,7 +39,7 @@
 
 .scenario__id {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--t-small);
   font-weight: 600;
   color: var(--accent);
   letter-spacing: 0.08em;
@@ -47,7 +47,7 @@
 
 .scenario__name {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--t-body);
   color: var(--ink);
 }
 
@@ -55,12 +55,12 @@
 .scenario__determinism,
 .scenario__note {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--t-small);
 }
 
 .scenario__induces {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-micro);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -68,7 +68,7 @@
 
 .scenario__determinism {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-micro);
   color: var(--ink-faint);
 }
 
@@ -89,7 +89,7 @@
   display: flex;
   align-items: baseline;
   gap: var(--s3);
-  font-size: 12px;
+  font-size: var(--t-small);
 }
 
 .run__hashes {

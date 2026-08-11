@@ -1,7 +1,7 @@
 .watched__prose {
   margin: 0;
   max-width: 82ch;
-  font-size: 13px;
+  font-size: var(--t-body);
 }
 
 .watched__address {
@@ -13,7 +13,7 @@
   border-collapse: collapse;
   width: 100%;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--t-body);
 }
 
 .listing th,
@@ -26,7 +26,7 @@
 }
 
 .listing thead th {
-  font-size: 10px;
+  font-size: var(--t-micro);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-faint);

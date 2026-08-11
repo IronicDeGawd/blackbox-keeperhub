@@ -1,6 +1,8 @@
 /*
- * Design tokens, taken unchanged from docs/console-spec.html so the console and
- * its own spec are demonstrably the same object.
+ * Design tokens. The palette and the spacing step are taken unchanged from
+ * docs/console-spec.html so the console and its own spec are demonstrably the
+ * same object. The type scale below is the one thing added: the spec sets sizes
+ * inline in px, which does not survive a reader's own font size or a projector.
  *
  * The console commits to dark — index.html stamps data-theme="dark" — because
  * it is a tool someone keeps open during an incident. Light is kept whole and
@@ -63,6 +65,22 @@
 :root {
   --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  /*
+   * Type scale. Every size in the console comes from this list and nothing
+   * else, in rem rather than px so a reader who has raised their browser's
+   * base size gets a bigger console rather than the same cramped one.
+   *
+   * 0.75rem is the floor. Below that the mono labels stop being readable on a
+   * projector, and this is a thing people watch someone else drive.
+   */
+  --t-micro: 0.75rem; /* 12px — eyebrows, tags, column heads */
+  --t-small: 0.8125rem; /* 13px — dense secondary text */
+  --t-body: 0.875rem; /* 14px — table and panel body */
+  --t-base: 0.9375rem; /* 15px — document default */
+  --t-lead: 1.0625rem; /* 17px — section leads */
+  --t-title: 1.375rem; /* 22px — page titles */
+  --t-display: 1.875rem; /* 30px — the landing statement, once */
 
   /* A 4px step. Density is the point, so the scale starts tight. */
   --s1: 4px;

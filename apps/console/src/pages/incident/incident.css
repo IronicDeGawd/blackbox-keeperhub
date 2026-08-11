@@ -15,7 +15,7 @@
 
 .incident__summary {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--t-lead);
   color: var(--ink);
   max-width: 80ch;
 }
@@ -31,7 +31,7 @@
 
 .incident__meta dt {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--t-micro);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -40,7 +40,7 @@
 .incident__meta dd {
   margin: 2px 0 0;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--t-body);
   color: var(--ink);
 }
 
@@ -85,7 +85,7 @@
 .subsection__note {
   margin: 0;
   max-width: 80ch;
-  font-size: 12.5px;
+  font-size: var(--t-body);
 }
 
 .skeleton-panel {
@@ -99,7 +99,7 @@
   border-collapse: collapse;
   width: 100%;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--t-body);
 }
 
 .facts th,
@@ -156,7 +156,7 @@
 }
 
 .confirm__text {
-  font-size: 13px;
+  font-size: var(--t-body);
   color: var(--ink);
 }
 
@@ -181,7 +181,7 @@
 .refusal__lead {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--t-body);
   color: var(--accent);
 }
 
@@ -197,7 +197,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--s2);
-  font-size: 13px;
+  font-size: var(--t-body);
 }
 
 /* --- propose ------------------------------------------------------------- */
@@ -236,7 +236,7 @@
 
 .rca__badge {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-micro);
   letter-spacing: 0.06em;
   border: 1px solid var(--rule-strong);
   padding: 1px 6px;
@@ -251,7 +251,7 @@
 
 .rca__summary {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--t-base);
   line-height: 1.6;
   max-width: 80ch;
 }
@@ -260,7 +260,7 @@
   margin: 0;
   padding-left: var(--s4);
   max-width: 80ch;
-  font-size: 13px;
+  font-size: var(--t-body);
   color: var(--ink-soft);
 }
 .rca__list li {
@@ -273,21 +273,21 @@
 
 .rca__recommendation {
   margin: 0;
-  font-size: 13.5px;
+  font-size: var(--t-base);
   max-width: 80ch;
   color: var(--ink);
 }
 
 .rca__version {
   margin: 0;
-  font-size: 10.5px;
+  font-size: var(--t-micro);
 }
 
 /* --- remediation ---------------------------------------------------------- */
 
 .outcome {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-micro);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   border: 1px solid var(--rule-strong);
@@ -328,7 +328,7 @@
 
 .attempt__status {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-micro);
   letter-spacing: 0.08em;
   color: var(--ink-soft);
 }
@@ -360,7 +360,7 @@
 
 .proof .explorer,
 .proof .copyable {
-  font-size: 14px;
+  font-size: var(--t-base);
   word-break: break-all;
   white-space: normal;
 }
@@ -370,7 +370,7 @@
   padding: var(--s3);
   border-left: 3px solid var(--accent);
   background: var(--surface-sunk);
-  font-size: 13px;
+  font-size: var(--t-body);
   max-width: 80ch;
 }
 
@@ -383,7 +383,7 @@
 
 .attempt__meta dt {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--t-micro);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -391,7 +391,7 @@
 
 .attempt__meta dd {
   margin: 2px 0 0;
-  font-size: 12.5px;
+  font-size: var(--t-body);
   color: var(--ink);
 }
 
@@ -418,7 +418,7 @@
 
 .guard {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-micro);
   border: 1px solid var(--rule);
   padding: 1px 6px;
   color: var(--ink-soft);
@@ -466,7 +466,7 @@
   border: 1px solid var(--rule-strong);
   background: var(--surface);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-micro);
   color: var(--ink-soft);
   position: relative;
   z-index: 1;
@@ -495,13 +495,13 @@
 }
 
 .event__label {
-  font-size: 13px;
+  font-size: var(--t-body);
   color: var(--ink);
 }
 
 .event__kind {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--t-micro);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -513,7 +513,7 @@
   gap: var(--s1) var(--s4);
   margin-top: 2px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-micro);
   color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
 }

@@ -18,7 +18,7 @@
 
 .classbadge {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--t-small);
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--accent);
@@ -27,7 +27,7 @@
 
 .ruletag {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-micro);
   letter-spacing: 0.08em;
   color: var(--ink-faint);
   border: 1px solid var(--rule);
@@ -38,7 +38,7 @@
 /* Outline, never filled — a fill would read as a button. */
 .pill {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-micro);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   padding: 1px 7px;
@@ -71,7 +71,7 @@
 
 .attrib {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-micro);
   letter-spacing: 0.04em;
   color: var(--ink-faint);
   white-space: nowrap;
@@ -86,7 +86,7 @@
 
 .reltime {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--t-small);
   color: var(--ink-faint);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -94,7 +94,7 @@
 
 .copyable {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--t-small);
   color: var(--ink-soft);
   border-bottom: 1px dotted var(--rule-strong);
   padding: 0;
@@ -107,7 +107,7 @@
 
 .explorer {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--t-small);
   color: var(--accent);
   white-space: nowrap;
 }

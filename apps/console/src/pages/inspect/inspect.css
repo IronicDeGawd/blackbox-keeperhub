@@ -1,7 +1,7 @@
 .inspect__lead {
   margin: var(--s2) 0 0;
   max-width: 82ch;
-  font-size: 13px;
+  font-size: var(--t-body);
 }
 
 .inspect__input {
@@ -11,7 +11,7 @@
 /* The replay verdict is the answer, so it is not set in small print. */
 .inspect__verdict {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--t-base);
   color: var(--ink);
   max-width: 82ch;
 }

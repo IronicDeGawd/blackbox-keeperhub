@@ -28,7 +28,7 @@
 
 .brand {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--t-body);
   font-weight: 600;
   letter-spacing: 0.2em;
   text-transform: uppercase;
@@ -60,13 +60,13 @@
   border: 1px solid var(--rule-strong);
   padding: 2px var(--s2);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-micro);
   color: var(--ink-soft);
   white-space: nowrap;
 }
 
 .chain__tag {
-  font-size: 10px;
+  font-size: var(--t-micro);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -93,7 +93,7 @@
   border-left: 3px solid var(--critical);
   color: var(--critical);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--t-small);
 }
 
 /* --- connection ---------------------------------------------------------- */
@@ -103,7 +103,7 @@
   align-items: center;
   gap: var(--s2);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-micro);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -173,7 +173,7 @@
 
 .stat__label {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--t-micro);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -182,7 +182,7 @@
 
 .stat__value {
   font-family: var(--font-mono);
-  font-size: 15px;
+  font-size: var(--t-lead);
   font-variant-numeric: tabular-nums;
   color: var(--ink);
   display: flex;
@@ -197,7 +197,7 @@
 }
 
 .stat__part-label {
-  font-size: 10px;
+  font-size: var(--t-micro);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -231,7 +231,7 @@
   padding: var(--s2) var(--s4);
   border-left: 2px solid transparent;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--t-body);
   color: var(--ink-soft);
   text-decoration: none;
 }
@@ -251,7 +251,7 @@
   margin-top: var(--s5);
   padding: 0 var(--s4);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-micro);
   line-height: 1.5;
   color: var(--ink-faint);
 }
