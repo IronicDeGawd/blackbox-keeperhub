@@ -168,6 +168,8 @@ export type AppOptions = {
    * Installs KeeperHub-side triggers that call this deployment. Absent means
    * the local tick is the only thing that drives detection.
    */
+  /** Reported at `/api/config`; resolved once at startup. */
+  triggerAvailability?: { available: boolean; reason?: string };
   triggers?: {
     installSchedule(
       orgId: string,
@@ -281,6 +283,12 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       keeperhub: rulesFor('keeperhub'),
       signer: rulesFor('signer'),
     },
+    /**
+     * Whether KeeperHub can host a trigger for this organisation. Their code
+     * action is Pro-only, so on a free plan the answer is no — better said here
+     * than discovered by an operator pressing a button that 402s.
+     */
+    ...(options.triggerAvailability ? { triggers: options.triggerAvailability } : {}),
     // The console hides controls it cannot drive rather than showing buttons
     // that 404.
     capabilities: {
@@ -695,7 +703,15 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         });
       } catch (error) {
         const message = String((error as Error)?.message ?? error);
-        const tooSmall = (error as Error)?.name === 'ScheduleIntervalTooSmall';
+        const name = (error as Error)?.name;
+        // Their plan gate is the operator's answer to give, not a fault on
+        // either side — so it reads as 402 rather than as our failure.
+        if (name === 'UpgradeRequired') {
+          return reply
+            .code(402)
+            .send({ error: 'upgrade_required', detail: message, requestId: request.id });
+        }
+        const tooSmall = name === 'ScheduleIntervalTooSmall';
         return reply
           .code(tooSmall ? 400 : 502)
           .send({

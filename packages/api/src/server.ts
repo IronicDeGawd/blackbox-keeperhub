@@ -47,7 +47,7 @@ import { httpKeyVerifier, Identity } from './identity.js';
 import { KeeperHubOAuth } from './oauth.js';
 import { Webhooks } from './webhooks.js';
 import { WalletAuth } from './wallet-auth.js';
-import { installEventTrigger, installScheduledSweep } from './triggers.js';
+import { installEventTrigger, installScheduledSweep, triggersAvailable } from './triggers.js';
 import { EventWebhook } from './event-webhook.js';
 
 /**
@@ -489,6 +489,12 @@ if (env['BLACKBOX_EVENT_WEBHOOK_URL']) {
   }).attach(bus);
 }
 
+/**
+ * Asked once at startup rather than per request: a plan does not change often,
+ * and a billing call on every `/api/config` would be rude to their API.
+ */
+const triggerAvailability = keeperHub ? await triggersAvailable(keeperHub) : undefined;
+
 const app = await buildApp({
   db,
   config,
@@ -505,6 +511,7 @@ const app = await buildApp({
   webhooks,
   ...(publicUrl ? { publicUrl } : {}),
   ...(triggers ? { triggers } : {}),
+  ...(triggerAvailability ? { triggerAvailability } : {}),
   ...(publicAgentIds ? { publicAgentIds } : {}),
   // Diagnosis spends a model call, and the route is open to anyone. The
   // background loop already refuses to explain the same incident twice for

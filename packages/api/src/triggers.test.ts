@@ -4,6 +4,8 @@ import {
   installScheduledSweep,
   MIN_SCHEDULE_SECONDS,
   ScheduleIntervalTooSmall,
+  triggersAvailable,
+  UpgradeRequired,
   type WorkflowClient,
 } from './triggers.js';
 
@@ -156,5 +158,71 @@ describe('contract event trigger', () => {
         '/api/webhooks/keeperhub',
       );
     }
+  });
+});
+
+describe('audit findings 5 and 6', () => {
+  const upgradeError = Object.assign(new Error('paid plan'), {
+    status: 402,
+    body: { code: 'upgrade_required' },
+  });
+
+  /** Their code action is Pro-only, and it is the only one that can call us. */
+  it('reports the plan gate as such, rather than as a provider failure', async () => {
+    const client: WorkflowClient = {
+      listWorkflows: async () => [],
+      createWorkflow: async () => Promise.reject(upgradeError),
+      patchWorkflow: async () => {},
+    };
+    await expect(
+      installScheduledSweep({ ...base, client, intervalSeconds: 300 }),
+    ).rejects.toBeInstanceOf(UpgradeRequired);
+  });
+
+  /**
+   * KeeperHub lists soft-deleted workflows, so matching by name finds corpses.
+   * Patching one installs a trigger that will never fire.
+   */
+  it('creates a new workflow when patching the named one fails', async () => {
+    const created: string[] = [];
+    const client: WorkflowClient = {
+      listWorkflows: async () => [{ id: 'wf-deleted', name: 'blackbox/triggers/sweep' }],
+      createWorkflow: async (d) => {
+        created.push(d.name);
+        return { id: 'wf-fresh' };
+      },
+      patchWorkflow: async (id) => {
+        if (id === 'wf-deleted') throw new Error('workflow not found');
+      },
+    };
+    const result = await installScheduledSweep({ ...base, client, intervalSeconds: 300 });
+    expect(result).toEqual({ workflowId: 'wf-fresh', created: true });
+    expect(created).toEqual(['blackbox/triggers/sweep']);
+  });
+
+  it('does not mistake the plan gate for a deleted workflow', async () => {
+    const client: WorkflowClient = {
+      listWorkflows: async () => [{ id: 'wf-1', name: 'blackbox/triggers/sweep' }],
+      createWorkflow: async () => {
+        throw new Error('should not be reached');
+      },
+      patchWorkflow: async () => Promise.reject(upgradeError),
+    };
+    await expect(
+      installScheduledSweep({ ...base, client, intervalSeconds: 300 }),
+    ).rejects.toBeInstanceOf(UpgradeRequired);
+  });
+
+  it('says whether an organisation can host a trigger at all', async () => {
+    expect(await triggersAvailable({ getSubscription: async () => ({ plan: 'free' }) })).toMatchObject(
+      { available: false },
+    );
+    expect(await triggersAvailable({ getSubscription: async () => ({ plan: 'pro' }) })).toEqual({
+      available: true,
+    });
+    // A billing read that fails must not hide a feature somebody paid for.
+    expect(
+      await triggersAvailable({ getSubscription: async () => Promise.reject(new Error('down')) }),
+    ).toEqual({ available: true });
   });
 });

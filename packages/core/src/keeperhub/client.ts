@@ -604,6 +604,40 @@ export class KeeperHubClient {
   }
 
   /**
+   * The organisation's plan, and whether it may still start a trial.
+   *
+   * Read because features are gated by it: the code action a trigger needs is
+   * Pro-only, and finding that out at install time means offering a button that
+   * fails. The trial terms come from here too, live rather than assumed.
+   */
+  async getSubscription(): Promise<{
+    plan: string;
+    status?: string;
+    trial?: { eligible: boolean; days: number; tier: string };
+  }> {
+    const res = await this.request<Record<string, unknown>>('/billing/subscription');
+    if (res.status !== 200) {
+      throw new KeeperHubError('getSubscription failed', res.status, res.body);
+    }
+    const body = res.body ?? {};
+    const sub = (body['subscription'] ?? {}) as { plan?: unknown; status?: unknown };
+    const trial = body['trial'] as { eligible?: unknown; days?: unknown; tier?: unknown } | undefined;
+    return {
+      plan: typeof sub.plan === 'string' ? sub.plan : 'free',
+      ...(typeof sub.status === 'string' ? { status: sub.status } : {}),
+      ...(trial
+        ? {
+            trial: {
+              eligible: trial.eligible === true,
+              days: Number(trial.days ?? 0),
+              tier: String(trial.tier ?? ''),
+            },
+          }
+        : {}),
+    };
+  }
+
+  /**
    * The organisation's daily execution budget and what it has spent today.
    *
    * `dailyCapWei` is null when no cap is configured. That is not a cap of zero

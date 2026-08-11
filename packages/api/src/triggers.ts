@@ -40,6 +40,25 @@ export type TriggerInstallOptions = {
  */
 export const MIN_SCHEDULE_SECONDS = 60;
 
+/**
+ * Their plan gate, hit at install time.
+ *
+ * `code/run-code` is Pro-only, and it is the only action type on their platform
+ * that can call an external URL — the others are contract calls, transfers,
+ * Discord, SendGrid and AI text. So on a free organisation there is no way for
+ * a KeeperHub workflow to reach us at all, and our own tick stays the only
+ * thing driving detection.
+ */
+export class UpgradeRequired extends Error {
+  constructor(readonly detail: unknown) {
+    super(
+      'Installing a KeeperHub trigger needs a paid plan: the code action it uses is Pro-only, ' +
+        'and it is the only action that can call an external URL. Blackbox keeps polling meanwhile.',
+    );
+    this.name = 'UpgradeRequired';
+  }
+}
+
 export class ScheduleIntervalTooSmall extends Error {
   constructor(seconds: number) {
     super(
@@ -108,15 +127,79 @@ async function upsert(
 ): Promise<{ workflowId: string; created: boolean }> {
   const existing = (await options.client.listWorkflows()).find((w) => w.name === name);
   const definition = { nodes, edges: [edge], enabled: true };
+
   if (existing) {
-    await options.client.patchWorkflow(existing.id, definition);
-    return { workflowId: existing.id, created: false };
+    try {
+      await options.client.patchWorkflow(existing.id, definition);
+      return { workflowId: existing.id, created: false };
+    } catch (error) {
+      if (isUpgradeRequired(error)) throw new UpgradeRequired(error);
+      /**
+       * KeeperHub's listing does not filter soft-deleted workflows: deleting
+       * one sets `deleted_at`, and `GET /api/workflows` filters on the
+       * organisation alone, so a deleted row is still returned. Matching by
+       * name therefore finds corpses, and patching one installs a trigger that
+       * will never fire. A failed patch is treated as a reason to create.
+       */
+      const created = await create(options, name, definition);
+      return { workflowId: created, created: true };
+    }
   }
-  const created = await options.client.createWorkflow({ name, ...definition });
-  // Create persists the nodes; the schedule and event registrations are synced
-  // on update, so the patch is not redundant even immediately after creation.
-  await options.client.patchWorkflow(created.id, definition);
-  return { workflowId: created.id, created: true };
+
+  const created = await create(options, name, definition);
+  return { workflowId: created, created: true };
+}
+
+async function create(
+  options: TriggerInstallOptions,
+  name: string,
+  definition: { nodes: unknown[]; edges: unknown[]; enabled: boolean },
+): Promise<string> {
+  try {
+    const created = await options.client.createWorkflow({ name, ...definition });
+    // Create persists the nodes; the schedule and event registrations are
+    // synced on update, so the patch is not redundant even immediately after.
+    await options.client.patchWorkflow(created.id, definition);
+    return created.id;
+  } catch (error) {
+    if (isUpgradeRequired(error)) throw new UpgradeRequired(error);
+    throw error;
+  }
+}
+
+/** Their 402 carries `code: "upgrade_required"` and names the gated feature. */
+function isUpgradeRequired(error: unknown): boolean {
+  const status = (error as { status?: unknown })?.status;
+  const body = (error as { body?: { code?: unknown } })?.body;
+  return status === 402 || body?.code === 'upgrade_required';
+}
+
+/**
+ * Whether this organisation can host a trigger at all.
+ *
+ * Reported by the API rather than discovered at install time, so a console can
+ * say "your plan does not allow this" instead of offering a button that fails.
+ */
+export async function triggersAvailable(client: {
+  getSubscription?: () => Promise<{ plan?: string }>;
+}): Promise<{ available: boolean; reason?: string }> {
+  if (!client.getSubscription) return { available: true };
+  try {
+    const sub = await client.getSubscription();
+    if (!sub.plan || sub.plan === 'free') {
+      return {
+        available: false,
+        reason:
+          'KeeperHub triggers need a paid plan: the code action they use is Pro-only. ' +
+          'Blackbox polls on its own tick meanwhile.',
+      };
+    }
+    return { available: true };
+  } catch {
+    // Unknown is not the same as unavailable, and refusing on a failed billing
+    // read would hide a feature the operator has paid for.
+    return { available: true };
+  }
 }
 
 /**
