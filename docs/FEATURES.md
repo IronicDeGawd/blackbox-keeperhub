@@ -7,7 +7,8 @@ Audited **2026-08-11** against the live deployment
 `7xqazg6qi91img6phh7gu`, and Sepolia. Nothing below is inferred from the test
 suite alone — where a row says *live*, it was exercised against the real thing.
 
-**Result: 71 of 74 checks passed** on the first pass. Three failed and are
+**Result: 71 of 74 checks passed** on the first pass, over 74 checks; a second
+pass added the MCP surface and a real second tenant, for **94 checks in total**. Three failed and are
 listed as findings, with seven more raised by reading output that had passed —
 and one more found while fixing another, making eleven.
 
@@ -24,6 +25,7 @@ Harnesses:
 | `tools/audit/audit-live.ts` | KeeperHub-facing features, live | copy into `packages/api/src`, run with vitest |
 | `tools/audit/audit-cycle.ts` | wallet-signed chaos, end to end | as above — **spends real gas** |
 | `tools/audit/audit-fix.ts` | propose-and-verify remediation | as above — **spends real gas** |
+| `tools/audit/audit-mcp.ts` | the MCP surface, and a new tenant | as above — **creates a real KeeperHub account** |
 
 The last three live in `tools/` rather than in a package on purpose: they mutate
 a real organisation and spend real money, and must never run in CI.
@@ -161,7 +163,73 @@ Run against the deployment on 2026-08-11. Every step is a real transaction.
    from 122 to **124**, so both the fill and the previously stuck transaction
    landed.
 
-## 8. Deployment
+## 8. MCP — Blackbox as a tool, and KeeperHub as one
+
+The surface an *agent* uses rather than a person, which the first pass missed
+entirely. All exercised live against the deployment.
+
+| Tool | Result |
+| --- | --- |
+| `list_incidents` | ✅ returned the audit's own NONCE_GAP, resolved |
+| `get_signer_health` | ✅ *"holds 60331275632120200 wei, nonce 124 (pending 124), 0 open incident(s)"* |
+| `diagnose_execution` | ✅ explained a real hash, and said plainly that no rule fired |
+| `watch_address` | ✅ registered and confirmed |
+| `get_remediation_plan` | ✅ *"P2: fill missing nonce 122 … must be signed by 0xb9c5…"* |
+| `request_remediation` | ✅ **refused without `authorized: true`** — the only tool that spends money, and an agent must not reach it by accident while exploring |
+| malformed arguments | ✅ returned as a readable result an agent can correct, not a transport error |
+| tool descriptions | ✅ all six present, so a model can choose between them |
+
+And the other direction — Blackbox as an MCP *client* of KeeperHub:
+
+| Feature | Result |
+| --- | --- |
+| List their tools | ✅ **live** — 44 tools |
+| Call one | ✅ **live** — `list_executions` returned real runs |
+
+## 9. A genuinely new tenant
+
+Tenancy had only ever been proven against fixtures. This created a real second
+organisation and checked it from the outside.
+
+A fresh wallet `0xe6abB952…` signed in to KeeperHub, which creates a new user
+*and* a new organisation for an address it has not seen. That organisation
+minted its own key, and used it to sign in to Blackbox:
+
+| Check | Result |
+| --- | --- |
+| Blackbox sign-in with a brand-new org key | ✅ 201, org `ox6545scegkdi3k01lkhj` |
+| Resolves to a *different* tenant from ours | ✅ not `7xqazg6qi91img6phh7gu` |
+| Owns nothing on arrival | ✅ `agents: []` |
+| Claiming an agent we own | ✅ **403 — "Agent 0xb9c58185 belongs to another organisation"** |
+| Registering something of its own | ✅ 201, `owned: true` |
+| Reading the public demo | ✅ sees the demo incidents |
+
+That is the ownership model working against a stranger rather than a stub.
+
+## 10. Package coverage
+
+Every package has its own suite, run in CI:
+
+| Package | Tests |
+| --- | --- |
+| core | 74 |
+| detector | 89 |
+| recorder | 69 |
+| remediator | 99 |
+| api | 157 |
+| store | 32 |
+| diagnostician | 37 |
+| alerter | 21 |
+| mcp | 21 |
+| chaos | 16 |
+
+The one surface never exercised live is **server-signed chaos** (`/api/chaos/run`
+and the harness behind it). It needs a spendable key, which this deployment
+deliberately does not hold — its 404 there is the feature working. It is covered
+by the chaos package's own suite and by the wallet-signed path, which is the
+one a visitor actually uses.
+
+## 11. Deployment
 
 | Feature | Result |
 | --- | --- |
