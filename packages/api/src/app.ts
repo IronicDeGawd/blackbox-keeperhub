@@ -295,6 +295,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       budget: {
         maxRemediationsPerHour: config.remediation.budget.maxRemediationsPerHour,
         maxGasWeiPerHour: config.remediation.budget.maxGasWeiPerHour.toString(),
+        /** Per agent — which for a KeeperHub agent means per workflow. */
+        maxRemediationsPerDayPerAgent: config.remediation.budget.maxRemediationsPerDayPerAgent,
       },
     },
     /**

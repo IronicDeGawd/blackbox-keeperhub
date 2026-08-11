@@ -51,6 +51,15 @@ const remediationSchema = z.object({
   budget: z
     .object({
       maxRemediationsPerHour: z.number().int().positive().default(10),
+      /**
+       * Per agent, per day — and since a KeeperHub agent is a workflow, that
+       * means per workflow. The hourly cap above is per signer, and every
+       * workflow in an organisation executes from one managed wallet, so on
+       * its own it lets a single noisy workflow spend the whole
+       * organisation's allowance. Three a day is enough for a real fix and
+       * nowhere near enough for a retry loop.
+       */
+      maxRemediationsPerDayPerAgent: z.number().int().positive().default(3),
       maxGasWeiPerHour: z
         .union([z.string(), z.bigint()])
         .transform((v) => (typeof v === 'bigint' ? v : BigInt(v)))

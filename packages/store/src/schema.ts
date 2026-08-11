@@ -266,9 +266,18 @@ export const remediationLedger = pgTable(
     txHash: text('tx_hash'),
     /** signer | keeperhub | user-signed. Absent on older rows. */
     executor: text('executor'),
+    /**
+     * Which agent this was spent on — since a KeeperHub agent is a workflow,
+     * this is what makes a per-workflow budget possible. Every workflow in an
+     * organisation executes from one managed wallet, so a per-signer budget
+     * collapses into a single bucket and one noisy workflow can exhaust the
+     * whole organisation's allowance. Absent on rows written before this.
+     */
+    agentId: text('agent_id'),
   },
   (t) => ({
     budget: index('remediation_ledger_budget_idx').on(t.signer, t.chainId, t.attemptedAt),
+    byAgent: index('remediation_ledger_agent_idx').on(t.agentId, t.attemptedAt),
     byIncident: index('remediation_ledger_incident_idx').on(t.incidentId),
   }),
 );

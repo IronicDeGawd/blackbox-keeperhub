@@ -161,6 +161,63 @@ describe('universal guards block independently', () => {
     expect(r.failed[0]!.reason).toMatch(/wei spent/);
   });
 
+  /**
+   * Every workflow in a KeeperHub organisation executes from one managed
+   * wallet, so the per-signer cap above is a single bucket shared by all of
+   * them. This is the workflow's own allowance.
+   */
+  it("one workflow's daily cap blocks on its own", async () => {
+    for (let i = 0; i < 3; i++) {
+      await recordRemediationAttempt(db, {
+        id: `d${i}`,
+        incidentId: `other-${i}`,
+        playbookId: 'P1',
+        signer: SIGNER,
+        chainId: CHAIN_IDS.sepolia,
+        agentId: 'chaos',
+        attemptedAt: new Date(T0.getTime() - i * 60 * 60_000),
+        status: 'succeeded',
+      });
+    }
+    const r = await evaluateGuards(guardCtx());
+    expect(r.failed.map((f) => f.guard)).toEqual(['agent_daily_budget']);
+    expect(r.failed[0]!.reason).toMatch(/reaches its cap of 3/);
+  });
+
+  it("another workflow's spending does not count against this one", async () => {
+    for (let i = 0; i < 5; i++) {
+      await recordRemediationAttempt(db, {
+        id: `e${i}`,
+        incidentId: `other-${i}`,
+        playbookId: 'P1',
+        signer: SIGNER,
+        chainId: CHAIN_IDS.sepolia,
+        agentId: 'kh:some-other-workflow',
+        attemptedAt: new Date(T0.getTime() - i * 60 * 60_000),
+        status: 'succeeded',
+      });
+    }
+    // Five on the shared wallet, none on this workflow: the hourly per-signer
+    // ceiling still applies, and it is nowhere near reached.
+    expect((await evaluateGuards(guardCtx())).failed).toEqual([]);
+  });
+
+  it('yesterday does not count against today', async () => {
+    for (let i = 0; i < 3; i++) {
+      await recordRemediationAttempt(db, {
+        id: `f${i}`,
+        incidentId: `other-${i}`,
+        playbookId: 'P1',
+        signer: SIGNER,
+        chainId: CHAIN_IDS.sepolia,
+        agentId: 'chaos',
+        attemptedAt: new Date(T0.getTime() - 25 * 60 * 60_000),
+        status: 'succeeded',
+      });
+    }
+    expect((await evaluateGuards(guardCtx())).failed).toEqual([]);
+  });
+
   it('spend outside the rolling hour does not count', async () => {
     await recordRemediationAttempt(db, {
       id: 'old',

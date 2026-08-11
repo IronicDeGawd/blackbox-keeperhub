@@ -1,0 +1,2 @@
+ALTER TABLE "remediation_ledger" ADD COLUMN "agent_id" text;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "remediation_ledger_agent_idx" ON "remediation_ledger" USING btree ("agent_id","attempted_at");

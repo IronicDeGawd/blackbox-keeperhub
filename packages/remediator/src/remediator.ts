@@ -308,6 +308,8 @@ export class Remediator {
       playbookId,
       signer: incident.signer,
       chainId: incident.chainId,
+      // What the per-agent daily cap counts.
+      agentId: incident.agentId,
       attemptedAt: at,
       // Cost, not units. `gasUsed` is a count of gas; what the budget guard
       // and the ledger care about is what it was bought for.

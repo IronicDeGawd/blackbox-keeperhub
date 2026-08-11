@@ -624,6 +624,32 @@ export async function remediationSpendSince(
   };
 }
 
+/**
+ * What one agent has spent since a moment.
+ *
+ * Separate from the per-signer figure because they answer different questions:
+ * per signer bounds what one wallet can spend in an hour, per agent stops a
+ * single workflow retrying all day on an organisation's shared wallet.
+ */
+export async function remediationSpendForAgent(
+  db: Database,
+  params: { agentId: string; since: Date },
+): Promise<RemediationSpend> {
+  const rows = await db
+    .select()
+    .from(remediationLedger)
+    .where(
+      and(
+        eq(remediationLedger.agentId, params.agentId),
+        gte(remediationLedger.attemptedAt, params.since),
+      ),
+    );
+  return {
+    count: rows.length,
+    gasWei: rows.reduce((sum, r) => sum + BigInt(r.gasSpentWei), 0n),
+  };
+}
+
 /** How many attempts this incident has already had. */
 export async function attemptsForIncident(db: Database, incidentId: string): Promise<number> {
   const rows = await db
@@ -646,6 +672,7 @@ export async function recordRemediationAttempt(
     status: string;
     txHash?: string;
     executor?: string;
+    agentId?: string;
   },
 ): Promise<void> {
   await db.insert(remediationLedger).values({
@@ -654,6 +681,7 @@ export async function recordRemediationAttempt(
     gasSpentWei: (entry.gasSpentWei ?? 0n).toString(),
     txHash: entry.txHash ?? null,
     executor: entry.executor ?? null,
+    agentId: entry.agentId ?? null,
   });
 }
 
