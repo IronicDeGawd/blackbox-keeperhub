@@ -35,8 +35,25 @@ export type KeeperHubSourceOptions = {
   client: RunLister;
   /** Scopes the cursor. One organisation, one position. */
   orgId: string;
-  /** Whose incidents these runs become in the console. */
-  agentId: string;
+  /**
+   * Whose incidents these runs become in the console. A function when each
+   * watched workflow should be its own agent.
+   */
+  agentId: string | ((run: KeeperHubRun) => string);
+  /**
+   * Which workflows to keep, for an operator who picked some rather than
+   * connecting everything.
+   *
+   * Their runs endpoint has no workflow filter — it takes cursor, limit,
+   * status, source, range and projectId — so the filtering is ours to do after
+   * fetching. An organisation with one watched workflow among fifty still pages
+   * through all fifty; acceptable at this size, and worth asking them for a
+   * filter if it ever hurts.
+   *
+   * Absent means everything, which is what a deployment sweeping its own
+   * organisation wants.
+   */
+  workflowIds?: readonly string[];
   /** The address the organisation executes as; runs do not carry one. */
   signer: `0x${string}`;
   /** Applied to a run that names no network. Absent means such runs are skipped. */
@@ -61,6 +78,8 @@ export type KeeperHubIngestResult = {
   truncated: boolean;
   /** Runs skipped for naming no chain we can read receipts on. */
   skippedUnknownChain: number;
+  /** Runs belonging to a workflow this connection does not watch. */
+  runsFiltered: number;
   /** Signers to evaluate rules for, in the shape the recorder's tick uses. */
   touched: { signer: `0x${string}`; chainId: number; agentId: string }[];
   errors: number;
@@ -82,6 +101,19 @@ export class KeeperHubSource {
     return `keeperhub:${this.options.orgId}`;
   }
 
+  /**
+   * Whether this run is one the operator asked about.
+   *
+   * A direct execution belongs to no workflow, so once somebody has picked
+   * workflows it is not theirs to watch — picking "these three workflows" is
+   * not picking "and everything anyone types into the API".
+   */
+  private watches(run: KeeperHubRun): boolean {
+    const chosen = this.options.workflowIds;
+    if (!chosen) return true;
+    return run.workflowId !== null && run.workflowId !== undefined && chosen.includes(run.workflowId);
+  }
+
   async ingest(): Promise<KeeperHubIngestResult> {
     const result: KeeperHubIngestResult = {
       runsSeen: 0,
@@ -90,6 +122,7 @@ export class KeeperHubSource {
       pagesFetched: 0,
       truncated: false,
       skippedUnknownChain: 0,
+      runsFiltered: 0,
       touched: [],
       errors: 0,
     };
@@ -99,6 +132,7 @@ export class KeeperHubSource {
     const maxPages = this.options.maxPages ?? DEFAULT_MAX_PAGES;
 
     const fresh: KeeperHubRun[] = [];
+    let newestSeen = '';
     let cursor: string | undefined;
     let reachedHighWater = false;
 
@@ -114,8 +148,14 @@ export class KeeperHubSource {
       for (const run of listed.runs) {
         // Strictly newer only. A run at exactly the mark was ingested last
         // sweep, and re-reading it costs a page for nothing.
-        if (Date.parse(run.startedAt) > highWaterMs) fresh.push(run);
-        else reachedHighWater = true;
+        if (Date.parse(run.startedAt) > highWaterMs) {
+          // The mark tracks everything seen, not everything kept: otherwise an
+          // organisation whose newest runs are all unwatched would re-page the
+          // same history on every sweep, for ever.
+          if (run.startedAt > newestSeen) newestSeen = run.startedAt;
+          if (this.watches(run)) fresh.push(run);
+          else result.runsFiltered += 1;
+        } else reachedHighWater = true;
       }
 
       if (reachedHighWater || !listed.nextCursor || listed.runs.length === 0) break;
@@ -174,7 +214,7 @@ export class KeeperHubSource {
 
     result.touched = [...touched.values()];
 
-    const advanced = nextHighWater(fresh, highWater, (run) => unstored.has(run.id));
+    const advanced = nextHighWater(fresh, highWater, (run) => unstored.has(run.id), newestSeen);
     if (advanced) await setCursor(this.options.db, this.cursorKey, advanced);
 
     return result;
@@ -204,10 +244,18 @@ export function nextHighWater(
   runs: readonly KeeperHubRun[],
   current: string | null,
   mustRevisit: (run: KeeperHubRun) => boolean = () => false,
+  /**
+   * The newest run the sweep *saw*, which may be one it filtered out. Only the
+   * kept runs can hold the mark back; the rest still move it forward, or a
+   * connection watching one workflow among many would re-read the others on
+   * every sweep.
+   */
+  newestSeen?: string,
 ): string | null {
-  if (runs.length === 0) return null;
+  if (runs.length === 0) return newestSeen && newestSeen !== '' ? newestSeen : null;
 
-  const newest = runs.reduce((max, r) => (r.startedAt > max ? r.startedAt : max), runs[0]!.startedAt);
+  const seen = runs.reduce((max, r) => (r.startedAt > max ? r.startedAt : max), runs[0]!.startedAt);
+  const newest = newestSeen && newestSeen > seen ? newestSeen : seen;
   const blockers = runs.filter((r) => !TERMINAL.has(r.status) || mustRevisit(r));
   if (blockers.length === 0) return newest;
 

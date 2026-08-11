@@ -1,0 +1,1 @@
+ALTER TABLE "keeperhub_connections" ADD COLUMN "signer" text;

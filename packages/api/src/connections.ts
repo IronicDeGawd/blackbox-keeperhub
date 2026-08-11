@@ -5,10 +5,12 @@ import {
   markConnectionNeedsReauth,
   recordConnectionFailure,
   recordConnectionRefresh,
+  recordConnectionSigner,
   saveKeeperhubConnection,
   type Database,
   type KeeperhubConnection,
 } from '@blackbox/store';
+import { KeeperHubClient } from '@blackbox/core';
 import { decrypt, encrypt } from './secrets.js';
 import { readJwtClaims, type KeeperHubOAuth } from './oauth.js';
 
@@ -47,6 +49,15 @@ export type ConnectionsOptions = {
   oauth: KeeperHubOAuth;
   /** From `BLACKBOX_ENCRYPTION_KEY`; see `secrets.ts` for why it is not a hash. */
   key: Buffer;
+  /**
+   * Builds a KeeperHub client bound to one operator's access token. Defaults to
+   * a real one; tests and a staging provider pass their own.
+   */
+  makeClient?: (accessToken: string) => {
+    getUser(): Promise<{ id: string; walletAddress: `0x${string}` | null }>;
+  };
+  /** Base URL for that default client. */
+  keeperHubApiUrl?: string;
   now?: () => Date;
   /** Told when a connection dies, so somebody can be asked to reconnect. */
   onNeedsReauth?: (orgId: string, reason: string) => void;
@@ -97,6 +108,44 @@ export class Connections {
 
   async get(orgId: string): Promise<KeeperhubConnection | null> {
     return getKeeperhubConnection(this.options.db, orgId);
+  }
+
+  /**
+   * The address this organisation executes as.
+   *
+   * Looked up once from their own `/user` and remembered, because a run record
+   * carries no address and asking the operator to type one in would be asking
+   * them to know something we can read. Null when the lookup has not succeeded
+   * yet, which means their runs cannot be filed against anything and the sweep
+   * simply waits rather than guessing.
+   */
+  async signerFor(orgId: string): Promise<`0x${string}` | null> {
+    const connection = await getKeeperhubConnection(this.options.db, orgId);
+    if (connection?.signer) return connection.signer as `0x${string}`;
+    if (!connection || connection.status !== 'active') return null;
+
+    const token = await this.accessTokenFor(orgId);
+    if (!token.ok) return null;
+
+    try {
+      const user = await this.clientFor(token.accessToken).getUser();
+      if (!user.walletAddress) return null;
+      await recordConnectionSigner(this.options.db, orgId, user.walletAddress);
+      return user.walletAddress;
+    } catch {
+      // Their side being unreachable is not a reason to end a connection.
+      return null;
+    }
+  }
+
+  private clientFor(accessToken: string): {
+    getUser(): Promise<{ id: string; walletAddress: `0x${string}` | null }>;
+  } {
+    if (this.options.makeClient) return this.options.makeClient(accessToken);
+    return new KeeperHubClient({
+      accessToken,
+      ...(this.options.keeperHubApiUrl ? { baseUrl: this.options.keeperHubApiUrl } : {}),
+    });
   }
 
   /** Forget the credential. KeeperHub exposes no way to invalidate it there. */

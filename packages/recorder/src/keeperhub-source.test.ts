@@ -232,4 +232,83 @@ describe('KeeperHubSource', () => {
     // Just short of the run that failed, not past it.
     expect(await getCursor(db, 'keeperhub:org-1')).toBe('2026-08-10T10:59:59.999Z');
   });
+
+  describe('watching only the workflows an operator picked', () => {
+    it('keeps the chosen ones and counts the rest', async () => {
+      const client = lister([
+        run({ id: 'a', startedAt: '2026-08-10T10:00:00.000Z', workflowId: 'wf-1' }),
+        run({ id: 'b', startedAt: '2026-08-10T11:00:00.000Z', workflowId: 'wf-2' }),
+      ]);
+      const result = await source(client, { workflowIds: ['wf-1'] }).ingest();
+
+      expect(result.runsIngested).toBe(1);
+      expect(result.runsFiltered).toBe(1);
+      const stored = await db.select().from(executionEvents);
+      expect(stored.map((e) => e.workflowId)).toEqual(['wf-1']);
+    });
+
+    /**
+     * Picking three workflows is not picking "and everything anyone types into
+     * the API", so a direct execution belongs to nobody's choice.
+     */
+    it('leaves direct executions alone once workflows are chosen', async () => {
+      const client = lister([
+        run({ id: 'a', startedAt: '2026-08-10T10:00:00.000Z', source: 'direct', workflowId: null }),
+      ]);
+      const result = await source(client, { workflowIds: ['wf-1'] }).ingest();
+      expect(result.runsIngested).toBe(0);
+      expect(result.runsFiltered).toBe(1);
+    });
+
+    it('watches everything when nobody has picked', async () => {
+      const client = lister([
+        run({ id: 'a', startedAt: '2026-08-10T10:00:00.000Z', workflowId: 'wf-1' }),
+        run({ id: 'b', startedAt: '2026-08-10T11:00:00.000Z', workflowId: 'wf-2' }),
+      ]);
+      expect((await source(client).ingest()).runsIngested).toBe(2);
+    });
+
+    /**
+     * The mark must follow what was *seen*, not what was kept: otherwise an
+     * organisation whose newest runs are all unwatched re-reads the same
+     * history on every sweep, for ever.
+     */
+    it('still moves the mark when everything on the page was filtered out', async () => {
+      const client = lister([
+        run({ id: 'a', startedAt: '2026-08-10T10:00:00.000Z', workflowId: 'wf-other' }),
+        run({ id: 'b', startedAt: '2026-08-10T11:00:00.000Z', workflowId: 'wf-other' }),
+      ]);
+      const result = await source(client, { workflowIds: ['wf-1'] }).ingest();
+
+      expect(result.runsIngested).toBe(0);
+      expect(await getCursor(db, 'keeperhub:org-1')).toBe('2026-08-10T11:00:00.000Z');
+    });
+
+    it('does not let an unwatched pending run hold the mark back', async () => {
+      const client = lister([
+        run({ id: 'a', startedAt: '2026-08-10T10:00:00.000Z', workflowId: 'wf-1' }),
+        run({
+          id: 'b',
+          startedAt: '2026-08-10T11:00:00.000Z',
+          workflowId: 'wf-other',
+          status: 'running',
+        }),
+      ]);
+      await source(client, { workflowIds: ['wf-1'] }).ingest();
+      expect(await getCursor(db, 'keeperhub:org-1')).toBe('2026-08-10T11:00:00.000Z');
+    });
+  });
+
+  it('files each workflow under its own agent when asked to', async () => {
+    const client = lister([
+      run({ id: 'a', startedAt: '2026-08-10T10:00:00.000Z', workflowId: 'wf-1' }),
+      run({ id: 'b', startedAt: '2026-08-10T11:00:00.000Z', workflowId: 'wf-2' }),
+    ]);
+    await source(client, {
+      agentId: (r: KeeperHubRun) => (r.workflowId ? `kh:${r.workflowId}` : 'kh:direct:org-1'),
+    }).ingest();
+
+    const stored = await db.select().from(executionEvents);
+    expect(new Set(stored.map((e) => e.agentId))).toEqual(new Set(['kh:wf-1', 'kh:wf-2']));
+  });
 });

@@ -947,6 +947,7 @@ export interface KeeperhubConnection {
   refreshTokenEnc: string;
   scope: string;
   subject: string | null;
+  signer: string | null;
   connectedAt: Date;
   expiresAt: Date;
   lastRefreshedAt: Date | null;
@@ -1044,6 +1045,18 @@ export async function recordConnectionRefresh(
       lastError: null,
     })
     .where(eq(keeperhubConnections.orgId, params.orgId));
+}
+
+/** Remember the address this organisation executes as, once we know it. */
+export async function recordConnectionSigner(
+  db: Database,
+  orgId: string,
+  signer: string,
+): Promise<void> {
+  await db
+    .update(keeperhubConnections)
+    .set({ signer: signer.toLowerCase() })
+    .where(eq(keeperhubConnections.orgId, orgId));
 }
 
 export async function recordConnectionSweep(

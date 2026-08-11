@@ -12,6 +12,7 @@ import {
   BlockScanner,
   buildEventFromChain,
   KeeperHubSource,
+  type KeeperHubIngestResult,
   Recorder,
   RpcCorroborator,
   type ChainReader,
@@ -26,6 +27,8 @@ import {
 } from '@blackbox/store';
 import { KeeperHubClient } from '@blackbox/core';
 import type { EventBus } from './bus.js';
+import { ConnectionSweeper } from './connection-sweeper.js';
+import type { Connections } from './connections.js';
 import { incidentSummary, type IncidentRow } from './serialise.js';
 
 /**
@@ -73,6 +76,16 @@ export type RuntimeOptions = {
     signer: `0x${string}`;
     range?: string;
   };
+  /**
+   * Accounts other operators connected.
+   *
+   * With it, every connection's chosen workflows are swept alongside this
+   * deployment's own organisation. Without it, ingestion is exactly what it was:
+   * one organisation, from the environment.
+   */
+  connections?: Connections;
+  /** Base URL for reads made on a connection's behalf. */
+  keeperHubApiUrl?: string;
   /**
    * Extra endpoints to consult when looking up a transaction someone else's
    * wallet broadcast.
@@ -187,6 +200,8 @@ export class Runtime {
   private readonly recorder: Recorder;
   /** Kept so a webhook can ask for a sweep now rather than at the next tick. */
   private readonly keeperHubSource: KeeperHubSource | undefined;
+  /** Every organisation this deployment reads: its own, plus connected ones. */
+  private readonly runSource: { ingest(): Promise<KeeperHubIngestResult> } | undefined;
   private readonly scanner: BlockScanner;
   private readonly tracker: IncidentTracker;
   private timer: NodeJS.Timeout | undefined;
@@ -226,6 +241,26 @@ export class Runtime {
           })
         : undefined;
 
+    /**
+     * What the recorder actually ingests from.
+     *
+     * One organisation from the environment when nobody can connect; otherwise
+     * that organisation plus every connected account, each filtered to the
+     * workflows its operator picked.
+     */
+    this.runSource = options.connections
+      ? new ConnectionSweeper({
+          db: options.db,
+          connections: options.connections,
+          ...(isSupportedChain(options.chainId) ? { fallbackChainId: options.chainId } : {}),
+          ...(options.keeperHubApiUrl ? { keeperHubApiUrl: options.keeperHubApiUrl } : {}),
+          ...(options.keeperHubOrg?.range ? { range: options.keeperHubOrg.range } : {}),
+          makeId: () => this.id('evt'),
+          ...(this.keeperHubSource ? { ownSource: this.keeperHubSource } : {}),
+          ...(options.logger ? { logger: options.logger } : {}),
+        })
+      : this.keeperHubSource;
+
     this.recorder = new Recorder({
       db: options.db,
       keeperHub: options.keeperHub ?? {
@@ -245,7 +280,7 @@ export class Runtime {
       // KeeperHub key the rule simply declines, which is correct: a budget we
       // cannot read is not one we can say anything about.
       ...(options.keeperHub ? { spendLimits: options.keeperHub } : {}),
-      ...(this.keeperHubSource ? { keeperHubRuns: this.keeperHubSource } : {}),
+      ...(this.runSource ? { keeperHubRuns: this.runSource } : {}),
       config: options.config,
       tracker: this.tracker,
       makeId: () => this.id('evt'),
@@ -368,8 +403,8 @@ export class Runtime {
    * organisation, which is a truthful answer to "did anything happen".
    */
   async sweepKeeperHub(): Promise<{ runsIngested: number; eventsInserted: number } | null> {
-    if (!this.keeperHubSource) return null;
-    const result = await this.keeperHubSource.ingest();
+    if (!this.runSource) return null;
+    const result = await this.runSource.ingest();
     return { runsIngested: result.runsIngested, eventsInserted: result.eventsInserted };
   }
 

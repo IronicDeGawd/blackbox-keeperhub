@@ -230,6 +230,7 @@ const connections = env['BLACKBOX_ENCRYPTION_KEY']
       db,
       oauth,
       key: keyFrom(env['BLACKBOX_ENCRYPTION_KEY']),
+      ...(env['KEEPERHUB_API_URL'] ? { keeperHubApiUrl: env['KEEPERHUB_API_URL'] } : {}),
       onNeedsReauth: (orgId, reason) => {
         console.warn(`[connections] ${orgId} needs re-authorising: ${reason}`);
       },
@@ -246,6 +247,8 @@ const runtime = new Runtime({
   ...(diagnostician ? { diagnostician } : {}),
   ...(keeperHub ? { keeperHub } : {}),
   ...(keeperHubOrg ? { keeperHubOrg } : {}),
+  ...(connections ? { connections } : {}),
+  ...(env['KEEPERHUB_API_URL'] ? { keeperHubApiUrl: env['KEEPERHUB_API_URL'] } : {}),
   alerter,
   ...(env['BLACKBOX_TICK_MS'] ? { intervalMs: Number(env['BLACKBOX_TICK_MS']) } : {}),
   logger,

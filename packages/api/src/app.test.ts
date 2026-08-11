@@ -1184,6 +1184,45 @@ describe('managing a connection, over HTTP', () => {
     ]);
   });
 
+  /** Picking a workflow is already saying it is yours; asking twice is rude. */
+  it('claims each picked workflow for the organisation', async () => {
+    const server = await instance();
+    const headers = await connected(server);
+    await server.inject({
+      method: 'POST',
+      url: '/api/connections/keeperhub/workflows',
+      headers,
+      payload: { workflows: ['wf-1'] },
+    });
+
+    const session = await server.inject({ url: '/api/auth/session', headers });
+    expect(session.json().agents).toContain('kh:wf-1');
+  });
+
+  it('leaves a workflow another tenant already claimed with them', async () => {
+    const server = await instance();
+    const signIn = await server.inject({
+      method: 'POST',
+      url: '/api/auth/keeperhub',
+      payload: { orgKey: 'kh_first_tenant' },
+    });
+    await server.inject({
+      method: 'POST',
+      url: '/api/watched',
+      headers: { authorization: `Bearer ${signIn.json().token}` },
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'kh:wf-1' },
+    });
+
+    const headers = await connected(server);
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/connections/keeperhub/workflows',
+      headers,
+      payload: { workflows: ['wf-1'] },
+    });
+    expect(res.json().contested).toEqual(['wf-1']);
+  });
+
   it('refuses an empty pick rather than silently watching nothing', async () => {
     const server = await instance();
     const headers = await connected(server);

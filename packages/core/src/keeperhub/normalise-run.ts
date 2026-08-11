@@ -19,7 +19,15 @@ import { extractRevertReason, type KeeperHubRun, type KeeperHubRunTx } from './t
  */
 
 export type NormaliseRunOptions = {
-  agentId: string;
+  /**
+   * Whose incidents these become.
+   *
+   * A function when one organisation's runs should land under more than one
+   * agent — which is what watching per workflow means: each workflow is its own
+   * agent, with its own health, rather than everything an organisation does
+   * being averaged into a single row.
+   */
+  agentId: string | ((run: KeeperHubRun) => string);
   /**
    * The address the organisation executes as. A run record does not carry one —
    * KeeperHub submits from a shared relayer into the org's smart account — so
@@ -62,7 +70,7 @@ export function normaliseRun(run: KeeperHubRun, options: NormaliseRunOptions): E
      * A direct execution has no workflow, and each call is its own action.
      */
     logicalActionId: run.workflowId ?? run.id,
-    agentId: options.agentId,
+    agentId: typeof options.agentId === 'string' ? options.agentId : options.agentId(run),
     signer: options.signer,
     // Everything listed here ran on a managed wallet, which is what makes a
     // nonce-bearing rule inapplicable to it.

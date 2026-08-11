@@ -409,6 +409,13 @@ export const keeperhubConnections = pgTable(
     scope: text('scope').notNull(),
     /** The KeeperHub user who connected it, for the console to name. */
     subject: text('subject'),
+    /**
+     * The address this organisation executes as, looked up from their `/user`
+     * rather than typed in. A run record carries no address — KeeperHub submits
+     * from a shared relayer into the organisation's smart account — so without
+     * this there is nothing to file their runs against.
+     */
+    signer: text('signer'),
     connectedAt: timestamp('connected_at', { withTimezone: true }).notNull(),
     /** Ours, absolute, 7–60 days. Not extended by a refresh, deliberately. */
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),

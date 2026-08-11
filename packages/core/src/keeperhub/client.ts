@@ -207,6 +207,26 @@ export class KeeperHubClient {
     this.orgKey = key;
   }
 
+  /**
+   * Who this credential belongs to, and the address they execute as.
+   *
+   * A run record carries no address — KeeperHub submits from a shared relayer
+   * into the organisation's smart account — so for an operator who connected
+   * their own account this is where the signer comes from. Asking them to type
+   * it in would be asking them to know something we can look up.
+   */
+  async getUser(): Promise<{ id: string; walletAddress: `0x${string}` | null }> {
+    const res = await this.request<{ id?: string; walletAddress?: string }>('/user');
+    if (res.status !== 200) throw new KeeperHubError('getUser failed', res.status, res.body);
+    const address = res.body?.walletAddress;
+    return {
+      id: String(res.body?.id ?? ''),
+      walletAddress: /^0x[0-9a-fA-F]{40}$/.test(String(address))
+        ? (String(address).toLowerCase() as `0x${string}`)
+        : null,
+    };
+  }
+
   async listChains(): Promise<unknown[]> {
     const res = await this.request<unknown[]>('/chains');
     if (res.status !== 200) throw new KeeperHubError('listChains failed', res.status, res.body);

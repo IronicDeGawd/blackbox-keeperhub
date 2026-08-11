@@ -16,6 +16,7 @@ import { codeNodeSnippet, type Webhooks } from './webhooks.js';
 import type { WalletAuth } from './wallet-auth.js';
 import {
   activeSigners,
+  claimAgentForOrg,
   eventsByIds,
   listWatchedWorkflows,
   unwatchWorkflow,
@@ -777,10 +778,31 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
           });
         }
 
-        await watchWorkflows(db, { orgId: caller.orgId, workflows, at: new Date() });
-        return reply
-          .code(201)
-          .send({ watching: await listWatchedWorkflows(db, caller.orgId, { activeOnly: true }) });
+        const at = new Date();
+        await watchWorkflows(db, { orgId: caller.orgId, workflows, at });
+
+        /**
+         * Claim each workflow's agent for this organisation.
+         *
+         * Picking a workflow to watch is already the act of saying it is
+         * yours, so making the operator claim it again by hand would be asking
+         * twice. A workflow another tenant already claimed stays theirs — that
+         * is reported rather than overridden.
+         */
+        const contested: string[] = [];
+        for (const workflow of workflows) {
+          const outcome = await claimAgentForOrg(db, {
+            agentId: `kh:${workflow.workflowId}`,
+            orgId: caller.orgId,
+            at,
+          });
+          if (outcome === 'owned_by_another') contested.push(workflow.workflowId);
+        }
+
+        return reply.code(201).send({
+          watching: await listWatchedWorkflows(db, caller.orgId, { activeOnly: true }),
+          ...(contested.length > 0 ? { contested } : {}),
+        });
       });
 
       /** Stop watching one. Remembered, so re-picking it costs nothing. */
