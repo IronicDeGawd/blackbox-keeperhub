@@ -1025,6 +1025,8 @@ describe('inbound webhooks', () => {
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().secret).toMatch(/^whsec_[0-9a-f]{64}$/);
+    // No public URL configured, so no snippet is invented for one.
+    expect(res.json().codeNode).toBeNull();
 
     // Stored as a hash: the secret itself is not recoverable from the table.
     const rows = await db.select().from(webhookSecrets);

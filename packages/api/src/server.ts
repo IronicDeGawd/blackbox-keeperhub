@@ -388,6 +388,7 @@ const app = await buildApp({
   oauth,
   // A nudge causes the same sweep the loop does, just sooner.
   webhooks: new Webhooks(db, runtime),
+  ...(env['BLACKBOX_PUBLIC_URL'] ? { publicUrl: env['BLACKBOX_PUBLIC_URL'] } : {}),
   ...(publicAgentIds ? { publicAgentIds } : {}),
   // Diagnosis spends a model call, and the route is open to anyone. The
   // background loop already refuses to explain the same incident twice for

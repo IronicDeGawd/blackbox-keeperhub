@@ -11,7 +11,7 @@ import {
   type Identity,
 } from './identity.js';
 import type { KeeperHubOAuth } from './oauth.js';
-import type { Webhooks } from './webhooks.js';
+import { codeNodeSnippet, type Webhooks } from './webhooks.js';
 import {
   activeSigners,
   eventsByIds,
@@ -155,6 +155,8 @@ export type AppOptions = {
    * which is slower but not broken.
    */
   webhooks?: Webhooks;
+  /** This deployment's public address, used to write the code-node snippet. */
+  publicUrl?: string;
   /**
    * Agents any visitor may read. Unset means all of them, which keeps a local
    * run and the public demo legible; set on a deployment that hosts more than
@@ -455,6 +457,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         orgId: caller.orgId,
         // Said plainly, because the caller cannot come back for it.
         note: 'Store this now. Blackbox keeps only a hash of it.',
+        // The code node an operator would otherwise have to write, with this
+        // deployment's own address already in it.
+        codeNode: options.publicUrl ? codeNodeSnippet(options.publicUrl) : null,
       });
     });
 
