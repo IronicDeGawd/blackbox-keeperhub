@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import type { ExecutionEvent } from '@blackbox/core';
@@ -7,6 +7,8 @@ import {
   incidents,
   agentOwners,
   ingestCursors,
+  oauthAuthRequests,
+  oauthClients,
   orgSessions,
   signerState,
   watchedExecutions,
@@ -735,4 +737,91 @@ export async function claimAgentForOrg(
     .values({ agentId: params.agentId, orgId: params.orgId, claimedAt: params.at })
     .onConflictDoNothing({ target: agentOwners.agentId });
   return 'claimed';
+}
+
+// --- oauth ------------------------------------------------------------------
+
+export async function getOAuthClient(
+  db: Database,
+  issuer: string,
+): Promise<{ clientId: string; redirectUri: string } | null> {
+  const [row] = await db
+    .select()
+    .from(oauthClients)
+    .where(eq(oauthClients.issuer, issuer))
+    .limit(1);
+  return row ? { clientId: row.clientId, redirectUri: row.redirectUri } : null;
+}
+
+export async function saveOAuthClient(
+  db: Database,
+  params: { issuer: string; clientId: string; redirectUri: string; at: Date },
+): Promise<void> {
+  await db
+    .insert(oauthClients)
+    .values({
+      issuer: params.issuer,
+      clientId: params.clientId,
+      redirectUri: params.redirectUri,
+      registeredAt: params.at,
+    })
+    .onConflictDoUpdate({
+      target: oauthClients.issuer,
+      set: { clientId: params.clientId, redirectUri: params.redirectUri, registeredAt: params.at },
+    });
+}
+
+export async function saveAuthRequest(
+  db: Database,
+  params: {
+    state: string;
+    codeVerifier: string;
+    redirectUri: string;
+    returnTo?: string | null;
+    at: Date;
+    expiresAt: Date;
+  },
+): Promise<void> {
+  await db.insert(oauthAuthRequests).values({
+    state: params.state,
+    codeVerifier: params.codeVerifier,
+    redirectUri: params.redirectUri,
+    returnTo: params.returnTo ?? null,
+    createdAt: params.at,
+    expiresAt: params.expiresAt,
+  });
+}
+
+/**
+ * Read a sign-in and consume it in the same breath.
+ *
+ * Single-use by construction: the row is deleted before the code is exchanged,
+ * so a replayed callback — or two browsers racing the same link — finds
+ * nothing. An expired request is deleted and reported as absent.
+ */
+export async function takeAuthRequest(
+  db: Database,
+  state: string,
+  now: Date,
+): Promise<{ codeVerifier: string; redirectUri: string; returnTo: string | null } | null> {
+  const [row] = await db
+    .delete(oauthAuthRequests)
+    .where(eq(oauthAuthRequests.state, state))
+    .returning();
+  if (!row) return null;
+  if (row.expiresAt.getTime() < now.getTime()) return null;
+  return {
+    codeVerifier: row.codeVerifier,
+    redirectUri: row.redirectUri,
+    returnTo: row.returnTo,
+  };
+}
+
+/** Housekeeping: abandoned sign-ins are rows nobody will ever come back for. */
+export async function purgeExpiredAuthRequests(db: Database, now: Date): Promise<number> {
+  const rows = await db
+    .delete(oauthAuthRequests)
+    .where(lt(oauthAuthRequests.expiresAt, now))
+    .returning();
+  return rows.length;
 }

@@ -32,6 +32,7 @@ import {
 } from '@blackbox/alerter';
 import { diagnosticianFromEnv, keeperHubFromEnv, Runtime } from './runtime.js';
 import { httpKeyVerifier, Identity } from './identity.js';
+import { KeeperHubOAuth } from './oauth.js';
 
 /**
  * Composition root.
@@ -186,6 +187,18 @@ const identity = new Identity(db, httpKeyVerifier(env['KEEPERHUB_API_URL']));
 const publicAgentIds = env['BLACKBOX_PUBLIC_AGENTS']
   ? env['BLACKBOX_PUBLIC_AGENTS'].split(',').map((a) => a.trim()).filter(Boolean)
   : undefined;
+
+/**
+ * "Connect KeeperHub" needs to know its own public URL, because that is what it
+ * registers as a redirect and what KeeperHub will refuse to deviate from. With
+ * none set it falls back to localhost, which is right for development and
+ * useless in production — so a deployment must set BLACKBOX_PUBLIC_URL.
+ */
+const oauth = new KeeperHubOAuth({
+  db,
+  baseUrl: env['BLACKBOX_PUBLIC_URL'] ?? `http://127.0.0.1:${env['PORT'] ?? '8080'}`,
+  ...(env['KEEPERHUB_OAUTH_CLIENT_ID'] ? { clientId: env['KEEPERHUB_OAUTH_CLIENT_ID'] } : {}),
+});
 
 const runtime = new Runtime({
   db,
@@ -371,6 +384,7 @@ const app = await buildApp({
   config,
   bus,
   identity,
+  oauth,
   ...(publicAgentIds ? { publicAgentIds } : {}),
   // Diagnosis spends a model call, and the route is open to anyone. The
   // background loop already refuses to explain the same incident twice for

@@ -113,6 +113,30 @@ export class Identity {
     return { ok: true, token, orgId };
   }
 
+  /**
+   * Start a session for an operator who signed in through OAuth.
+   *
+   * No credential of theirs is involved, so there is none to hash: the
+   * `keyHash` column instead holds a marker derived from the organisation and
+   * the user, which keeps the column meaningful — one row per person per org —
+   * without pretending a secret was stored.
+   */
+  async signInWithOrg(params: {
+    orgId: string;
+    subject?: string;
+    label?: string;
+  }): Promise<{ token: string; orgId: string }> {
+    const token = `bb_${randomBytes(32).toString('hex')}`;
+    await createOrgSession(this.db, {
+      tokenHash: sha256(token),
+      orgId: params.orgId,
+      keyHash: `oauth:${sha256(`${params.orgId}:${params.subject ?? ''}`)}`,
+      label: params.label ?? 'keeperhub-oauth',
+      at: this.now(),
+    });
+    return { token, orgId: params.orgId };
+  }
+
   /** Resolve a bearer token to a caller, or nothing. Touches `lastSeenAt`. */
   async caller(token: string | undefined): Promise<Caller | null> {
     if (!token) return null;

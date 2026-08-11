@@ -10,6 +10,7 @@ import {
   type Caller,
   type Identity,
 } from './identity.js';
+import type { KeeperHubOAuth } from './oauth.js';
 import {
   activeSigners,
   eventsByIds,
@@ -143,6 +144,11 @@ export type AppOptions = {
    * and the wrong one for a deployment.
    */
   identity?: Identity;
+  /**
+   * "Connect KeeperHub" sign-in. Absent leaves only the paste-a-key path, which
+   * suits a script and asks too much of a person.
+   */
+  oauth?: KeeperHubOAuth;
   /**
    * Agents any visitor may read. Unset means all of them, which keeps a local
    * run and the public demo legible; set on a deployment that hosts more than
@@ -315,6 +321,87 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       }
       return reply.code(201).send({ token: result.token, orgId: result.orgId });
     });
+
+    if (options.oauth) {
+      const oauth = options.oauth;
+
+      /**
+       * Where to send the operator to sign in.
+       *
+       * Returns the URL rather than redirecting, so a console can open it in a
+       * popup and a script can print it. `returnTo` is restricted to a path on
+       * this deployment: an open redirect here would hand a freshly minted
+       * session token to somebody else's site.
+       */
+      app.get('/api/auth/keeperhub/start', costly(20), async (request, reply) => {
+        const q = request.query as Record<string, string | undefined>;
+        const returnTo = q['returnTo'];
+        if (returnTo && !returnTo.startsWith('/')) {
+          return reply.code(400).send({
+            error: 'bad_request',
+            detail: 'returnTo must be a path on this deployment.',
+            requestId: request.id,
+          });
+        }
+        try {
+          const started = await oauth.start(returnTo);
+          return { url: started.url };
+        } catch (error) {
+          return reply.code(502).send({
+            error: 'provider_unavailable',
+            detail: String((error as Error)?.message ?? error),
+            requestId: request.id,
+          });
+        }
+      });
+
+      /**
+       * Where KeeperHub sends the operator back.
+       *
+       * The session token goes in the URL *fragment*, which browsers do not
+       * send to servers and proxies do not log. A query parameter would put a
+       * live credential into every access log between here and them.
+       */
+      app.get('/api/auth/keeperhub/callback', async (request, reply) => {
+        const q = request.query as Record<string, string | undefined>;
+        if (q['error']) {
+          return reply
+            .code(400)
+            .send({ error: 'denied', detail: q['error'], requestId: request.id });
+        }
+        const code = q['code'];
+        const state = q['state'];
+        if (!code || !state) {
+          return reply.code(400).send({
+            error: 'bad_request',
+            detail: 'code and state are required.',
+            requestId: request.id,
+          });
+        }
+
+        const result = await oauth.complete({ code, state });
+        if (!result.ok) {
+          return reply.code(401).send({
+            error: 'unauthorized',
+            detail:
+              result.reason === 'unknown_state'
+                ? 'That sign-in has expired or was already used.'
+                : 'KeeperHub declined the exchange.',
+            requestId: request.id,
+          });
+        }
+
+        const session = await identity.signInWithOrg({
+          orgId: result.orgId,
+          subject: result.subject,
+        });
+        if (result.returnTo) {
+          const fragment = `#token=${session.token}&orgId=${encodeURIComponent(session.orgId)}`;
+          return reply.redirect(`${result.returnTo}${fragment}`);
+        }
+        return reply.code(201).send({ token: session.token, orgId: session.orgId });
+      });
+    }
 
     app.post('/api/auth/signout', async (request) => {
       const header = String(request.headers['authorization'] ?? '');

@@ -324,3 +324,38 @@ export const agentOwners = pgTable(
   },
   (t) => ({ byOrg: index('agent_owners_org_idx').on(t.orgId) }),
 );
+
+/**
+ * Our registration with an OAuth provider.
+ *
+ * KeeperHub supports dynamic client registration (RFC 7591), so Blackbox
+ * registers itself the first time someone signs in and reuses that client id
+ * forever after. Persisted because re-registering on every restart would
+ * litter their side with clients and give each deployment a new identity in
+ * their consent screen.
+ */
+export const oauthClients = pgTable('oauth_clients', {
+  /** The provider, e.g. `https://app.keeperhub.com`. */
+  issuer: text('issuer').primaryKey(),
+  clientId: text('client_id').notNull(),
+  /** Registered redirect, kept so a changed public URL is detected, not ignored. */
+  redirectUri: text('redirect_uri').notNull(),
+  registeredAt: timestamp('registered_at', { withTimezone: true }).notNull(),
+});
+
+/**
+ * A sign-in in flight.
+ *
+ * Holds the PKCE verifier, which never leaves this server — that is the whole
+ * point of PKCE: the code returned to the browser is useless without it. The
+ * `state` is single-use and short-lived, so a replayed callback finds nothing.
+ */
+export const oauthAuthRequests = pgTable('oauth_auth_requests', {
+  state: text('state').primaryKey(),
+  codeVerifier: text('code_verifier').notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  /** Where to send the operator once they are signed in. */
+  returnTo: text('return_to'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+});

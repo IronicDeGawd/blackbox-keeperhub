@@ -7,6 +7,8 @@ import {
   recordRemediationAttempt,
   remediationLedger,
   agentOwners,
+  oauthAuthRequests,
+  oauthClients,
   orgSessions,
   saveIncident,
   watchedSigners,
@@ -14,6 +16,7 @@ import {
 } from '@blackbox/store';
 import { buildApp } from './app.js';
 import { Identity } from './identity.js';
+import { KeeperHubOAuth } from './oauth.js';
 import { EventBus } from './bus.js';
 import { summarise } from './serialise.js';
 
@@ -36,6 +39,8 @@ beforeEach(async () => {
   await db.delete(watchedSigners);
   await db.delete(agentOwners);
   await db.delete(orgSessions);
+  await db.delete(oauthAuthRequests);
+  await db.delete(oauthClients);
 });
 
 const config = (): BlackboxConfig =>
@@ -774,5 +779,94 @@ describe('ownership', () => {
       (await instance.inject({ method: 'GET', url: '/api/auth/session', headers: bearer(mine.token) }))
         .statusCode,
     ).toBe(401);
+  });
+});
+
+describe('connect with KeeperHub, over HTTP', () => {
+  const metadata = {
+    issuer: 'https://provider.test',
+    authorization_endpoint: 'https://provider.test/oauth/authorize',
+    token_endpoint: 'https://provider.test/api/oauth/token',
+    registration_endpoint: 'https://provider.test/api/oauth/register',
+  };
+  const jwt = (claims: Record<string, unknown>) =>
+    ['h', Buffer.from(JSON.stringify(claims)).toString('base64url'), 's'].join('.');
+
+  const impl = (async (url: string) => {
+    if (url.endsWith('/.well-known/oauth-authorization-server')) {
+      return new Response(JSON.stringify(metadata), { status: 200 });
+    }
+    if (url === metadata.registration_endpoint) {
+      return new Response(JSON.stringify({ client_id: 'client-1' }), { status: 201 });
+    }
+    if (url === metadata.token_endpoint) {
+      return new Response(JSON.stringify({ access_token: jwt({ sub: 'u1', org: 'org-9' }) }), {
+        status: 200,
+      });
+    }
+    return new Response('', { status: 404 });
+  }) as unknown as typeof fetch;
+
+  const instance = async () =>
+    app({
+      identity: new Identity(db, { listKeys: async () => [{ id: 'k1' }] }),
+      oauth: new KeeperHubOAuth({
+        db,
+        baseUrl: 'https://blackbox.test',
+        issuer: 'https://provider.test',
+        fetchImpl: impl,
+      }),
+    });
+
+  it('hands back a URL to send the operator to', async () => {
+    const res = await (await instance()).inject({ url: '/api/auth/keeperhub/start' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().url).toContain('provider.test/oauth/authorize');
+  });
+
+  /** An open redirect here would hand a live session token to another site. */
+  it('refuses a returnTo that leaves this deployment', async () => {
+    const res = await (await instance()).inject({
+      url: '/api/auth/keeperhub/start?returnTo=https://evil.test/steal',
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('completes a sign-in and puts the token in the fragment, not the query', async () => {
+    const server = await instance();
+    const started = await server.inject({ url: '/api/auth/keeperhub/start?returnTo=/incidents' });
+    // `URL` is shadowed by the connection string at the top of this file.
+    const state = new globalThis.URL(started.json().url).searchParams.get('state');
+
+    const res = await server.inject({
+      url: `/api/auth/keeperhub/callback?code=abc&state=${state}`,
+    });
+    expect(res.statusCode).toBe(302);
+    const location = res.headers['location'] as string;
+    // A query parameter would put a live credential in every access log between
+    // here and the browser; a fragment is never sent to a server.
+    expect(location.startsWith('/incidents#token=bb_')).toBe(true);
+    expect(location.split('#')[0]).not.toContain('token');
+
+    // And the session it minted actually works.
+    const token = new URLSearchParams(location.split('#')[1]).get('token');
+    const session = await server.inject({
+      url: '/api/auth/session',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(session.json().orgId).toBe('org-9');
+  });
+
+  it('rejects a callback with no code', async () => {
+    const res = await (await instance()).inject({ url: '/api/auth/keeperhub/callback?state=x' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('reports the provider declining rather than signing anyone in', async () => {
+    const res = await (await instance()).inject({
+      url: '/api/auth/keeperhub/callback?code=abc&state=never-issued',
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().detail).toContain('expired or was already used');
   });
 });
