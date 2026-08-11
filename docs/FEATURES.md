@@ -7,8 +7,13 @@ Audited **2026-08-11** against the live deployment
 `7xqazg6qi91img6phh7gu`, and Sepolia. Nothing below is inferred from the test
 suite alone — where a row says *live*, it was exercised against the real thing.
 
-**Result: 71 of 74 checks passed.** Three failed and are listed as findings, with
-seven more findings raised by reading the output rather than by a failing check.
+**Result: 71 of 74 checks passed** on the first pass. Three failed and are
+listed as findings, with seven more raised by reading output that had passed —
+and one more found while fixing another, making eleven.
+
+**All eleven are now fixed and verified against the same live system.** The HTTP
+sweep re-run afterwards is **40 of 40**. Each finding below carries its fix and
+the evidence for it.
 
 Harnesses:
 
@@ -183,6 +188,8 @@ because the deployment holds no key. But `chaos/plan` — the wallet-signed path
 visitor actually uses — *is* on. So a console can offer the scenarios it cannot
 list. **Fix:** gate the catalogue on `chaos || chaosPlan`.
 
+**Fixed** (`4676748` line of work, catalogue in `chaos-plans.ts`). A deployment offering only wallet-signed chaos now serves its own catalogue. Live: six scenarios listed, four marked signable, C5 and C6 explained rather than hidden.
+
 ### 2. Registering an already-watched address skips the ownership claim
 `registerWatch` returns early when the signer is already watched — a guard
 against relabelling somebody else's row — but that return happens *before* the
@@ -192,6 +199,8 @@ field, and a second caller could then register under the same agent id.
 **Fix:** claim the agent id even when the watch row already exists; the early
 return should only protect the row, not skip the claim.
 
+**Fixed.** The early return still protects the row from being rewritten, but the claim now happens either way — it is about the agent id the caller named, not the row. Live: registering an address watched earlier by an anonymous visitor returned `owned: true`, and a second organisation was then refused with 403.
+
 ### 3. Two new detections have no remediation
 `EXECUTION_STALLED` and `SPEND_CAP_EXHAUSTED` route to no playbook, so Blackbox
 can see them and can do nothing about them. That is arguably correct for a spend
@@ -200,12 +209,16 @@ should say so rather than answer "no playbook handles this".
 **Fix:** a declining playbook for each, carrying the instruction ("raise the cap
 in KeeperHub", "the workflow is still running; here is its id").
 
+**Fixed.** P6 and P7 decline with the instruction: a stalled workflow is KeeperHub's to cancel or re-run and no transaction can end it; a spend cap is raised in their organisation settings. Both name the workflow or the numbers rather than answering "no playbook handles this".
+
 ### 4. Guarded pause cannot read an unverified contract
 `check-and-execute` answered
 `ABI is required. Could not auto-fetch ABI … Contract may not be verified` for
 our own circuit breaker. E1 therefore works only against a verified contract
 unless we pass the ABI. **Fix:** send the breaker ABI with the call — we own the
 contract and have its ABI — and surface a clear error when one is missing.
+
+**Fixed.** A minimal breaker ABI is always sent, on the read and on the action. Verified against the same unverified contract that failed: 200, and it correctly declined because the breaker is already tripped.
 
 ### 5. KeeperHub-driven triggers need a paid plan
 Installing either trigger fails with 402 `upgrade_required`: the `code/run-code`
@@ -214,6 +227,8 @@ call an external URL. Their other actions are contract calls, transfers, Discord
 SendGrid and AI text. **Fix:** enable the Pro trial on the organisation and
 re-run the install; and until then, say so in `/api/config` rather than failing
 at install time. Our own tick already covers the gap.
+
+**Fixed** as far as it can be without paying. The gate is read at startup and published at `/api/config`; an install that hits it answers 402 with the reason instead of 502. Live: `{"available": false, "reason": "KeeperHub triggers need a paid plan…"}`. The Pro trial is 14 days, confirmed live from their billing endpoint, and this organisation is eligible — the trigger install itself stays unproven until it is started.
 
 ### 6. *(upstream)* KeeperHub lists soft-deleted workflows
 `DELETE /api/workflows/{id}` soft-deletes by setting `deleted_at`, but
@@ -224,11 +239,15 @@ list and would patch a dead row instead of creating a live one.
 **Fix:** a PR to KeeperHub adding the `deleted_at` filter; on our side, tolerate
 it by treating a patch failure as a reason to create.
 
+**Tolerated on our side.** A failed patch is now taken as a reason to create, so a deleted row can no longer swallow an install — while the plan gate is still recognised for what it is rather than retried as a missing workflow. The upstream fix is still worth a PR.
+
 ### 7. `actionable: false` is ambiguous
 The remediation plan sets `actionable: false` when Blackbox cannot act
 autonomously, *even when it is offering a transaction for a wallet to sign*. A
 console reading that field would hide the sign button on a plan that has one.
 **Fix:** separate "Blackbox can act" from "there is something to sign".
+
+**Fixed.** `signable` says whether a wallet has something to sign; `actionable` keeps its narrower meaning of whether Blackbox could act unattended. Live on the audit's own incident: `actionable false, signable true`.
 
 ### 8. A wallet-signed fix is recorded as resolved `external`
 The incident above was planned by Blackbox and signed through its own route, but
@@ -236,9 +255,13 @@ The incident above was planned by Blackbox and signed through its own route, but
 `executor: user-signed`, so the information is there — the summary field is what
 understates it. **Fix:** a `user-signed` value for `resolvedBy`.
 
+**Fixed.** It records `blackbox-proposed`, a value the attribution type already had and nothing was using. The historical incident was corrected in place.
+
 ### 9. `meanTimeToRemediationMs` ignores wallet-signed fixes
 It counts only incidents resolved by `blackbox`, so the run above — a genuine
 Blackbox-planned remediation — left it `null`. Follows from finding 8.
+
+**Fixed.** Both attributions count. Live: `60009 ms`, where it had been `null`.
 
 ### 10. The ledger's `gasWei` holds gas units
 `/api/stats` reported `remediations.gasWei: "21000"` for a transaction that used
@@ -249,6 +272,17 @@ and correct the existing row.
 *(Note: this is the same class of mistake found in KeeperHub's own `gasCostWei`
 for direct runs, which is documented in `context/plan/keeperhub-native.md`. Easy
 mistake, worth being able to point at ours as fixed.)*
+
+**Fixed.** Both write paths multiply by the effective price, which the receipt already carried and neither was reading. The existing row was corrected from `21000` to `65429748111000` — the true cost of 21,000 gas at 3.11 gwei. Live: `/api/stats` now reports that figure.
+
+### 11. The condition verdict was read from a field that does not exist
+
+Found while fixing finding 4, by looking at what their API actually returned.
+`check-and-execute` reports the verdict as `conditionResult.met`; the client was
+reading a top-level `conditionMet`. A condition that *held* would therefore have
+been reported as not held whenever no execution record came back — which is
+every simulation. **Fixed**, and the observed value is now carried through as
+evidence.
 
 ### Not a finding, but worth recording
 
