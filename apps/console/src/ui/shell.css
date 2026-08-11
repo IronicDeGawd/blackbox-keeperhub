@@ -12,6 +12,28 @@
   overflow: hidden;
 }
 
+/* Off screen until focused, then it lands over the masthead. */
+.skip {
+  position: absolute;
+  left: -9999px;
+  z-index: 10;
+}
+
+.skip:focus {
+  left: var(--s5);
+  top: var(--s2);
+  padding: var(--s2) var(--s3);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+}
+
+/* The skip target should not draw a focus ring when it is jumped to. */
+.shell__main:focus {
+  outline: none;
+}
+
 /* --- masthead ------------------------------------------------------------ */
 
 .masthead {

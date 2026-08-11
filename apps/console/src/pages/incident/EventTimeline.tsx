@@ -25,7 +25,7 @@ export function EventTimeline({
   return (
     <section className="panel section">
       <header className="section__head">
-        <p className="eyebrow eyebrow--accent">Event timeline</p>
+        <h2 className="eyebrow eyebrow--accent">Event timeline</h2>
       </header>
 
       {ordered.length === 0 ? (

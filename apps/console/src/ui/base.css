@@ -79,9 +79,12 @@ button {
 
 /* --- shared shapes ------------------------------------------------------- */
 
-/* Uppercase mono micro-label. Used for every section and column heading. */
+/* Uppercase mono micro-label. Used for every section and column heading.
+   Section labels are real h2/h3 elements so the page can be navigated by
+   heading; the weight is pinned here so the tag change is invisible. */
 .eyebrow {
   font-family: var(--font-mono);
+  font-weight: 400;
   font-size: var(--t-micro);
   letter-spacing: 0.16em;
   text-transform: uppercase;

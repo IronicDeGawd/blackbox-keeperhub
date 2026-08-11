@@ -104,7 +104,7 @@ export function ProposePanel({
     return (
       <section className="panel section">
         <header className="section__head">
-          <p className="eyebrow eyebrow--accent">Fix it yourself</p>
+          <h2 className="eyebrow eyebrow--accent">Fix it yourself</h2>
         </header>
         <p className="soft section__empty">{planError.detail}</p>
       </section>
@@ -120,7 +120,7 @@ export function ProposePanel({
   return (
     <section className="panel section propose">
       <header className="section__head">
-        <p className="eyebrow eyebrow--accent">Fix it yourself</p>
+        <h2 className="eyebrow eyebrow--accent">Fix it yourself</h2>
         <p className="soft subsection__note">
           This fix has to come from{' '}
           <span className="mono">{plan.signerRequired}</span> on{' '}
@@ -159,7 +159,7 @@ export function ProposePanel({
           ) : null}
 
           <div className="subsection">
-            <p className="eyebrow">The transaction you would sign</p>
+            <h3 className="eyebrow">The transaction you would sign</h3>
             <table className="facts">
               <tbody>
                 <tr>
@@ -227,7 +227,7 @@ export function ProposePanel({
             </div>
           ) : (
             <div className="subsection">
-              <p className="eyebrow">Sign it</p>
+              <h3 className="eyebrow">Sign it</h3>
 
               <div className="actions__row">
                 {!walletAvailable() ? (

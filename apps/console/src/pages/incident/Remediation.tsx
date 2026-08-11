@@ -65,7 +65,7 @@ export function Remediation({
     return (
       <section className="panel section">
         <header className="section__head">
-          <p className="eyebrow eyebrow--accent">Remediation</p>
+          <h2 className="eyebrow eyebrow--accent">Remediation</h2>
         </header>
         <p className="soft section__empty">Nothing has acted on this incident.</p>
       </section>
@@ -81,7 +81,7 @@ export function Remediation({
   return (
     <section className="panel section">
       <header className="section__head">
-        <p className="eyebrow eyebrow--accent">Remediation</p>
+        <h2 className="eyebrow eyebrow--accent">Remediation</h2>
         <div className="section__title">
           <span className="mono">
             {remediation.playbookId}

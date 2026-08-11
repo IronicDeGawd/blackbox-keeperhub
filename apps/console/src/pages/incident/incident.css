@@ -13,8 +13,13 @@
   flex-wrap: wrap;
 }
 
+/* An h1 for the outline, but it is prose, so it keeps the body face rather
+   than picking up the mono heading treatment from base.css. */
 .incident__summary {
   margin: 0;
+  font-family: var(--font-sans);
+  font-weight: 400;
+  letter-spacing: normal;
   font-size: var(--t-lead);
   color: var(--ink);
   max-width: 80ch;

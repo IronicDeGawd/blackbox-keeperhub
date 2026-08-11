@@ -102,7 +102,11 @@
   padding-left: var(--s4);
 }
 
+/* Padded to clear the 24px target minimum: these stand alone on their own
+   line, so the inline-text exemption does not cover them. */
 .landing__destination-link {
+  display: inline-block;
+  padding: var(--s1) 0;
   font-family: var(--font-mono);
   font-size: var(--t-base);
   font-weight: 600;
@@ -161,6 +165,11 @@
 /* The hash column never wraps; the description is the part that gives. */
 .landing__proof td:last-child {
   white-space: nowrap;
+}
+
+.landing__proof a {
+  display: inline-block;
+  padding: var(--s1) 0;
 }
 
 .landing__proof-what {

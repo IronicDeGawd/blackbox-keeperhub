@@ -109,7 +109,9 @@ export function Incident(): React.JSX.Element {
           <StatusPill status={detail.status} />
         </div>
 
-        <p className="incident__summary">{detail.summary}</p>
+        {/* The summary is what the page is about, so it is the h1. The badges
+            above it are attributes of it, not a heading. */}
+        <h1 className="incident__summary">{detail.summary}</h1>
 
         <dl className="incident__meta">
           <div>

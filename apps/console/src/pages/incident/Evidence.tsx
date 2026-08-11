@@ -30,7 +30,7 @@ export function Evidence({
   return (
     <section className="panel section">
       <header className="section__head">
-        <p className="eyebrow eyebrow--accent">Evidence</p>
+        <h2 className="eyebrow eyebrow--accent">Evidence</h2>
         <div className="section__title">
           <RuleTag ruleId={evidence.ruleId} />
           <ClassBadge value={incidentClass} />
@@ -43,7 +43,7 @@ export function Evidence({
 
       {corroborationKeys.length > 0 ? (
         <div className="subsection">
-          <p className="eyebrow">Corroboration</p>
+          <h3 className="eyebrow">Corroboration</h3>
           {/* Independent readings taken from the chain at detection time. This
               is what separates a claim from a measurement. */}
           <p className="subsection__note soft">
@@ -71,7 +71,7 @@ export function Evidence({
 
       {suppressed.length > 0 ? (
         <div className="subsection">
-          <p className="eyebrow">Suppressed rules</p>
+          <h3 className="eyebrow">Suppressed rules</h3>
           {/* A hidden R1 underneath an R3 is otherwise baffling: the operator
               sees one incident where two rules fired. */}
           <p className="subsection__note soft">

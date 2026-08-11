@@ -66,7 +66,7 @@ export function Actions({
   return (
     <section className="panel section actions">
       <header className="section__head">
-        <p className="eyebrow eyebrow--accent">Actions</p>
+        <h2 className="eyebrow eyebrow--accent">Actions</h2>
       </header>
 
       <div className="actions__row">

@@ -15,7 +15,12 @@
   --surface-sunk: #edeff3;
   --ink: #14171d;
   --ink-soft: #4a515e;
-  --ink-faint: #767e8c;
+  /*
+   * Darkened from the spec's #767e8c, which fell to 3.55:1 on --surface-sunk —
+   * under AA. This is the colour of every eyebrow, stat label and timestamp,
+   * always set at the 0.75rem floor, so it is the one that has to hold up.
+   */
+  --ink-faint: #656c7a;
   --rule: #dbdfe6;
   --rule-strong: #c3c9d4;
   --accent: #d24608;
@@ -33,7 +38,7 @@
     --surface-sunk: #1d222a;
     --ink: #e7eaef;
     --ink-soft: #a8b0bc;
-    --ink-faint: #7c8492;
+    --ink-faint: #868e9c; /* lifted for AA on --surface-sunk */
     --rule: #2a3039;
     --rule-strong: #3a424e;
     --accent: #ff7a3d;
@@ -51,7 +56,7 @@
   --surface-sunk: #1d222a;
   --ink: #e7eaef;
   --ink-soft: #a8b0bc;
-  --ink-faint: #7c8492;
+  --ink-faint: #868e9c; /* lifted for AA on --surface-sunk */
   --rule: #2a3039;
   --rule-strong: #3a424e;
   --accent: #ff7a3d;

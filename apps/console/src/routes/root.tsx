@@ -22,6 +22,11 @@ function Shell(): React.JSX.Element {
 
   return (
     <div className="shell">
+      {/* Six rail links sit before the content on every page. */}
+      <a className="skip" href="#main">
+        Skip to content
+      </a>
+
       <header className="masthead">
         <div className="masthead__bar">
           <span className="brand">
@@ -37,7 +42,7 @@ function Shell(): React.JSX.Element {
 
       <div className="body">
         <Rail capabilities={config?.capabilities ?? null} />
-        <main className="shell__main">
+        <main className="shell__main" id="main" tabIndex={-1}>
           <Outlet />
         </main>
       </div>
