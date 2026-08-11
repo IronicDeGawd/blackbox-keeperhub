@@ -197,7 +197,15 @@ const alerter = new Alerter({
  * Always on: it costs nothing when nobody uses it, and without it every agent
  * stays unowned and every action stays open to anyone who can reach the URL.
  */
-const identity = new Identity(db, httpKeyVerifier(env['KEEPERHUB_API_URL']));
+const identity = new Identity(
+  db,
+  httpKeyVerifier(env['KEEPERHUB_API_URL']),
+  undefined,
+  // An operator who signed in before Blackbox learned KeeperHub's own
+  // organisation id has their agents, sessions and connection moved across the
+  // first time they sign in again.
+  (from, to, moved) => logger.info('organisation identity unified', { from, to, ...moved }),
+);
 
 /**
  * Agents any visitor may read. Unset means all of them, which is right for a

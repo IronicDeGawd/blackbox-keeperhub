@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   agentsOwnedByOrg,
   claimAgentForOrg,
+  remapOrganisation,
   createOrgSession,
   findOrgSession,
   ownerOfAgent,
@@ -29,12 +30,27 @@ export type KeyVerifier = {
   /**
    * Answer the organisation's own key list, which requires a valid key.
    *
-   * KeeperHub names no organisation anywhere in its API — `/api/organizations`
-   * answers 401, `/api/organization` and `/api/me` do not exist — so identity
-   * is derived from this list instead: every key belonging to one organisation
-   * sees the same set, and the lowest id in it is therefore stable across keys.
+   * Still how a key is *verified* — an invalid one cannot read this — and the
+   * fallback identity when nothing better is available.
    */
   listKeys(orgKey: string): Promise<{ id: string }[]>;
+  /**
+   * KeeperHub's own organisation id, if it can be read.
+   *
+   * `/api/organizations` refuses an organisation key and `/api/keys` names no
+   * organisation, but a workflow record carries `organizationId` — and it is
+   * the same value an OAuth access token puts in its `org` claim, checked
+   * against both live. That matters because it is the difference between one
+   * operator being one tenant and being two: signing in with a key and
+   * connecting through OAuth used to produce different ids for the same
+   * organisation, so an agent claimed through one door was invisible from the
+   * other.
+   *
+   * Optional, and null when the organisation has no workflows yet or their
+   * side cannot be reached. The caller falls back to the derived id rather
+   * than failing.
+   */
+  organizationId?(orgKey: string): Promise<string | null>;
 };
 
 /** Verifier backed by the live API. */
@@ -52,6 +68,24 @@ export function httpKeyVerifier(
       return (body.items ?? [])
         .map((i) => ({ id: String(i.id ?? '') }))
         .filter((i) => i.id.length > 0);
+    },
+
+    async organizationId(orgKey) {
+      try {
+        const res = await fetchImpl(`${baseUrl}/workflows`, {
+          headers: { Authorization: `Bearer ${orgKey}` },
+        });
+        if (!res.ok) return null;
+        const body = (await res.json()) as { organizationId?: unknown }[] | { items?: unknown };
+        const rows = Array.isArray(body) ? body : [];
+        for (const row of rows) {
+          const id = (row as { organizationId?: unknown }).organizationId;
+          if (typeof id === 'string' && id.length > 0) return id;
+        }
+        return null;
+      } catch {
+        return null;
+      }
     },
   };
 }
@@ -79,6 +113,12 @@ export class Identity {
     private readonly db: Database,
     private readonly verifier: KeyVerifier,
     private readonly now: () => Date = () => new Date(),
+    /** Told when an organisation's things were moved to its real id. */
+    private readonly onRemap?: (
+      from: string,
+      to: string,
+      moved: { agents: number; sessions: number; connections: number; workflows: number },
+    ) => void,
   ) {}
 
   /**
@@ -90,10 +130,26 @@ export class Identity {
    */
   async orgIdForKey(orgKey: string): Promise<string | null> {
     try {
-      return orgIdFrom(await this.verifier.listKeys(orgKey));
+      return (await this.resolve(orgKey)).orgId;
     } catch {
       return null;
     }
+  }
+
+  /**
+   * The organisation a key belongs to, preferring KeeperHub's own id.
+   *
+   * The key list is still what proves the key is real. The organisation id
+   * comes from a workflow record when there is one, because that is the same
+   * value OAuth puts in its `org` claim — so both ways of signing in land on
+   * one tenant. An organisation with no workflows falls back to the derived
+   * id, and is moved across the first time a workflow exists.
+   */
+  private async resolve(orgKey: string): Promise<{ orgId: string | null; derived: string | null }> {
+    const keys = await this.verifier.listKeys(orgKey);
+    const derived = orgIdFrom(keys);
+    const real = (await this.verifier.organizationId?.(orgKey)) ?? null;
+    return { orgId: real ?? derived, derived };
   }
 
   /**
@@ -110,11 +166,27 @@ export class Identity {
     } catch {
       return { ok: false, reason: 'rejected' };
     }
-    const orgId = orgIdFrom(keys);
+    const derived = orgIdFrom(keys);
+    const real = (await this.verifier.organizationId?.(orgKey)) ?? null;
+    const orgId = real ?? derived;
     // A valid key that can see no keys at all cannot be pinned to an
     // organisation, and guessing one would put an operator's agents in a tenant
     // that might not be theirs.
     if (!orgId) return { ok: false, reason: 'no_keys' };
+
+    /**
+     * Everything filed under the old derived id moves across, once.
+     *
+     * Sign-in is where it happens because that is the moment both ids are
+     * known for certain, and it is idempotent: the second sign-in finds
+     * nothing left to move.
+     */
+    if (real && derived && real !== derived) {
+      const moved = await remapOrganisation(this.db, { from: derived, to: real });
+      if (moved.agents + moved.sessions + moved.connections + moved.workflows > 0) {
+        this.onRemap?.(derived, real, moved);
+      }
+    }
 
     const token = `bb_${randomBytes(32).toString('hex')}`;
     await createOrgSession(this.db, {

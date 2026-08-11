@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { blackboxConfigSchema, CHAIN_IDS, type BlackboxConfig } from '@blackbox/core';
 import {
   activeSigners,
+  agentsOwnedByOrg,
   claimAgentForOrg,
   createDb,
   getKeeperhubConnection,
@@ -10,6 +11,7 @@ import {
   ingestCursors,
   keeperhubConnections,
   listWatchedWorkflows,
+  watchWorkflows,
   watchedWorkflows,
   incidents,
   recordRemediationAttempt,
@@ -1870,6 +1872,94 @@ describe('signing in with a wallet', () => {
     expect(
       (await server.inject({ method: 'POST', url: '/api/incidents/inc-1/remediate' })).statusCode,
     ).toBe(403);
+  });
+});
+
+describe('audit finding 18 — one organisation, one identity', () => {
+  /**
+   * A key sign-in used to derive an id from the key list while OAuth used
+   * KeeperHub's own `org` claim, so the same operator was two tenants and an
+   * agent claimed through one door was invisible from the other. A workflow
+   * record carries `organizationId`, and it is the same value the claim
+   * holds — checked against both live.
+   */
+  const verifier = (organizationId: string | null) => ({
+    listKeys: async () => [{ id: 'kh-key-1' }, { id: 'kh-key-2' }],
+    organizationId: async () => organizationId,
+  });
+
+  it('signs in under KeeperHub’s own organisation id', async () => {
+    const identity = new Identity(db, verifier('org-real-uuid'));
+    const result = await identity.signIn('kh_x');
+    expect(result.ok && result.orgId).toBe('org-real-uuid');
+  });
+
+  it('matches what an OAuth sign-in produces for the same organisation', async () => {
+    const identity = new Identity(db, verifier('org-real-uuid'));
+    const key = await identity.signIn('kh_x');
+    const oauth = await identity.signInWithOrg({ orgId: 'org-real-uuid' });
+    expect(key.ok && key.orgId).toBe(oauth.orgId);
+  });
+
+  it('falls back to the derived id when they name no organisation', async () => {
+    const identity = new Identity(db, verifier(null));
+    const result = await identity.signIn('kh_x');
+    expect(result.ok && result.orgId).toBe('kh-key-1');
+  });
+
+  /** What an operator who signed in before this change actually has. */
+  it('moves what was filed under the old id, once', async () => {
+    const legacy = new Identity(db, { listKeys: async () => [{ id: 'kh-key-1' }] });
+    const before = await legacy.signIn('kh_x');
+    if (!before.ok) throw new Error('fixture sign-in failed');
+    expect(before.orgId).toBe('kh-key-1');
+
+    const server = await app({ identity: legacy });
+    await server.inject({
+      method: 'POST',
+      url: '/api/watched',
+      headers: { authorization: `Bearer ${before.token}` },
+      payload: { signer: SIGNER, chainId: CHAIN_IDS.sepolia, agentId: 'claimed-before' },
+    });
+    await watchWorkflows(db, {
+      orgId: 'kh-key-1',
+      workflows: [{ workflowId: 'wf-old' }],
+      at: new Date(),
+    });
+
+    const moved: unknown[] = [];
+    const upgraded = new Identity(db, verifier('org-real-uuid'), undefined, (from, to, m) =>
+      moved.push({ from, to, ...m }),
+    );
+    const after = await upgraded.signIn('kh_x');
+    if (!after.ok) throw new Error('sign-in failed');
+
+    expect(after.orgId).toBe('org-real-uuid');
+    expect(await agentsOwnedByOrg(db, 'org-real-uuid')).toContain('claimed-before');
+    expect(await agentsOwnedByOrg(db, 'kh-key-1')).toEqual([]);
+    expect((await listWatchedWorkflows(db, 'org-real-uuid')).map((w) => w.workflowId)).toEqual([
+      'wf-old',
+    ]);
+    expect(moved).toHaveLength(1);
+
+    // And the session minted before the move still names its owner correctly.
+    const session = await server.inject({
+      url: '/api/auth/session',
+      headers: { authorization: `Bearer ${before.token}` },
+    });
+    expect(session.json().orgId).toBe('org-real-uuid');
+    expect(session.json().agents).toContain('claimed-before');
+  });
+
+  it('moves nothing the second time', async () => {
+    const identity = new Identity(db, verifier('org-real-uuid'));
+    const moved: unknown[] = [];
+    const watched = new Identity(db, verifier('org-real-uuid'), undefined, (f, t, m) =>
+      moved.push({ f, t, ...m }),
+    );
+    await identity.signIn('kh_x');
+    await watched.signIn('kh_x');
+    expect(moved).toEqual([]);
   });
 });
 

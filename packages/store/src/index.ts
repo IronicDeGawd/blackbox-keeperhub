@@ -797,6 +797,59 @@ export async function claimAgentForOrg(
   return 'claimed';
 }
 
+/**
+ * Move everything an organisation owns from one id to another.
+ *
+ * Blackbox used to know one KeeperHub organisation by two different ids: a
+ * key sign-in derived one from the key list, while OAuth used KeeperHub's own
+ * `org` claim. The same operator was therefore two tenants, and an agent
+ * claimed through one door was invisible from the other. Once the real id is
+ * known, what was filed under the derived one is moved across.
+ *
+ * Idempotent: running it again moves nothing, because nothing is left.
+ */
+export async function remapOrganisation(
+  db: Database,
+  params: { from: string; to: string },
+): Promise<{ agents: number; sessions: number; connections: number; workflows: number }> {
+  if (params.from === params.to) {
+    return { agents: 0, sessions: 0, connections: 0, workflows: 0 };
+  }
+  const agents = await db
+    .update(agentOwners)
+    .set({ orgId: params.to })
+    .where(eq(agentOwners.orgId, params.from))
+    .returning({ agentId: agentOwners.agentId });
+  const sessions = await db
+    .update(orgSessions)
+    .set({ orgId: params.to })
+    .where(eq(orgSessions.orgId, params.from))
+    .returning({ tokenHash: orgSessions.tokenHash });
+  const workflows = await db
+    .update(watchedWorkflows)
+    .set({ orgId: params.to })
+    .where(eq(watchedWorkflows.orgId, params.from))
+    .returning({ workflowId: watchedWorkflows.workflowId });
+  // A connection is keyed by organisation, so it is moved only when the
+  // destination has none of its own; theirs is the more current credential.
+  const existing = await getKeeperhubConnection(db, params.to);
+  let connections = 0;
+  if (!existing) {
+    const moved = await db
+      .update(keeperhubConnections)
+      .set({ orgId: params.to })
+      .where(eq(keeperhubConnections.orgId, params.from))
+      .returning({ orgId: keeperhubConnections.orgId });
+    connections = moved.length;
+  }
+  return {
+    agents: agents.length,
+    sessions: sessions.length,
+    connections,
+    workflows: workflows.length,
+  };
+}
+
 // --- oauth ------------------------------------------------------------------
 
 export async function getOAuthClient(
