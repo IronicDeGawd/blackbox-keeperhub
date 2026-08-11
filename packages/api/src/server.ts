@@ -1,6 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { privateKeyToAccount } from 'viem/accounts';
-import { blackboxConfigSchema, getChain, KeeperHubClient, KeeperHubMcp } from '@blackbox/core';
+import {
+  blackboxConfigSchema,
+  getChain,
+  KeeperHubClient,
+  KeeperHubMcp,
+  type AgentKind,
+} from '@blackbox/core';
 import { ChaosHarness } from '@blackbox/chaos';
 import {
   KeeperHubExecutor,
@@ -11,7 +17,13 @@ import {
   SignerExecutor,
   WorkflowExecutor,
 } from '@blackbox/remediator';
-import { createDb, getIncident, saveIncident, type Database } from '@blackbox/store';
+import {
+  createDb,
+  getIncident,
+  recentAgentKinds,
+  saveIncident,
+  type Database,
+} from '@blackbox/store';
 import { buildApp, type ChaosScenario } from './app.js';
 import { EventBus } from './bus.js';
 import { planChaos } from './chaos-plans.js';
@@ -290,10 +302,43 @@ const remediator = canRemediate
       }),
       market: async () => runtime.market(),
       ...(breakers ? { breakers } : {}),
+      /**
+       * What this process can actually execute with, so the router refuses a
+       * playbook it could never carry out — and names the reason — instead of
+       * planning one and failing at submission.
+       */
+      executorKinds: [
+        ...(signerExecutor ? (['signer'] as const) : []),
+        ...(keeperHubExecutor ? (['keeperhub'] as const) : []),
+        ...(workflowExecutor ? (['keeperhub-workflow'] as const) : []),
+      ],
+      // Read from what was recorded rather than configured: the events say how
+      // the agent executed, and nothing else can.
+      agentKind: (incident) => agentKindFor(incident.agentId),
       makeId: () => runtime.nextId('rem'),
       logger,
     })
   : undefined;
+
+/**
+ * How an agent executes, from its own recorded events.
+ *
+ * Cached because the router asks once per remediation and the answer changes
+ * only when an agent is first seen. A miss returns undefined, which the router
+ * reads as "unclassified" and serves every playbook to.
+ */
+const agentKinds = new Map<string, AgentKind | undefined>();
+function agentKindFor(agentId: string): AgentKind | undefined {
+  return agentKinds.get(agentId);
+}
+void (async () => {
+  try {
+    for (const row of await recentAgentKinds(db)) agentKinds.set(row.agentId, row.agentKind);
+  } catch {
+    // An unavailable database at startup is already fatal elsewhere; here it
+    // only costs the classification, which degrades to "unknown".
+  }
+})();
 
 const loop = remediator
   ? new RemediationLoop({

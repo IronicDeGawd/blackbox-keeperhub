@@ -890,3 +890,33 @@ export async function revokeWebhookSecret(
     .set({ revokedAt: at })
     .where(eq(webhookSecrets.secretHash, secretHash));
 }
+
+/**
+ * How each agent executes, from what was actually recorded.
+ *
+ * The most recent classification wins, since an agent that has migrated from
+ * its own key to a managed wallet is now the latter. Agents with no
+ * classification are absent rather than guessed at.
+ */
+export async function recentAgentKinds(
+  db: Database,
+): Promise<{ agentId: string; agentKind: 'keeperhub' | 'signer' }[]> {
+  const rows = await db
+    .select({
+      agentId: executionEvents.agentId,
+      agentKind: executionEvents.agentKind,
+      submittedAt: executionEvents.submittedAt,
+    })
+    .from(executionEvents)
+    .orderBy(desc(executionEvents.submittedAt))
+    .limit(2000);
+
+  const seen = new Map<string, 'keeperhub' | 'signer'>();
+  for (const row of rows) {
+    if (!row.agentKind || seen.has(row.agentId)) continue;
+    if (row.agentKind === 'keeperhub' || row.agentKind === 'signer') {
+      seen.set(row.agentId, row.agentKind);
+    }
+  }
+  return [...seen.entries()].map(([agentId, agentKind]) => ({ agentId, agentKind }));
+}

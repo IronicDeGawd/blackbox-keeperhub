@@ -7,7 +7,7 @@ import {
   type Database,
 } from '@blackbox/store';
 import { evaluateGuards, mutexKey } from './guards.js';
-import { P1, P2, P3, P4, P5, playbookFor } from './playbooks.js';
+import { P1, P2, P3, P4, P5, playbookFor, servability } from './playbooks.js';
 import { Remediator, type RemediationExecutor } from './remediator.js';
 
 const URL = process.env['DATABASE_URL'] ?? 'postgres://blackbox:blackbox@localhost:5433/blackbox';
@@ -495,5 +495,41 @@ describe('per-signer mutex', () => {
 
     expect(second.record.finalStatus).toBe('skipped_by_guard');
     expect(second.record.attempts[0]!.guardsFailed).toContain('no_remediation_in_flight');
+  });
+});
+
+describe('who a playbook can serve', () => {
+  /**
+   * The honesty this exists for: refusing before spending, with a reason an
+   * operator can act on rather than "no remediation available".
+   */
+  it('refuses a nonce-bearing playbook for a managed wallet, and says why', () => {
+    const check = servability(P1, 'keeperhub', ['signer', 'keeperhub']);
+    expect(check.servable).toBe(false);
+    expect(check.reason).toContain('does not apply to a keeperhub agent');
+  });
+
+  it('serves the same playbook for an agent that holds its own key', () => {
+    expect(servability(P1, 'signer', ['signer']).servable).toBe(true);
+  });
+
+  // Pausing carries no nonce and asks nothing of the sender beyond the role, so
+  // it is the one playbook a managed wallet can be served by today.
+  it('serves the circuit breaker for either kind of agent', () => {
+    expect(servability(P4, 'keeperhub', ['keeperhub-workflow']).servable).toBe(true);
+    expect(servability(P4, 'signer', ['signer']).servable).toBe(true);
+  });
+
+  it('refuses when this deployment has no executor the playbook can use', () => {
+    const check = servability(P4, 'signer', []);
+    expect(check.servable).toBe(false);
+    expect(check.reason).toContain('this deployment has none');
+  });
+
+  // An agent nobody has classified is offered everything: declining on a guess
+  // would refuse a fix somebody could have used.
+  it('withholds nothing when the agent kind is unknown', () => {
+    expect(servability(P1, undefined, ['signer']).servable).toBe(true);
+    expect(servability(P2, undefined, ['user-signed']).servable).toBe(true);
   });
 });

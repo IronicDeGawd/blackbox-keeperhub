@@ -1,7 +1,13 @@
-import type { BlackboxConfig, Incident, RemediationRecord } from '@blackbox/core';
+import type { AgentKind, BlackboxConfig, Incident, RemediationRecord } from '@blackbox/core';
 import { recordRemediationAttempt, type Database } from '@blackbox/store';
 import { evaluateGuards, mutexKey, type GuardName } from './guards.js';
-import { playbookFor, type PlaybookPlan, type PlanContext } from './playbooks.js';
+import {
+  playbookFor,
+  servability,
+  type ExecutorKind,
+  type PlaybookPlan,
+  type PlanContext,
+} from './playbooks.js';
 
 /**
  * Submits the transaction a playbook planned and reports what happened.
@@ -45,6 +51,17 @@ export type RemediatorOptions = {
   /** Registered circuit breakers, by agent id (P4). */
   breakers?: Record<string, `0x${string}`>;
   fundingWallet?: `0x${string}`;
+  /**
+   * How the agent behind an incident executes, when it has been established.
+   * Absent means unknown, and an unknown agent is offered every playbook —
+   * declining on a guess would refuse a fix somebody could have used.
+   */
+  agentKind?: (incident: Incident) => AgentKind | undefined;
+  /**
+   * What this deployment can actually execute with. Defaults to the executor
+   * it was given, which is the honest answer for a process holding one.
+   */
+  executorKinds?: readonly ExecutorKind[];
   logger?: { info: (m: string, d?: unknown) => void; error: (m: string, d?: unknown) => void };
 };
 
@@ -65,6 +82,11 @@ export class Remediator {
     this.now = options.now ?? (() => new Date());
   }
 
+  /** What this process can execute with, as the router understands it. */
+  private executors(): readonly ExecutorKind[] {
+    return this.options.executorKinds ?? ['signer', 'keeperhub', 'keeperhub-workflow'];
+  }
+
   get busySigners(): string[] {
     return [...this.inFlight];
   }
@@ -82,6 +104,22 @@ export class Remediator {
     if (!playbook) {
       return {
         record: skipped('none', 'skipped_by_policy', this.now(), `no playbook handles ${incident.class}`),
+        guardsFailed: [],
+      };
+    }
+
+    /**
+     * Refuse before spending anything, and say why.
+     *
+     * "No remediation available" is a worse answer than "this agent's nonces
+     * are managed by KeeperHub, so a replacement submission is not something
+     * anyone here can send". The first sounds like a missing feature; the
+     * second is a fact about the agent that an operator can act on.
+     */
+    const serve = servability(playbook, this.options.agentKind?.(incident), this.executors());
+    if (!serve.servable) {
+      return {
+        record: skipped(playbook.id, 'skipped_by_policy', this.now(), serve.reason ?? 'not servable'),
         guardsFailed: [],
       };
     }

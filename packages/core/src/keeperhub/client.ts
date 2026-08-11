@@ -461,6 +461,135 @@ export class KeeperHubClient {
   }
 
   /**
+   * Read a value, test it, and act only if the test holds — all on their side.
+   *
+   * The difference from doing the same three steps here is atomicity of intent:
+   * our guards run in this process a block or more before the transaction
+   * lands, so the state they checked can move underneath them. This one checks
+   * and acts in the same call, which is what a circuit breaker actually needs.
+   *
+   * `functionArgs` is a JSON array encoded as a string on both the check and
+   * the action, per their API.
+   */
+  async checkAndExecute(params: {
+    contractAddress: string;
+    chainId: string;
+    functionName: string;
+    functionArgs: string;
+    abi?: string;
+    condition: { operator: 'gt' | 'gte' | 'lt' | 'lte' | 'eq' | 'neq'; value: string };
+    action: {
+      contractAddress: string;
+      functionName: string;
+      functionArgs: string;
+      abi?: string;
+      gasLimitMultiplier?: string;
+    };
+    simulate?: boolean;
+    idempotencyKey?: string;
+  }): Promise<{ conditionMet: boolean; execution: KeeperHubExecution | null; raw: unknown }> {
+    const { idempotencyKey, ...body } = params;
+    const res = await this.request<Record<string, unknown>>('/execute/check-and-execute', {
+      method: 'POST',
+      body,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+    if (res.status >= 400 && !isExecutionShaped(res.body)) {
+      throw new KeeperHubError('check-and-execute failed', res.status, res.body);
+    }
+    const body_ = res.body ?? {};
+    // A condition that did not hold is a result, not a failure: nothing was
+    // executed and nothing went wrong.
+    const conditionMet =
+      body_['conditionMet'] === true || (body_['conditionMet'] === undefined && isExecutionShaped(body_));
+    return {
+      conditionMet,
+      execution: isExecutionShaped(body_) ? this.parseExecution(body_) : null,
+      raw: body_,
+    };
+  }
+
+  /**
+   * Run a published protocol action — Aave, Morpho, Compound and the rest.
+   *
+   * Lets a playbook express "repay this position" instead of assembling
+   * calldata for a protocol we would otherwise have to encode ourselves and
+   * keep correct as it upgrades.
+   */
+  async executeProtocolAction(
+    actionType: string,
+    params: Record<string, unknown>,
+    idempotencyKey?: string,
+  ): Promise<unknown> {
+    const [integration, slug] = actionType.split('/');
+    if (!integration || !slug) {
+      throw new KeeperHubError(
+        `actionType must be "protocol/action-slug"; got "${actionType}"`,
+        400,
+        actionType,
+      );
+    }
+    const res = await this.request<unknown>(`/execute/${integration}/${slug}`, {
+      method: 'POST',
+      body: params,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+    if (res.status >= 400) {
+      throw new KeeperHubError(`Protocol action ${actionType} failed`, res.status, res.body);
+    }
+    return res.body;
+  }
+
+  /** Discover protocol actions and the parameters each one needs. */
+  async searchProtocolActions(protocol?: string): Promise<unknown> {
+    const query = new URLSearchParams({ includeChains: 'false' });
+    if (protocol) query.set('category', protocol);
+    const res = await this.request<unknown>(`/mcp/schemas?${query.toString()}`);
+    if (res.status !== 200) {
+      throw new KeeperHubError('searchProtocolActions failed', res.status, res.body);
+    }
+    return res.body;
+  }
+
+  /**
+   * Sign a payment and hold it, rather than broadcasting it.
+   *
+   * The only primitive here that acts *before* harm. Everything else Blackbox
+   * does is compensation — pause it, replace it, fill the gap — and all of that
+   * happens after the money moved. A held payment can simply be cancelled.
+   */
+  async tempoSignAndHold(params: Record<string, unknown>): Promise<unknown> {
+    const res = await this.request<unknown>('/tempo/held-payments', {
+      method: 'POST',
+      body: params,
+    });
+    if (res.status >= 400) {
+      throw new KeeperHubError('tempoSignAndHold failed', res.status, res.body);
+    }
+    return res.body;
+  }
+
+  async tempoCancelHold(paymentId: string): Promise<unknown> {
+    const res = await this.request<unknown>(`/tempo/held-payments/${paymentId}/cancel`, {
+      method: 'POST',
+    });
+    if (res.status >= 400) {
+      throw new KeeperHubError('tempoCancelHold failed', res.status, res.body);
+    }
+    return res.body;
+  }
+
+  async tempoReleaseHold(paymentId: string): Promise<unknown> {
+    const res = await this.request<unknown>(`/tempo/held-payments/${paymentId}/release`, {
+      method: 'POST',
+    });
+    if (res.status >= 400) {
+      throw new KeeperHubError('tempoReleaseHold failed', res.status, res.body);
+    }
+    return res.body;
+  }
+
+  /**
    * The organisation's daily execution budget and what it has spent today.
    *
    * `dailyCapWei` is null when no cap is configured. That is not a cap of zero
