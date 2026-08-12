@@ -39,7 +39,18 @@ export type KeeperHubClientOptions = {
    * out a window boundary and few enough that a sweep still ends.
    */
   maxRateLimitRetries?: number;
-  logger?: { warn?: (message: string, meta?: Record<string, unknown>) => void };
+  /**
+   * Somewhere to say that a request was throttled.
+   *
+   * All three levels are accepted because callers already hold loggers of
+   * different shapes — the sweeper's has `info` and `error` and no `warn` —
+   * and a type with only an optional `warn` would reject every one of them.
+   */
+  logger?: {
+    warn?: (message: string, meta?: Record<string, unknown>) => void;
+    info?: (message: string, meta?: Record<string, unknown>) => void;
+    error?: (message: string, meta?: Record<string, unknown>) => void;
+  };
 };
 
 export class KeeperHubError extends Error {
@@ -136,7 +147,9 @@ export class KeeperHubClient {
       if (wait !== null && wait <= MAX_RETRY_WAIT_MS && KeeperHubClient.repeatable(init)) {
         // Drained so the connection is released before the wait.
         await res.text();
-        this.logger?.warn?.('keeperhub rate limited, waiting as asked', {
+        // warn where there is one, otherwise info: being throttled is worth
+        // recording even by a logger that has no warning level.
+        (this.logger?.warn ?? this.logger?.info)?.('keeperhub rate limited, waiting as asked', {
           path,
           waitMs: wait,
           attempt: attempt + 1,
