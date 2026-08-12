@@ -42,6 +42,7 @@ import {
   saveIncident,
   stats,
   unwatchSigner,
+  verifyLedger,
   watchSigner,
   type Database,
 } from '@blackbox/store';
@@ -430,6 +431,22 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     const readable = await readableAgents(await callerOf(request));
     const result = await stats(db, new Date(), readable ?? undefined);
     return { ...result, updatedAt: result.updatedAt.toISOString() };
+  });
+
+  /**
+   * Is the remediation record intact.
+   *
+   * Every entry names a transaction anybody can look up, but no per-entry
+   * check can show that the entries are *all* of them. Each one carries the
+   * hash of the one before it, so this walk answers the harder question:
+   * nothing has been edited and nothing has been quietly removed.
+   *
+   * Public and read-only on purpose. A tamper-evidence claim that only its
+   * author can check is not evidence.
+   */
+  app.get('/api/ledger/verify', async () => {
+    const result = await verifyLedger(db);
+    return { ...result, checkedAt: new Date().toISOString() };
   });
 
   /**

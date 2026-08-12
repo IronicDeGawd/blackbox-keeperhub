@@ -212,6 +212,21 @@ export type RunLog = {
   runs: RunLogEntry[];
 };
 
+/**
+ * Whether the remediation record is intact. Each entry carries the hash of the
+ * one before it, so this answers a question no single entry can: nothing has
+ * been edited and nothing has been quietly removed.
+ */
+export type LedgerVerification = {
+  ok: boolean;
+  entries: number;
+  /** Attempts recorded before the chain existed. Not verifiable, not claimed. */
+  unchained: number;
+  brokenAt: string | null;
+  reason: 'ok' | 'hash_mismatch' | 'broken_link' | 'empty' | null;
+  checkedAt: string;
+};
+
 export type IncidentList = {
   items: IncidentSummary[];
   nextCursor: string | null;

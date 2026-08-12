@@ -12,6 +12,7 @@ import type {
   IncidentDetail,
   IncidentList,
   IncidentSummary,
+  LedgerVerification,
   RemediateResponse,
   RemediationPlan,
   RemediationTxResult,
@@ -146,6 +147,8 @@ export const api = {
 
   incident: (id: string, init?: RequestInit): Promise<IncidentDetail> =>
     request<IncidentDetail>(`/api/incidents/${encodeURIComponent(id)}`, init),
+
+  ledger: (): Promise<LedgerVerification> => request<LedgerVerification>('/api/ledger/verify'),
 
   runLog: (id: string): Promise<RunLog> =>
     request<RunLog>(`/api/incidents/${encodeURIComponent(id)}/run-log`),

@@ -166,3 +166,40 @@
 .demo__message {
   color: var(--ink);
 }
+
+/* --- ledger ------------------------------------------------------------- */
+
+/*
+ * One line, and quiet when whole. It is a standing reassurance, not a metric,
+ * so it gets a hairline rule and no panel of its own.
+ */
+.dash__ledger {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: var(--s2) 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--t-small);
+  color: var(--ink-soft);
+}
+
+.dash__ledger-mark {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.dash__ledger--broken {
+  color: var(--ink);
+  border-color: var(--critical);
+}
+
+.dash__ledger--broken .dash__ledger-mark {
+  color: var(--critical);
+}
+
+.dash__ledger-note {
+  color: var(--ink-faint);
+}

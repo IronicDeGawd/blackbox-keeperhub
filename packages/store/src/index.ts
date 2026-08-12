@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import type { ExecutionEvent } from '@blackbox/core';
@@ -20,9 +20,18 @@ import {
   remediationLedger,
 } from './schema.js';
 
+import { hashEntry, verifyChain, type LedgerVerification } from './ledger-chain.js';
+
 export * from './schema.js';
+export * from './ledger-chain.js';
 
 export type Database = PostgresJsDatabase<Record<string, never>>;
+
+/**
+ * The advisory-lock key that serialises ledger appends. Arbitrary but fixed —
+ * every writer has to pick the same number or the lock does nothing.
+ */
+const LEDGER_LOCK_KEY = 4_213_907;
 
 export function createDb(connectionString: string): { db: Database; close: () => Promise<void> } {
   const sqlClient = postgres(connectionString, { max: 5 });
@@ -675,14 +684,55 @@ export async function recordRemediationAttempt(
     agentId?: string;
   },
 ): Promise<void> {
-  await db.insert(remediationLedger).values({
-    ...entry,
+  const row = {
+    id: entry.id,
+    incidentId: entry.incidentId,
+    playbookId: entry.playbookId,
     signer: entry.signer.toLowerCase(),
+    chainId: entry.chainId,
+    attemptedAt: entry.attemptedAt,
     gasSpentWei: (entry.gasSpentWei ?? 0n).toString(),
+    status: entry.status,
     txHash: entry.txHash ?? null,
     executor: entry.executor ?? null,
     agentId: entry.agentId ?? null,
+  };
+
+  /**
+   * Appending has to be serialised, or two concurrent remediations both read
+   * the same tip and both claim to follow it — which reads as a broken chain
+   * ever after. Locking the tip row is not enough: the second transaction
+   * would still not see a row the first had not committed yet. An advisory
+   * lock has no such gap, and it is held only for the length of the insert.
+   */
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${LEDGER_LOCK_KEY})`);
+    const [tip] = await tx
+      .select({ entryHash: remediationLedger.entryHash })
+      .from(remediationLedger)
+      .where(isNotNull(remediationLedger.entryHash))
+      .orderBy(desc(remediationLedger.seq))
+      .limit(1);
+    const prevHash = tip?.entryHash ?? null;
+    await tx.insert(remediationLedger).values({
+      ...row,
+      prevHash,
+      entryHash: hashEntry(row, prevHash),
+    });
   });
+}
+
+/**
+ * Walk the whole ledger and report whether it is intact.
+ *
+ * Read in append order, not by timestamp — the chain is the order it was
+ * written in. Cheap enough to be a public endpoint at this size; if a
+ * deployment ever outgrows reading it whole, the fix is to verify from a
+ * checkpoint rather than to stop verifying.
+ */
+export async function verifyLedger(db: Database): Promise<LedgerVerification> {
+  const rows = await db.select().from(remediationLedger).orderBy(asc(remediationLedger.seq));
+  return verifyChain(rows);
 }
 
 export type WatchedSigner = typeof watchedSigners.$inferSelect;

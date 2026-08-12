@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { api } from '../../lib/api';
+import { API_URL, api } from '../../lib/api';
 import { useConsole } from '../../lib/store';
 import { DemoButton } from '../../ui/DemoButton';
 import { RelativeTime, RuleTag, SeverityDot, StatusPill } from '../../ui/primitives';
-import type { Capabilities, IncidentSummary } from '../../lib/types';
+import type { Capabilities, IncidentSummary, LedgerVerification } from '../../lib/types';
 import './dashboard.css';
 
 /**
@@ -122,6 +122,67 @@ function Latest(): React.JSX.Element {
   );
 }
 
+/**
+ * Whether the remediation record can still be trusted.
+ *
+ * Any single entry names a transaction anybody can look up. This is the claim
+ * a per-entry check cannot make: the entries are all of them, in the order
+ * they happened, with nothing edited and nothing removed. One line, because it
+ * only ever needs to be interesting when it is bad.
+ */
+function LedgerLine(): React.JSX.Element | null {
+  const { stats } = useConsole();
+  const [result, setResult] = useState<LedgerVerification | null>(null);
+  // Re-checked whenever a remediation lands, since that is when it changes.
+  const pulse = stats?.remediations.total ?? 0;
+
+  useEffect(() => {
+    let live = true;
+    void api
+      .ledger()
+      .then((next) => {
+        if (live) setResult(next);
+      })
+      .catch(() => {
+        if (live) setResult(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [pulse]);
+
+  // Nothing to vouch for yet, and "0 entries verified" is not a reassurance.
+  if (result === null || result.entries === 0) return null;
+
+  return (
+    <p className={`dash__ledger ${result.ok ? '' : 'dash__ledger--broken'}`} role="status">
+      <span className="dash__ledger-mark" aria-hidden="true">
+        {result.ok ? '✓' : '✕'}
+      </span>
+      {result.ok ? (
+        <>
+          Remediation record intact — {result.entries}{' '}
+          {result.entries === 1 ? 'entry' : 'entries'}, each carrying the hash of the one before it.
+        </>
+      ) : (
+        <>
+          Remediation record broken at <span className="mono">{result.brokenAt}</span>. An entry has
+          been changed or removed since it was written.
+        </>
+      )}{' '}
+      <a href={`${API_URL}/api/ledger/verify`} target="_blank" rel="noreferrer">
+        Check it yourself
+      </a>
+      {result.unchained > 0 ? (
+        <span className="dash__ledger-note">
+          {' '}
+          ({result.unchained} recorded before the chain existed, and not claimed by it)
+        </span>
+      ) : null}
+    </p>
+  );
+}
+
 export function Dashboard(): React.JSX.Element {
   const { config } = useConsole();
   const capabilities = config?.capabilities ?? null;
@@ -135,6 +196,8 @@ export function Dashboard(): React.JSX.Element {
       <header>
         <h1 className="eyebrow eyebrow--accent eyebrow--ruled">Console</h1>
       </header>
+
+      <LedgerLine />
 
       <div className="dash__top">
         <Latest />

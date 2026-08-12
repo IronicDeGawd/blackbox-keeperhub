@@ -159,6 +159,43 @@ describe('reading incidents', () => {
   });
 });
 
+describe('verifying the remediation record', () => {
+  const attempt = (over: Record<string, unknown> = {}) => ({
+    id: 'rem-1',
+    incidentId: 'inc-1',
+    playbookId: 'P2',
+    signer: SIGNER,
+    chainId: CHAIN_IDS.sepolia,
+    attemptedAt: T0,
+    gasSpentWei: 21_000n,
+    status: 'succeeded',
+    ...over,
+  });
+
+  it('answers without a session, because a check only its author can run is not one', async () => {
+    await recordRemediationAttempt(db, attempt());
+    const res = await (await app()).inject({ url: '/api/ledger/verify' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, entries: 1, brokenAt: null });
+    expect(typeof res.json().checkedAt).toBe('string');
+  });
+
+  it('links every attempt to the one before it', async () => {
+    await recordRemediationAttempt(db, attempt({ id: 'rem-1' }));
+    await recordRemediationAttempt(db, attempt({ id: 'rem-2', status: 'failed' }));
+    await recordRemediationAttempt(db, attempt({ id: 'rem-3' }));
+
+    const res = await (await app()).inject({ url: '/api/ledger/verify' });
+    expect(res.json()).toMatchObject({ ok: true, entries: 3, unchained: 0, brokenAt: null });
+  });
+
+  it('says an empty ledger is empty rather than claiming it proves something', async () => {
+    const res = await (await app()).inject({ url: '/api/ledger/verify' });
+    expect(res.json()).toMatchObject({ ok: true, entries: 0, reason: 'empty' });
+  });
+});
+
 describe('acknowledging', () => {
   it('moves the incident out of the open set and announces it', async () => {
     await saveIncident(db, row() as never);

@@ -506,6 +506,18 @@ const server = createServer(async (req, res) => {
 
   if (path === '/api/stats') return json(res, 200, stats());
 
+  // Intact, so the console's quiet state is the one being built against.
+  if (path === '/api/ledger/verify') {
+    return json(res, 200, {
+      ok: true,
+      entries: 3,
+      unchained: 0,
+      brokenAt: null,
+      reason: 'ok',
+      checkedAt: new Date().toISOString(),
+    });
+  }
+
   if (path === '/api/config') {
     return json(res, 200, {
       chains: [

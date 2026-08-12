@@ -113,6 +113,13 @@
       "when": 1786476096530,
       "tag": "0015_premium_moondragon",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786519620242,
+      "tag": "0016_blue_joystick",
+      "breakpoints": true
     }
   ]
 }
