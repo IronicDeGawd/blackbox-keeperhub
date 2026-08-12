@@ -382,10 +382,23 @@ export async function stats(
   const countSeverity = (severity: string): number =>
     open.filter((i) => i.severity === severity).length;
 
-  // Detection latency is measured from the first event that became evidence,
-  // not from when the incident row was written — the gap between them is
-  // exactly what this number is meant to expose.
+  /**
+   * Detection latency is measured from the first event that became evidence,
+   * not from when the incident row was written — the gap between them is
+   * exactly what this number is meant to expose.
+   *
+   * Incidents that cite no event are excluded rather than counted as zero. R8
+   * reads the organisation's spend cap from the platform: there is no
+   * execution behind it and so no moment the failure started, and averaging in
+   * a zero would pull the figure down for a reason that has nothing to do with
+   * how quickly anything was noticed.
+   */
+  const citesAnEvent = (row: (typeof incidentRows)[number]): boolean => {
+    const evidence = row.evidence as { eventIds?: unknown } | null;
+    return Array.isArray(evidence?.eventIds) && evidence.eventIds.length > 0;
+  };
   const detectionLatencies = incidentRows
+    .filter(citesAnEvent)
     .map((i) => i.detectedAt.getTime() - i.firstEventAt.getTime())
     .filter((ms) => ms >= 0);
 

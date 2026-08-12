@@ -346,6 +346,27 @@ describe('API queries', () => {
     expect(s.meanTimeToRemediationMs).toBeNull();
   });
 
+  it('leaves an incident with no event behind it out of the detection mean', async () => {
+    // R8 reads the organisation's spend cap from the platform: there is no
+    // execution behind it, so there is no moment the failure started, and
+    // counting it as zero would drag the figure down for no real reason.
+    await saveIncident(db, mkIncident({ id: 'with-event' }) as never);
+    await saveIncident(
+      db,
+      mkIncident({
+        id: 'without',
+        key: 'k2',
+        class: 'SPEND_CAP_EXHAUSTED',
+        ruleId: 'R8',
+        firstEventAt: new Date('2026-08-10T12:01:00Z'),
+        evidence: { eventIds: [], ruleId: 'R8', facts: {} },
+      }) as never,
+    );
+
+    expect((await stats(db)).meanTimeToDetectionMs).toBe(60_000);
+    expect((await stats(db)).incidentsDetected).toBe(2);
+  });
+
   it('measures detection latency from the first evidence event, not the row write', async () => {
     await saveIncident(db, mkIncident({ id: 'a' }) as never);
     const s = await stats(db);
