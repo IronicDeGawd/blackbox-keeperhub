@@ -80,6 +80,33 @@ export const FACT_KEYS: Record<IncidentClass, readonly string[]> = {
     'neighbouringTxHashes',
     'route',
   ],
+  EXECUTION_STALLED: [
+    'workflowId',
+    'workflowName',
+    'stalledMs',
+    'executionStalledMs',
+    'completedSteps',
+    'txHash',
+  ],
+  WORKFLOW_MISCONFIGURED: [
+    'workflowId',
+    'workflowName',
+    'failureCount',
+    'workflowNodeFailures',
+    'windowMs',
+    'failingAfterSteps',
+    'distinctFailingSteps',
+    'distinctReasons',
+    'errorTypes',
+  ],
+  SPEND_CAP_EXHAUSTED: [
+    'dailyCapWei',
+    'dailyUsedWei',
+    'remainingWei',
+    'usedRatio',
+    'warnRatio',
+    'exhausted',
+  ],
 };
 
 /**
@@ -93,6 +120,9 @@ export const THRESHOLD_OF: Record<string, string> = {
   signerBalance: 'thresholdBalance',
   deltaBps: 'slippageToleranceBps',
   attemptCount: 'retryStormCount',
+  stalledMs: 'executionStalledMs',
+  failureCount: 'workflowNodeFailures',
+  usedRatio: 'warnRatio',
 };
 
 /** The set of keys that appear only as somebody else's threshold. */

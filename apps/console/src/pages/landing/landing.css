@@ -284,3 +284,152 @@
     border-bottom: none;
   }
 }
+
+/* --- taxonomy ------------------------------------------------------------ */
+
+/*
+ * Ten cells, hairline-separated. No cards: a boxed grid would read as a
+ * feature list, and this is a specification.
+ */
+.taxonomy {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: 0;
+  margin: var(--s4) 0 0;
+  border-top: 1px solid var(--rule);
+}
+
+.taxonomy__item {
+  padding: var(--s3) var(--s4) var(--s3) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.taxonomy__class {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+.taxonomy__line {
+  margin: var(--s1) 0 0;
+  font-size: var(--t-body);
+  color: var(--ink-soft);
+  max-width: 46ch;
+}
+
+/* --- the arc ------------------------------------------------------------- */
+
+.arc {
+  display: flex;
+  align-items: flex-start;
+  margin-top: var(--s5);
+}
+
+.arc__pair {
+  display: contents;
+}
+
+.arc__stage {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--rule);
+}
+
+/* The one place the accent appears: the end of the arc is the claim. */
+.arc__stage--fix {
+  border-top-color: var(--accent);
+}
+
+.arc__time {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.arc__head {
+  margin: var(--s1) 0 0;
+  font-size: var(--t-body);
+  font-weight: 600;
+}
+
+.arc__line {
+  margin: var(--s1) 0 0;
+  font-size: var(--t-small);
+  color: var(--ink-soft);
+  max-width: 34ch;
+}
+
+.arc__hash {
+  display: inline-block;
+  margin-top: var(--s2);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+}
+
+.arc__gap {
+  flex: 0 1 8rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s1);
+  padding: 0 var(--s3);
+  margin-top: var(--s4);
+}
+
+/*
+ * The page's only animation: the connecting rule draws left to right, once,
+ * when the arc is first scrolled into view. Under prefers-reduced-motion the
+ * base stylesheet collapses the transition, so the rule is simply there.
+ */
+.arc__rule {
+  display: block;
+  width: 100%;
+  height: 1px;
+  background: var(--rule-strong);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 600ms ease-out;
+}
+
+.arc--drawn .arc__rule {
+  transform: scaleX(1);
+}
+
+/* The second one waits for the first, so the arc reads in order. */
+.arc__pair:nth-of-type(2) .arc__rule {
+  transition-delay: 250ms;
+}
+
+.arc__elapsed {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Below this the three stages stop fitting without shrinking type past the floor. */
+@media (max-width: 700px) {
+  .arc {
+    flex-direction: column;
+  }
+
+  .arc__gap {
+    flex: none;
+    align-self: flex-start;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--s2);
+    width: 100%;
+    padding: 0;
+    margin: var(--s3) 0;
+  }
+
+  .arc__rule {
+    width: 3rem;
+  }
+}

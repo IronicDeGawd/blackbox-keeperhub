@@ -1,6 +1,8 @@
 import { Link } from '@tanstack/react-router';
 import { useConsole } from '../../lib/store';
 import type { AppConfig } from '../../lib/types';
+import { Arc } from './Arc';
+import { Taxonomy } from './Taxonomy';
 import './landing.css';
 
 /**
@@ -175,6 +177,10 @@ export function Landing(): React.JSX.Element {
           ))}
         </div>
       </section>
+
+      <Arc />
+
+      <Taxonomy />
 
       <section>
         <h2 className="eyebrow eyebrow--ruled">Getting started</h2>
