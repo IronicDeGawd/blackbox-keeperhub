@@ -525,3 +525,143 @@
   color: var(--ink-soft);
   max-width: 62ch;
 }
+
+/* --- run log ------------------------------------------------------------- */
+
+.runlog__note {
+  margin: 0;
+  max-width: 80ch;
+  font-size: var(--t-body);
+}
+
+.runlog,
+.runlog__steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.runlog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  margin-top: var(--s3);
+}
+
+/* One run per block, separated by a hairline rather than boxed. */
+.runlog__run + .runlog__run {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--s4);
+}
+
+.runlog__run-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s3);
+}
+
+.runlog__id {
+  font-size: var(--t-small);
+  color: var(--ink-soft);
+}
+
+.runlog__status,
+.runlog__step-status {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.runlog__status--good,
+.runlog__step--good .runlog__step-status {
+  color: var(--ok);
+}
+
+.runlog__status--bad,
+.runlog__step--bad .runlog__step-status {
+  color: var(--critical);
+}
+
+.runlog__status--other,
+.runlog__step--other .runlog__step-status {
+  color: var(--ink-faint);
+}
+
+.runlog__error {
+  margin: var(--s2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+  color: var(--critical);
+  max-width: 90ch;
+  overflow-wrap: anywhere;
+}
+
+.runlog__steps {
+  margin-top: var(--s3);
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * A row per node. The node name leads because it is what the operator is
+ * looking for; the transaction trails because most steps have none.
+ */
+.runlog__step {
+  display: grid;
+  grid-template-columns: minmax(8ch, 1fr) minmax(10ch, 1fr) 9ch minmax(10ch, auto) minmax(14ch, auto);
+  align-items: baseline;
+  gap: var(--s1) var(--s3);
+  padding: var(--s2) 0;
+  border-top: 1px solid var(--rule);
+  font-size: var(--t-body);
+}
+
+/* The failing step is the one being looked for, so it is the one marked. */
+.runlog__step--bad {
+  border-left: 2px solid var(--critical);
+  padding-left: var(--s2);
+}
+
+.runlog__node {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.runlog__type,
+.runlog__gas {
+  font-size: var(--t-micro);
+  color: var(--ink-faint);
+}
+
+.runlog__gas {
+  font-variant-numeric: tabular-nums;
+}
+
+.runlog__tx {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+}
+
+/* Below this the five columns stop fitting without shrinking type. */
+@media (max-width: 700px) {
+  .runlog__step {
+    grid-template-columns: 1fr auto;
+  }
+
+  .runlog__node {
+    grid-column: 1;
+  }
+
+  .runlog__step-status {
+    grid-column: 2;
+    text-align: right;
+  }
+
+  .runlog__type,
+  .runlog__gas,
+  .runlog__tx {
+    grid-column: 1 / -1;
+  }
+}

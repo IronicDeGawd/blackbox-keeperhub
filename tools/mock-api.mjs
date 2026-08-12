@@ -561,6 +561,50 @@ const server = createServer(async (req, res) => {
     });
   }
 
+  // The per-node record of the runs behind an incident. Live, this needs the
+  // operator's own connection; here it is just enough shape to build against.
+  const runLog = path.match(/^\/api\/incidents\/([^/]+)\/run-log$/);
+  if (runLog && req.method === 'GET') {
+    const incident = incidents.get(runLog[1]);
+    if (!incident) return notFound(res, `Incident ${runLog[1]} not found`);
+    return json(res, 200, {
+      incidentId: incident.id,
+      runs: [
+        {
+          executionId: `exec-${incident.id}`,
+          status: 'failed',
+          error: 'execution reverted: transfer amount exceeds balance',
+          steps: [
+            {
+              nodeId: 'trigger',
+              nodeType: 'schedule',
+              status: 'success',
+              txHash: null,
+              gasUsed: null,
+              sponsored: null,
+            },
+            {
+              nodeId: 'check-balance',
+              nodeType: 'contract-read',
+              status: 'success',
+              txHash: null,
+              gasUsed: null,
+              sponsored: null,
+            },
+            {
+              nodeId: 'send',
+              nodeType: 'contract-call',
+              status: 'failed',
+              txHash: null,
+              gasUsed: null,
+              sponsored: null,
+            },
+          ],
+        },
+      ],
+    });
+  }
+
   const ack = path.match(/^\/api\/incidents\/([^/]+)\/acknowledge$/);
   if (ack && req.method === 'POST') {
     const incident = incidents.get(ack[1]);
@@ -774,6 +818,7 @@ server.listen(PORT, HOST, () => {
   console.log(`mock Blackbox API on http://${HOST}:${PORT}`);
   console.log('  GET  /api/incidents            list + filters');
   console.log('  GET  /api/incidents/:id        detail with events');
+console.log('  GET  /api/incidents/:id/run-log  per-node log of the runs behind it');
   console.log('  POST /api/incidents/:id/remediate');
   console.log('  GET  /api/stats                header strip');
   console.log('  GET  /api/chaos/scenarios      chaos panel');

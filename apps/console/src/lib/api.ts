@@ -15,6 +15,7 @@ import type {
   RemediateResponse,
   RemediationPlan,
   RemediationTxResult,
+  RunLog,
   SignerHealth,
   Stats,
   WatchedAddress,
@@ -145,6 +146,9 @@ export const api = {
 
   incident: (id: string, init?: RequestInit): Promise<IncidentDetail> =>
     request<IncidentDetail>(`/api/incidents/${encodeURIComponent(id)}`, init),
+
+  runLog: (id: string): Promise<RunLog> =>
+    request<RunLog>(`/api/incidents/${encodeURIComponent(id)}/run-log`),
 
   acknowledge: (id: string): Promise<IncidentSummary> =>
     request<IncidentSummary>(`/api/incidents/${encodeURIComponent(id)}/acknowledge`, {

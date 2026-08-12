@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { blackboxConfigSchema, CHAIN_IDS, type BlackboxConfig } from '@blackbox/core';
+import { blackboxConfigSchema, CHAIN_IDS, normaliseRun, type BlackboxConfig } from '@blackbox/core';
 import {
   activeSigners,
   agentsOwnedByOrg,
   claimAgentForOrg,
   createDb,
+  executionEvents,
+  insertEvents,
   getKeeperhubConnection,
   watchSigner,
   ingestCursors,
@@ -53,6 +55,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.delete(remediationLedger);
   await db.delete(incidents);
+  await db.delete(executionEvents);
   await db.delete(watchedSigners);
   await db.delete(agentOwners);
   await db.delete(orgSessions);
@@ -1121,8 +1124,27 @@ describe('managing a connection, over HTTP', () => {
     ['h', Buffer.from(JSON.stringify(claims)).toString('base64url'), 's'].join('.');
 
   /** Their side: the token endpoint, plus the workflow list a picker needs. */
-  const provider = (over: { workflowsStatus?: number } = {}) => {
+  const provider = (over: { workflowsStatus?: number; logsStatus?: number } = {}) => {
     const impl = (async (url: string) => {
+      if (url.includes('/workflows/executions/') && url.endsWith('/logs')) {
+        if (over.logsStatus) return new Response('nope', { status: over.logsStatus });
+        const executionId = url.split('/workflows/executions/')[1]?.replace('/logs', '');
+        return new Response(
+          JSON.stringify({
+            execution: { status: 'failed', error: 'execution reverted' },
+            logs: [
+              { nodeId: 'trigger', nodeType: 'schedule', status: 'success' },
+              {
+                nodeId: 'send',
+                nodeType: 'contract-call',
+                status: 'failed',
+                output: { transactionHash: `0x${executionId}`, gasUsed: '21000' },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
       if (url.endsWith('/.well-known/oauth-authorization-server')) {
         return new Response(JSON.stringify(metadata), { status: 200 });
       }
@@ -1154,7 +1176,7 @@ describe('managing a connection, over HTTP', () => {
     return impl;
   };
 
-  const instance = async (over: { workflowsStatus?: number } = {}) => {
+  const instance = async (over: { workflowsStatus?: number; logsStatus?: number } = {}) => {
     const fetchImpl = provider(over);
     const oauth = new KeeperHubOAuth({
       db,
@@ -1262,6 +1284,124 @@ describe('managing a connection, over HTTP', () => {
       payload: { workflows: ['wf-1'] },
     });
     expect(res.statusCode).toBe(409);
+  });
+
+  /**
+   * The run log answers "which step, and what did it say" — the question an
+   * incident raises and the detail page could not previously answer without
+   * sending the operator to KeeperHub's own dashboard.
+   */
+  describe('the run log behind an incident', () => {
+    /** Watch a workflow, then file an incident against the runs it produced. */
+    const withIncident = async (
+      server: FastifyInstance,
+      headers: Record<string, string>,
+      runIds: string[],
+    ) => {
+      await server.inject({
+        method: 'POST',
+        url: '/api/connections/keeperhub/workflows',
+        headers,
+        payload: { workflows: [{ id: 'wf-1', name: 'Rebalance' }] },
+      });
+      const eventIds: string[] = [];
+      for (const [index, runId] of runIds.entries()) {
+        const id = `ev-${index}`;
+        eventIds.push(id);
+        await insertEvents(
+          db,
+          normaliseRun(
+            {
+              id: runId,
+              source: 'workflow',
+              status: 'failed',
+              startedAt: new Date(T0.getTime() + index * 1000).toISOString(),
+              workflowId: 'wf-1',
+              network: String(CHAIN_IDS.sepolia),
+              error: 'execution reverted',
+            },
+            { agentId: 'kh:wf-1', signer: SIGNER, now: T0, makeId: () => id },
+          ),
+        );
+      }
+      await saveIncident(
+        db,
+        row({ agentId: 'kh:wf-1', evidence: { eventIds, ruleId: 'R10' } }) as never,
+      );
+    };
+
+    it('returns each run newest first, with its steps', async () => {
+      const server = await instance();
+      const headers = await connected(server);
+      await withIncident(server, headers, ['run-a', 'run-b']);
+
+      const res = await server.inject({ url: '/api/incidents/inc-1/run-log', headers });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.runs.map((r: { executionId: string }) => r.executionId)).toEqual([
+        'run-b',
+        'run-a',
+      ]);
+      expect(body.runs[0]).toMatchObject({ status: 'failed', error: 'execution reverted' });
+      expect(body.runs[0].steps).toEqual([
+        {
+          nodeId: 'trigger',
+          nodeType: 'schedule',
+          status: 'success',
+          txHash: null,
+          gasUsed: null,
+          sponsored: null,
+        },
+        {
+          nodeId: 'send',
+          nodeType: 'contract-call',
+          status: 'failed',
+          txHash: '0xrun-b',
+          gasUsed: '21000',
+          sponsored: null,
+        },
+      ]);
+    });
+
+    it('answers with no runs when the evidence came from the chain', async () => {
+      const server = await instance();
+      const headers = await connected(server);
+      await withIncident(server, headers, []);
+
+      const res = await server.inject({ url: '/api/incidents/inc-1/run-log', headers });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ incidentId: 'inc-1', runs: [] });
+    });
+
+    it('reports a run it cannot read without hiding the ones it can', async () => {
+      const server = await instance({ logsStatus: 500 });
+      const headers = await connected(server);
+      await withIncident(server, headers, ['run-a']);
+
+      const res = await server.inject({ url: '/api/incidents/inc-1/run-log', headers });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().runs[0]).toMatchObject({ executionId: 'run-a', status: 'unavailable' });
+    });
+
+    it('will not show one organisation the internals of another', async () => {
+      const server = await instance();
+      const headers = await connected(server);
+      await withIncident(server, headers, ['run-a']);
+
+      // Seeing an incident is a lower bar than reading the workflow behind it,
+      // so this refuses on ownership exactly as acknowledging does.
+      expect((await server.inject({ url: '/api/incidents/inc-1/run-log' })).statusCode).toBe(403);
+    });
+
+    it('needs a connection, not merely a session', async () => {
+      const server = await instance();
+      const headers = await connected(server);
+      await withIncident(server, headers, ['run-a']);
+      await server.inject({ method: 'DELETE', url: '/api/connections/keeperhub', headers });
+
+      const res = await server.inject({ url: '/api/incidents/inc-1/run-log', headers });
+      expect(res.statusCode).toBe(409);
+    });
   });
 
   it('takes plain ids as well as objects', async () => {

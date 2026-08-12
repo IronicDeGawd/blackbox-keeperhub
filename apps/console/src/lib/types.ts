@@ -186,6 +186,32 @@ export type IncidentDetail = IncidentSummary & {
   explorerUrls?: string[];
 };
 
+/**
+ * The per-node record of one KeeperHub run, read through the operator's own
+ * connection. Only they can see it, so the page asks for it separately rather
+ * than folding it into the incident everybody can read.
+ */
+export type RunLogStep = {
+  nodeId: string;
+  nodeType: string;
+  status: string;
+  txHash: string | null;
+  gasUsed: string | null;
+  sponsored: boolean | null;
+};
+
+export type RunLogEntry = {
+  executionId: string;
+  status: string;
+  error: string | null;
+  steps: RunLogStep[];
+};
+
+export type RunLog = {
+  incidentId: string;
+  runs: RunLogEntry[];
+};
+
 export type IncidentList = {
   items: IncidentSummary[];
   nextCursor: string | null;

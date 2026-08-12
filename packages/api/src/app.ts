@@ -24,6 +24,7 @@ import {
   type Connections,
 } from './connections.js';
 import { DEMO_COOLDOWN_MS, type Demo } from './demo.js';
+import { executionIdsFrom, toSteps, type RunLogEntry } from './run-log.js';
 import { codeNodeSnippet, type Webhooks } from './webhooks.js';
 import type { WalletAuth } from './wallet-auth.js';
 import {
@@ -1239,6 +1240,91 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     ]);
     return incidentDetail(row as IncidentRow, events, ledger);
   });
+
+  if (options.connections) {
+    const connections = options.connections;
+
+    /**
+     * The per-step log of the runs behind this incident.
+     *
+     * Read through the operator's own connection, so it needs the same
+     * ownership as acting on the incident rather than the public read path: a
+     * run log is the organisation's internal detail — node names, error
+     * strings — and being able to *see* an incident is a lower bar than being
+     * allowed to read the workflow that caused it.
+     *
+     * Costly because each entry is a call to somebody else's API.
+     */
+    app.get('/api/incidents/:id/run-log', costly(20), async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const row = await readableIncident(request, id);
+      if (!row) {
+        return reply
+          .code(404)
+          .send({ error: 'not_found', detail: `Incident ${id} not found`, requestId: request.id });
+      }
+      if (!(await mayRemediateHere(row.agentId, request))) {
+        return reply.code(403).send({
+          error: 'forbidden',
+          detail: `Sign in as the organisation that owns ${row.agentId} to read its run log.`,
+          requestId: request.id,
+        });
+      }
+
+      const caller = await callerOf(request);
+      if (!caller) {
+        return reply.code(401).send({
+          error: 'unauthorized',
+          detail: 'Sign in to read a run log.',
+          requestId: request.id,
+        });
+      }
+
+      const evidence = row.evidence as { eventIds?: string[] } | null;
+      const executionIds = executionIdsFrom(await eventsByIds(db, evidence?.eventIds ?? []));
+      // Chain-observed incidents have no KeeperHub run behind them. That is a
+      // real answer, not a failure, and it costs no token to give.
+      if (executionIds.length === 0) return { incidentId: id, runs: [] };
+
+      const token = await connections.accessTokenFor(caller.orgId);
+      if (!token.ok) {
+        return reply.code(token.reason === 'unavailable' ? 502 : 409).send({
+          error: token.reason,
+          detail: token.detail,
+          requestId: request.id,
+        });
+      }
+
+      const client = new KeeperHubClient({
+        accessToken: token.accessToken,
+        ...(options.keeperHubApiUrl ? { baseUrl: options.keeperHubApiUrl } : {}),
+        ...(options.keeperHubFetch ? { fetchImpl: options.keeperHubFetch } : {}),
+      });
+
+      const runs: RunLogEntry[] = [];
+      for (const executionId of executionIds) {
+        try {
+          const execution = await client.getWorkflowExecution(executionId);
+          runs.push({
+            executionId,
+            status: execution.status,
+            error: execution.error,
+            steps: toSteps(execution.logs),
+          });
+        } catch (error) {
+          // One run that cannot be read must not hide the ones that can. A run
+          // KeeperHub has aged out is the common case here.
+          runs.push({
+            executionId,
+            status: 'unavailable',
+            error: String((error as Error)?.message ?? error),
+            steps: [],
+          });
+        }
+      }
+      return { incidentId: id, runs };
+    });
+  }
 
   app.post('/api/incidents/:id/acknowledge', async (request, reply) => {
     const { id } = request.params as { id: string };
