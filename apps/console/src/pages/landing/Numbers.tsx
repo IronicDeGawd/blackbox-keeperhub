@@ -49,11 +49,15 @@ export function Numbers(): React.JSX.Element | null {
         <span className="numbers__value num">
           {figures.detected === 0 ? EM_DASH : figures.detected}
         </span>
-        <span className="numbers__label">incidents detected</span>
+        <span className="numbers__label">
+          {figures.detected === 1 ? 'incident detected' : 'incidents detected'}
+        </span>
       </div>
       <div className="numbers__item">
         <span className="numbers__value num">{figures.fixed === 0 ? EM_DASH : figures.fixed}</span>
-        <span className="numbers__label">fixes executed onchain</span>
+        <span className="numbers__label">
+          {figures.fixed === 1 ? 'fix executed onchain' : 'fixes executed onchain'}
+        </span>
       </div>
       <div className="numbers__item">
         <span className="numbers__value num">
