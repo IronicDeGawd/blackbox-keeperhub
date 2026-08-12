@@ -63,7 +63,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     response = await fetch(`${API_URL}${path}`, {
       ...init,
       headers: {
-        'content-type': 'application/json',
+        /**
+         * Declared only when something is actually being sent.
+         *
+         * Fastify refuses a request that announces JSON and then carries no
+         * body — "Body cannot be empty when content-type is set to
+         * 'application/json'" — so a POST with nothing to say, like running
+         * the demo or signing out, failed before it reached its route.
+         */
+        ...(init?.body === undefined ? {} : { 'content-type': 'application/json' }),
         // Sent when there is one. Reading needs no account, so most requests
         // carry nothing; acting needs the organisation that owns the agent.
         ...authHeader(),
