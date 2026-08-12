@@ -5,4 +5,5 @@ export * from './keeperhub/types.js';
 export * from './keeperhub/normalise.js';
 export * from './keeperhub/normalise-run.js';
 export * from './keeperhub/client.js';
+export * from './keeperhub/rate-limit.js';
 export * from './keeperhub/mcp.js';

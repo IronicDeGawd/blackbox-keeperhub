@@ -136,6 +136,9 @@ export class ConnectionSweeper {
             accessToken: token.accessToken,
             ...(this.options.keeperHubApiUrl ? { baseUrl: this.options.keeperHubApiUrl } : {}),
             ...(this.options.keeperHubFetch ? { fetchImpl: this.options.keeperHubFetch } : {}),
+            // A sweep reads somebody else's quota, so when it gets throttled
+            // that has to be visible rather than inferred from a slow tick.
+            ...(this.options.logger ? { logger: this.options.logger } : {}),
           }).listRuns(params);
         },
       },
