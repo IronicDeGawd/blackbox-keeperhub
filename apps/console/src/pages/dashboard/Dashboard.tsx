@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { API_URL, api } from '../../lib/api';
 import { useConsole } from '../../lib/store';
 import { DemoButton } from '../../ui/DemoButton';
+import { Spend } from './Spend';
 import { RelativeTime, RuleTag, SeverityDot, StatusPill } from '../../ui/primitives';
 import type { Capabilities, IncidentSummary, LedgerVerification } from '../../lib/types';
 import './dashboard.css';
@@ -213,6 +214,8 @@ export function Dashboard(): React.JSX.Element {
             <DemoButton />
           </section>
         ) : null}
+
+        <Spend />
       </div>
 
       <section>

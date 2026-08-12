@@ -18,6 +18,7 @@ import type {
   RemediationTxResult,
   RunLog,
   SignerHealth,
+  SpendPosition,
   Stats,
   WatchedAddress,
 } from './types';
@@ -149,6 +150,10 @@ export const api = {
     request<IncidentDetail>(`/api/incidents/${encodeURIComponent(id)}`, init),
 
   ledger: (): Promise<LedgerVerification> => request<LedgerVerification>('/api/ledger/verify'),
+
+  /** The caller's own organisation. 409 when nothing is connected. */
+  spend: (): Promise<SpendPosition> =>
+    request<SpendPosition>('/api/connections/keeperhub/spend'),
 
   runLog: (id: string): Promise<RunLog> =>
     request<RunLog>(`/api/incidents/${encodeURIComponent(id)}/run-log`),

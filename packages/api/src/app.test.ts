@@ -1161,7 +1161,7 @@ describe('managing a connection, over HTTP', () => {
     ['h', Buffer.from(JSON.stringify(claims)).toString('base64url'), 's'].join('.');
 
   /** Their side: the token endpoint, plus the workflow list a picker needs. */
-  const provider = (over: { workflowsStatus?: number; logsStatus?: number } = {}) => {
+  const provider = (over: { workflowsStatus?: number; logsStatus?: number; spendStatus?: number } = {}) => {
     const impl = (async (url: string) => {
       if (url.includes('/workflows/executions/') && url.endsWith('/logs')) {
         if (over.logsStatus) return new Response('nope', { status: over.logsStatus });
@@ -1198,6 +1198,13 @@ describe('managing a connection, over HTTP', () => {
           { status: 200 },
         );
       }
+      if (url.endsWith('/analytics/spend-cap')) {
+        if (over.spendStatus) return new Response('nope', { status: over.spendStatus });
+        return new Response(
+          JSON.stringify({ dailyCapWei: '1000000000000000000', dailyUsedWei: '250000000000000000' }),
+          { status: 200 },
+        );
+      }
       if (url.endsWith('/workflows')) {
         if (over.workflowsStatus) return new Response('nope', { status: over.workflowsStatus });
         return new Response(
@@ -1213,7 +1220,7 @@ describe('managing a connection, over HTTP', () => {
     return impl;
   };
 
-  const instance = async (over: { workflowsStatus?: number; logsStatus?: number } = {}) => {
+  const instance = async (over: { workflowsStatus?: number; logsStatus?: number; spendStatus?: number } = {}) => {
     const fetchImpl = provider(over);
     const oauth = new KeeperHubOAuth({
       db,
@@ -1439,6 +1446,34 @@ describe('managing a connection, over HTTP', () => {
       const res = await server.inject({ url: '/api/incidents/inc-1/run-log', headers });
       expect(res.statusCode).toBe(409);
     });
+  });
+
+  it('reports how much of the daily budget is gone before it runs out', async () => {
+    const server = await instance();
+    const headers = await connected(server);
+
+    const res = await server.inject({ url: '/api/connections/keeperhub/spend', headers });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      capWei: '1000000000000000000',
+      usedWei: '250000000000000000',
+      ratio: 0.25,
+      uncapped: false,
+    });
+  });
+
+  it('will not report somebody else\u2019s budget to a caller with no session', async () => {
+    const server = await instance();
+    expect(
+      (await server.inject({ url: '/api/connections/keeperhub/spend' })).statusCode,
+    ).toBe(401);
+  });
+
+  it('says their side is unavailable rather than reporting a budget of nothing', async () => {
+    const server = await instance({ spendStatus: 500 });
+    const headers = await connected(server);
+    const res = await server.inject({ url: '/api/connections/keeperhub/spend', headers });
+    expect(res.statusCode).toBe(502);
   });
 
   it('takes plain ids as well as objects', async () => {

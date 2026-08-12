@@ -203,3 +203,65 @@
 .dash__ledger-note {
   color: var(--ink-faint);
 }
+
+/* --- runway ------------------------------------------------------------- */
+
+.dash__spend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.dash__spend-line {
+  margin: 0;
+  font-size: var(--t-body);
+  color: var(--ink-soft);
+}
+
+/*
+ * A bar, not a gauge. A needle would be the first skeuomorphic thing in the
+ * console, and it would say nothing a filled rule does not.
+ */
+.dash__spend-bar {
+  height: 6px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--rule);
+}
+
+.dash__spend-fill {
+  display: block;
+  height: 100%;
+  background: var(--ink-soft);
+}
+
+.dash__spend-bar--tight .dash__spend-fill {
+  background: var(--warning);
+}
+
+.dash__spend-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s5);
+  margin: 0;
+}
+
+.dash__spend-figures dt {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.dash__spend-figures dd {
+  margin: 2px 0 0;
+  font-size: var(--t-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.dash__spend-warn {
+  margin: 0;
+  font-size: var(--t-small);
+  color: var(--ink-soft);
+  max-width: 62ch;
+}

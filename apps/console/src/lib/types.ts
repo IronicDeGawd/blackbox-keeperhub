@@ -227,6 +227,17 @@ export type LedgerVerification = {
   checkedAt: string;
 };
 
+/**
+ * Where the connected organisation stands against its daily execution budget.
+ * `ratio` is null only when there is no cap to be a fraction of.
+ */
+export type SpendPosition = {
+  capWei: string | null;
+  usedWei: string;
+  ratio: number | null;
+  uncapped: boolean;
+};
+
 export type IncidentList = {
   items: IncidentSummary[];
   nextCursor: string | null;

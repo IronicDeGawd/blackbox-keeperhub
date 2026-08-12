@@ -25,6 +25,7 @@ import {
 } from './connections.js';
 import { DEMO_COOLDOWN_MS, type Demo } from './demo.js';
 import { executionIdsFrom, toSteps, type RunLogEntry } from './run-log.js';
+import { spendPosition } from './spend.js';
 import { codeNodeSnippet, type Webhooks } from './webhooks.js';
 import type { WalletAuth } from './wallet-auth.js';
 import {
@@ -868,6 +869,43 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
               watched: watched.get(w.id)?.active === true,
             })),
           };
+        } catch (error) {
+          return reply.code(502).send({
+            error: 'provider_unavailable',
+            detail: String((error as Error)?.message ?? error),
+            requestId: request.id,
+          });
+        }
+      });
+
+      /**
+       * How much of today's execution budget is left.
+       *
+       * R8 fires when this runs out, which makes it the one number an
+       * operator would rather see approaching than be told about. Read
+       * through their own connection, so it is their organisation's figure
+       * and nobody else's.
+       */
+      app.get('/api/connections/keeperhub/spend', costly(30), async (request, reply) => {
+        const caller = await requireCaller(request, reply);
+        if (!caller) return;
+
+        const token = await connections.accessTokenFor(caller.orgId);
+        if (!token.ok) {
+          return reply.code(token.reason === 'unavailable' ? 502 : 409).send({
+            error: token.reason,
+            detail: token.detail,
+            requestId: request.id,
+          });
+        }
+
+        const client = new KeeperHubClient({
+          accessToken: token.accessToken,
+          ...(options.keeperHubApiUrl ? { baseUrl: options.keeperHubApiUrl } : {}),
+          ...(options.keeperHubFetch ? { fetchImpl: options.keeperHubFetch } : {}),
+        });
+        try {
+          return spendPosition(await client.getSpendingLimits());
         } catch (error) {
           return reply.code(502).send({
             error: 'provider_unavailable',

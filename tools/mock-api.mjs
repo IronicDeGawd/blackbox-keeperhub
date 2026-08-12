@@ -506,6 +506,16 @@ const server = createServer(async (req, res) => {
 
   if (path === '/api/stats') return json(res, 200, stats());
 
+  // A quarter of the day's budget gone: enough to render, not enough to warn.
+  if (path === '/api/connections/keeperhub/spend') {
+    return json(res, 200, {
+      capWei: '1000000000000000000',
+      usedWei: '250000000000000000',
+      ratio: 0.25,
+      uncapped: false,
+    });
+  }
+
   // Intact, so the console's quiet state is the one being built against.
   if (path === '/api/ledger/verify') {
     return json(res, 200, {
