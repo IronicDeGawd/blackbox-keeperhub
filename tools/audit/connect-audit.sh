@@ -59,13 +59,34 @@ res "act.owner.hasAgents" "the session owns something" "$OWNED" "$([ -n "$OWNED"
 # --- connections -----------------------------------------------------------
 c=$(code "$H/api/connections/keeperhub")
 res "conn.needs-session" "401 anonymously" "$c" "$([ "$c" = 401 ] && echo 1)"
-c=$(code "$H/api/connections/keeperhub" -H "$AUTH"); v=$(jqf "d['connected'], d['watching']")
-res "conn.none-yet" "200 connected:false" "$c $v" "$([ "$c" = 200 ] && echo 1)"
+# These three read differently either side of a real connection, and the
+# deployment now holds one. Asserting both states rather than assuming a virgin
+# database — an audit that only passes before anybody uses the product is an
+# audit that starts failing the moment it matters.
+c=$(code "$H/api/connections/keeperhub" -H "$AUTH")
+CONNECTED=$(jqf "d['connected']"); v=$(jqf "d['connected'], len(d['watching'])")
+res "conn.state" "200, says whether connected and what it watches" "$c $v" \
+  "$([ "$c" = 200 ] && echo 1)"
+
 c=$(code "$H/api/connections/keeperhub/workflows" -H "$AUTH")
-res "conn.workflows.not-connected" "409 — nothing to read them with" "$c" "$([ "$c" = 409 ] && echo 1)"
+if [ "$CONNECTED" = "True" ]; then
+  v=$(jqf "len(d['workflows'])")
+  res "conn.workflows" "200 lists the account's own" "$c n=$v" "$([ "$c" = 200 ] && echo 1)"
+else
+  res "conn.workflows" "409 — nothing to read them with" "$c" "$([ "$c" = 409 ] && echo 1)"
+fi
+
+# A workflow id that is not this account's. Connected, the server checks it
+# against their own list and refuses; unconnected, there is nothing to check
+# it with. Both are a refusal, and neither is a claim.
 c=$(code -X POST "$H/api/connections/keeperhub/workflows" -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"workflows":["anything"]}')
-res "conn.pick.not-connected" "409 before connecting" "$c" "$([ "$c" = 409 ] && echo 1)"
+  -d '{"workflows":["not-a-workflow-of-ours"]}')
+if [ "$CONNECTED" = "True" ]; then
+  res "conn.pick.not-mine" "403 — verified against the account's own" "$c" \
+    "$([ "$c" = 403 ] && echo 1)"
+else
+  res "conn.pick.not-connected" "409 before connecting" "$c" "$([ "$c" = 409 ] && echo 1)"
+fi
 
 c=$(code "$H/api/auth/keeperhub/start?connect=1&days=90"); v=$(jqf "d['connect']['days'], d['connect']['scope']")
 res "conn.start.clamped" "90 clamps to 60, mcp:read" "$c $v" "$([ "$v" = "60 mcp:read" ] && echo 1)"

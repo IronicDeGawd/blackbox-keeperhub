@@ -405,6 +405,37 @@ been reported as not held whenever no execution record came back — which is
 every simulation. **Fixed**, and the observed value is now carried through as
 evidence.
 
+## Third audit — 2026-08-12, after the console shipped
+
+85 checks across the same four harnesses, **all passing**, run against the
+deployment with a live KeeperHub connection in place.
+
+| Sweep | Result |
+| --- | --- |
+| `tools/audit/http-audit.sh` | 44/44 |
+| `tools/audit/connect-audit.sh` | 20/20 |
+| `tools/audit/tenant-audit.mjs` (a real second KeeperHub org) | 10/10 |
+| `tools/audit/mcp-audit.mjs` | 11/11 |
+
+No defects. The harnesses themselves needed two corrections, both because they
+had been written against a deployment nobody had connected yet:
+
+- **Three checks assumed no connection existed.** `conn.workflows` expected a
+  409 and got a list; `conn.pick` expected a 409 and got a 403. Both were the
+  right answers for a connected account. Rewritten to assert either state, and
+  the pick check is now stronger for it: with a connection in place it proves
+  the server verifies a workflow id against the account's own list and refuses
+  one that is not theirs — `403 not_your_workflow`.
+- **Nothing checked that the console is served at all.** The deployment now
+  answers pages as well as API calls, and the audit would not have noticed the
+  site returning JSON at its root — the exact fault it had before this session.
+  Four checks added: the root is HTML, a client-side route deep-links to HTML,
+  the bundle the page asks for is served, and an unknown `/api` path still
+  answers JSON so a mistyped endpoint is never parsed as data.
+
+Tenant isolation held with a real connection in play: a second organisation
+sees `connected: false` and watches nothing while ours holds three workflows.
+
 ## Second audit — 2026-08-12, after the ownership change
 
 81 checks across four harnesses, **all passing** after the fixes below.

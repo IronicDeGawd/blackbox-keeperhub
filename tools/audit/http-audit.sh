@@ -133,6 +133,28 @@ res "diagnose" "200 explains a real hash" "$c" "$([ "$c" = 200 ] && echo 1)"
 v=$(timeout 6 curl -s -N "$H/api/stream" | head -c 120 | tr '\n' ' ')
 res "stream" "SSE hello frame" "$(echo "$v" | head -c 60)" "$(echo "$v" | grep -q hello && echo 1)"
 
+# --- the console ------------------------------------------------------------
+# The deployment serves the pages as well as the API, and until this was here
+# nothing in the audit would have noticed the site answering JSON at its root.
+ctype() { curl -s -o /tmp/a.out -w "%{http_code} %{content_type}" -H 'accept: text/html' "$@"; }
+
+v=$(ctype "$H/"); res "console.root" "200 html, not JSON" "$v" \
+  "$(echo "$v" | grep -q '^200 text/html' && echo 1)"
+
+# A path only the router knows. It has to come back as the application, or a
+# link into the console 404s for anybody who did not arrive at the front page.
+v=$(ctype "$H/dashboard"); res "console.deep-link" "200 html for a client route" "$v" \
+  "$(echo "$v" | grep -q '^200 text/html' && echo 1)"
+
+v=$(curl -s "$H/" | grep -oE '/assets/[A-Za-z0-9._-]+\.js' | head -1)
+c=$(code "$H$v"); res "console.assets" "the bundle it asks for is served" "$c $v" \
+  "$([ "$c" = 200 ] && [ -n "$v" ] && echo 1)"
+
+# The other half of the same rule: a mistyped endpoint must not answer markup,
+# or a client parses a page as data.
+v=$(ctype "$H/api/not-a-route"); res "console.api-404-stays-json" "404 json under /api" "$v" \
+  "$(echo "$v" | grep -q '^404 application/json' && echo 1)"
+
 # --- signout (last, it burns the token) ----------------------------------
 c=$(code -X POST "$H/api/auth/signout" -H "Authorization: Bearer $TOKEN")
 res "auth.signout" "200" "$c" "$([ "$c" = 200 ] && echo 1)"
