@@ -265,3 +265,103 @@
   color: var(--ink-soft);
   max-width: 62ch;
 }
+
+/* --- event log ----------------------------------------------------------- */
+
+.dash__log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.dash__log-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.dash__log-held {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-faint);
+}
+
+/*
+ * Its own scroll, fixed height. overflow-anchor keeps the browser from
+ * shifting the view under a reader when a line is appended above the fold.
+ */
+.dash__log-pane {
+  height: 15rem;
+  overflow-y: auto;
+  overflow-anchor: none;
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  padding: var(--s2);
+}
+
+.dash__log-empty {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-faint);
+}
+
+.dash__log-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dash__log-line {
+  display: grid;
+  grid-template-columns: 7rem 5rem 1fr;
+  gap: var(--s2);
+  padding: 1px 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.dash__log-at {
+  color: var(--ink-faint);
+}
+
+.dash__log-tag {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+}
+
+.dash__log-text {
+  overflow-wrap: anywhere;
+}
+
+.dash__log-line--critical .dash__log-tag,
+.dash__log-line--critical .dash__log-text {
+  color: var(--critical);
+}
+
+.dash__log-line--warning .dash__log-tag {
+  color: var(--warning);
+}
+
+.dash__log-line--good .dash__log-tag {
+  color: var(--ok);
+}
+
+@media (max-width: 700px) {
+  .dash__log-line {
+    grid-template-columns: 5.5rem 1fr;
+  }
+
+  .dash__log-tag {
+    text-align: right;
+  }
+
+  .dash__log-text {
+    grid-column: 1 / -1;
+  }
+}

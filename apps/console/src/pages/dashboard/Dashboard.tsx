@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { API_URL, api } from '../../lib/api';
 import { useConsole } from '../../lib/store';
 import { DemoButton } from '../../ui/DemoButton';
+import { EventLog } from './EventLog';
 import { Spend } from './Spend';
 import { RelativeTime, RuleTag, SeverityDot, StatusPill } from '../../ui/primitives';
 import type { Capabilities, IncidentSummary, LedgerVerification } from '../../lib/types';
@@ -217,6 +218,8 @@ export function Dashboard(): React.JSX.Element {
 
         <Spend />
       </div>
+
+      <EventLog />
 
       <section>
         <h2 className="eyebrow eyebrow--ruled">Everywhere else</h2>
