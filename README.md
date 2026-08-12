@@ -11,6 +11,10 @@ and then executes the fix onchain through KeeperHub.
 Every remediation is a real transaction with a retrievable hash. There are no
 simulated remediations anywhere in the product.
 
+**It is running: [blackbox-kh.parakramlabs.com](https://blackbox-kh.parakramlabs.com/)**
+— the console, the live incident feed, and a button that induces a real failure
+so you can watch it get caught. No account needed to look.
+
 ---
 
 ## Proof
@@ -38,14 +42,14 @@ Deployed contracts (Sepolia): [`CircuitBreaker`](https://sepolia.etherscan.io/ad
 ## What we sent back upstream
 
 Five fixes to KeeperHub, each found by building on it and each verified against
-their own test suite.
+their own test suite. One is merged; the rest are in review.
 
 | PR | Fix |
 | --- | --- |
 | [#1993](https://github.com/KeeperHub/keeperhub/pull/1993) | Sub-cent marketplace prices were rounded to whole cents at the payment gate while the 402 advertised full precision, so **every payment below $0.01 failed** — most of their documented pricing range. Found by paying for our own listing. |
 | [#1995](https://github.com/KeeperHub/keeperhub/pull/1995) | `validate_workflow` reported a workflow whose chain comes from the caller as having an unknown chain id, so a **marketplace workflow that follows their own documented pattern validates as invalid** while executing correctly. The address checks a few lines away already skip template references. |
 | [#1990](https://github.com/KeeperHub/keeperhub/pull/1990) | A completed `contract-call` returned no `transactionHash`, though the route had it in hand and the docs promise it. It cost us a remediation recorded as failed after it had actually succeeded. |
-| [#1991](https://github.com/KeeperHub/keeperhub/pull/1991) | `undici` is imported by `lib/safe-fetch.ts` but declared in no dependency block, so their test suite will not start on a fresh clone with current pnpm. |
+| [#1991](https://github.com/KeeperHub/keeperhub/pull/1991) **merged** | `undici` is imported by `lib/safe-fetch.ts` but declared in no dependency block, so their test suite will not start on a fresh clone with current pnpm. We hit this again ourselves a day later, on a branch cut before the merge. |
 | [#1992](https://github.com/KeeperHub/keeperhub/pull/1992) | Four fields the status endpoint returns — including `retryCount` — were undocumented. |
 
 `docs/friction-log.md` is the fuller teardown, including the entries we withdrew
@@ -82,7 +86,7 @@ One structural finding shaped the architecture, established by probing rather
 than assuming: KeeperHub executes through a sponsored relayer at the *sponsor's*
 nonce, so it can never occupy a specific nonce belonging to an agent's signer.
 Playbooks that must fill a nonce gap therefore route to a held key or to the
-owner's wallet. Written up in `context/plan/blackbox-prd.md` §6.2.
+owner's wallet.
 
 ---
 
@@ -112,7 +116,9 @@ is a different and less interesting failure.
 
 ## What it detects
 
-Seven rules, all deterministic. No model decides whether something is wrong.
+Ten rules, all deterministic. No model decides whether something is wrong. Each
+compares a measured value against a threshold, so a detection can be argued
+with rather than merely trusted.
 
 | Rule | Class | Proven live |
 | --- | --- | --- |
@@ -123,6 +129,14 @@ Seven rules, all deterministic. No model decides whether something is wrong.
 | R5 | `RETRY_STORM` | yes |
 | R6 | `SIGNER_GAS_STARVED` | yes |
 | R7 | `ADVERSE_INCLUSION` | no — see below |
+| R8 | `SPEND_CAP_EXHAUSTED` | yes |
+| R9 | `EXECUTION_STALLED` | no — needs a run that starts and never finishes |
+| R10 | `WORKFLOW_MISCONFIGURED` | yes — this is what the public demo raises |
+
+R1–R7 read a signer's own transactions. R8–R10 read a KeeperHub organisation's
+execution history, and catch failures no chain scan can see: a workflow that
+stalls before it produces a transaction, one refused at the same step every
+time, and an organisation that has spent its daily budget.
 
 **R7 is the honest gap.** It needs an inclusion analysis — expected against
 actual output, block position, neighbouring transactions — and nothing builds
@@ -137,6 +151,31 @@ success — P3 on a chain with no private mempool is the clearest example.
 Every remediation attempt records **which path executed it**:
 `keeperhub-workflow`, `keeperhub`, `signer` or `user-signed`. A fix a human
 signed resolves as `blackbox-proposed`, never as `blackbox`.
+
+---
+
+## The console
+
+Served by the API itself at the deployment root, so the console and the API
+share an origin — which is what makes the KeeperHub OAuth return work without a
+proxy. `/` is the product page; `/dashboard` is the instrument.
+
+Three things there are worth a judge's time:
+
+- **Break something now.** Runs a workflow that asks to spend beyond the
+  organisation's daily cap. KeeperHub refuses it before any chain is involved,
+  so it costs no gas, and Blackbox reads the refusal out of the audit trail —
+  the same way it would read yours. The incident appears **without a reload**,
+  about ten seconds later. One press per 30 minutes, shared by everyone
+  watching.
+- **The run log.** For the runs behind an incident, the per-node record from
+  KeeperHub: which step failed, what it said, gas used, and the transaction
+  where there is one. Read through the operator's own connection, so it needs
+  the account that owns the agent.
+- **`GET /api/ledger/verify`.** Every remediation entry carries the SHA-256 of
+  the one before it, so the record is tamper-evident: an entry edited, or a
+  failed attempt quietly deleted, breaks every hash after it. Public and
+  read-only, because a check only its author can run is not evidence.
 
 ---
 
@@ -156,14 +195,14 @@ chaos ──▶ chain ──▶ recorder ──▶ rules ──▶ incident ─�
 | `core` | Schemas, chain registry, KeeperHub client |
 | `store` | Postgres via Drizzle; events, incidents, ledger, cursors |
 | `recorder` | Ingest and normalise; block scanner for watched addresses |
-| `detector` | Rules R1–R7 and incident lifecycle. No LLM |
+| `detector` | Rules R1–R10 and incident lifecycle. No LLM |
 | `diagnostician` | Root cause analysis via Gemini, with a deterministic template floor |
 | `remediator` | Guards, playbooks P1–P5, and the four execution paths |
 | `chaos` | Induces each failure class on testnet; doubles as the E2E suite |
-| `api` | Fastify REST + SSE, and the long-running detection loop |
+| `api` | Fastify REST + SSE, the detection loop, and the console it serves |
 | `mcp` | MCP server exposing Blackbox to other agents |
 
-401 TypeScript tests and 19 Foundry tests.
+900 TypeScript tests and 19 Foundry tests.
 
 ---
 
@@ -177,6 +216,24 @@ pnpm db:up                                     # Postgres on 5433
 cd packages/store && pnpm exec drizzle-kit migrate && cd ../..
 pnpm build
 node packages/api/dist/server.js               # http://localhost:4000
+```
+
+For the console alongside it:
+
+```bash
+VITE_API_URL=http://localhost:4000 pnpm --filter @blackbox/console dev
+```
+
+Leave `VITE_API_URL` empty to build the console for a deployment that serves it
+from the API, where every call is relative. Set `BLACKBOX_CONSOLE_DIR` on the
+API to the built `dist` and it serves the console itself, with `/api/*`
+untouched and a SPA fallback for client routes.
+
+There is also a mock of the whole API, if you want to work on the console
+without a chain or a database:
+
+```bash
+node tools/mock-api.mjs                        # http://localhost:4001
 ```
 
 `.env.local` needs, at minimum:
@@ -292,10 +349,13 @@ reverts on inclusion — real state drift, not a contrived revert.
 - `docs/console-spec.md` — page-by-page console spec and API reference
 - `docs/friction-log.md` — KeeperHub onboarding teardown, with every claim
   verified and the ones that turned out wrong withdrawn
+- `docs/design-system.md` — the console's visual rules and why each one exists
+- `docs/deploy.md` — how the deployment is built and rolled out
 - `tools/mock-api.mjs` — zero-dependency mock of the whole API, for building the
-  UI without a chain
-- `context/plan/blackbox-prd.md` — the spec, with amendments recording what
-  probing the live API changed
+  console without a chain
+- `tools/demo/drive.mjs` — drives the demo in a real browser, one beat per
+  keypress, so a walkthrough can be recorded without a rehearsed mouse
+- `tools/demo/script.md` — what to say over each beat
 
 ## License
 
