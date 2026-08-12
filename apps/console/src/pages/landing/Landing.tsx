@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useConsole } from '../../lib/store';
+import type { AppConfig } from '../../lib/types';
 import './landing.css';
 
 /**
@@ -101,9 +102,31 @@ const LIMITS: string[] = [
   'Disconnecting deletes Blackbox’s copy of your credential. It cannot revoke it at KeeperHub, because they expose no way to.',
 ];
 
+/**
+ * What the one action on the page should say.
+ *
+ * A visitor is being asked to connect; somebody already connected is being
+ * shown their own product, and telling them to connect an account they have
+ * connected reads as a page that does not know who is looking at it. The
+ * middle case is the one worth catching — connected but watching nothing does
+ * not work yet, and the front page is a reasonable place to say so.
+ *
+ * `connections.mine` comes from /api/config, which answers differently once
+ * there is a session, so no extra request is needed to know any of this.
+ */
+export function callToAction(config: AppConfig | null): { to: string; label: string } | null {
+  const connections = config?.connections;
+  if (!connections || connections.available === false) return null;
+
+  const mine = connections.mine;
+  if (!mine) return { to: '/connections', label: 'Connect your KeeperHub account' };
+  if (mine.watching === 0) return { to: '/connections', label: 'Choose what it watches' };
+  return { to: '/dashboard', label: 'Open the console' };
+}
+
 export function Landing(): React.JSX.Element {
   const { config } = useConsole();
-  const canConnect = config?.capabilities?.connectKeeperHub === true;
+  const cta = callToAction(config);
 
   return (
     <div className="page landing">
@@ -122,14 +145,17 @@ export function Landing(): React.JSX.Element {
         </p>
 
         <div className="landing__cta">
-          {canConnect ? (
-            <Link to="/connections" className="button button--go landing__cta-main">
-              Connect your KeeperHub account
+          {cta ? (
+            <Link to={cta.to} className="button button--go landing__cta-main">
+              {cta.label}
             </Link>
           ) : null}
-          <Link to="/dashboard" className="landing__cta-alt">
-            or watch it working on ours →
-          </Link>
+          {/* The second door stays, unless it is already the first one. */}
+          {cta?.to === '/dashboard' ? null : (
+            <Link to="/dashboard" className="landing__cta-alt">
+              or watch it working on ours →
+            </Link>
+          )}
         </div>
 
         <p className="landing__who">

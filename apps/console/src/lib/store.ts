@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { ApiError, api, type IncidentFilters } from './api';
 import { openStream, type Stream } from './sse';
+import { onSession } from './session';
 import type {
   AppConfig,
   ConnectionState,
@@ -252,6 +253,14 @@ export const store = {
   start(): void {
     void loadConfig();
     void loadStats();
+    /**
+     * Config is answered differently once there is a session — capabilities
+     * the caller may use, and their own connection under `connections.mine` —
+     * so it is read again whenever one arrives or goes. Without this, signing
+     * in leaves the console describing the deployment as it looks to a
+     * stranger until the page is reloaded.
+     */
+    onSession(() => void loadConfig());
   },
 
   /** Exposed for the detail page, which patches a row it has just changed. */
