@@ -5,6 +5,7 @@ import {
   type KeeperHubRunPage,
   type KeeperHubRunStatus,
 } from './types.js';
+import { MAX_RETRY_WAIT_MS, rateLimitRemaining, retryAfterMs } from './rate-limit.js';
 
 export type SignMessage = (message: string) => Promise<string>;
 
@@ -27,6 +28,18 @@ export type KeeperHubClientOptions = {
   /** Session cookie from `login()`. Needed for dashboard-scoped endpoints. */
   cookie?: string;
   fetchImpl?: typeof fetch;
+  /**
+   * How a rate-limited request waits. Injected so a test can prove the delay
+   * without spending it.
+   */
+  sleepImpl?: (ms: number) => Promise<void>;
+  nowImpl?: () => number;
+  /**
+   * How many times a rate-limited request may come back. Two is enough to ride
+   * out a window boundary and few enough that a sweep still ends.
+   */
+  maxRateLimitRetries?: number;
+  logger?: { warn?: (message: string, meta?: Record<string, unknown>) => void };
 };
 
 export class KeeperHubError extends Error {
@@ -47,12 +60,21 @@ export class KeeperHubClient {
   private readonly fetchImpl: typeof fetch;
   private orgKey: string | undefined;
   private cookie: string | undefined;
+  private readonly sleepImpl: (ms: number) => Promise<void>;
+  private readonly nowImpl: () => number;
+  private readonly maxRateLimitRetries: number;
+  private readonly logger: KeeperHubClientOptions['logger'];
 
   constructor(options: KeeperHubClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
     this.orgKey = options.orgKey ?? options.accessToken;
     this.cookie = options.cookie;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.sleepImpl =
+      options.sleepImpl ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    this.nowImpl = options.nowImpl ?? (() => Date.now());
+    this.maxRateLimitRetries = options.maxRateLimitRetries ?? 2;
+    this.logger = options.logger;
   }
 
   private get origin(): string {
@@ -72,9 +94,24 @@ export class KeeperHubClient {
     return h;
   }
 
+  /**
+   * Whether this call can safely be sent twice.
+   *
+   * A read always can. A write only can when it carries an idempotency key,
+   * which is what makes the second send collapse onto the first rather than
+   * execute again. Without one, a retry after a rate limit could pay twice —
+   * so a rate-limited write is reported instead, and the caller decides.
+   */
+  private static repeatable(init: { method?: string; idempotencyKey?: string }): boolean {
+    const method = (init.method ?? 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD') return true;
+    return init.idempotencyKey !== undefined;
+  }
+
   private async request<T = unknown>(
     path: string,
     init: { method?: string; body?: unknown; idempotencyKey?: string } = {},
+    attempt = 0,
   ): Promise<{ status: number; body: T; headers: Headers }> {
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method: init.method ?? 'GET',
@@ -83,6 +120,33 @@ export class KeeperHubClient {
       ),
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
     });
+
+    /**
+     * Rate limited, and told when to come back.
+     *
+     * Blackbox reads other people's organisations on a tick, so this is
+     * somebody else's quota being spent. Honouring the header is the
+     * difference between a sweep that pauses and one that gets the credential
+     * throttled. A wait longer than the cap is refused rather than slept
+     * through: the next tick will try anyway, and a sweep that stalls for
+     * minutes holds up everything behind it.
+     */
+    if (res.status === 429 && attempt < this.maxRateLimitRetries) {
+      const wait = retryAfterMs(res.headers, this.nowImpl());
+      if (wait !== null && wait <= MAX_RETRY_WAIT_MS && KeeperHubClient.repeatable(init)) {
+        // Drained so the connection is released before the wait.
+        await res.text();
+        this.logger?.warn?.('keeperhub rate limited, waiting as asked', {
+          path,
+          waitMs: wait,
+          attempt: attempt + 1,
+          remaining: rateLimitRemaining(res.headers),
+        });
+        await this.sleepImpl(wait);
+        return this.request<T>(path, init, attempt + 1);
+      }
+    }
+
     const text = await res.text();
     let body: unknown;
     try {

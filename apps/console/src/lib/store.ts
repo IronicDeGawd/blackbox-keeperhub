@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { ApiError, api, type IncidentFilters } from './api';
 import { openStream, type Stream } from './sse';
 import { onSession } from './session';
+import { appendLine, logLine, type LogLine } from './log';
 import type {
   AppConfig,
   ConnectionState,
@@ -42,6 +43,12 @@ export type ConsoleState = {
    * at all, so the list is not a reliable signal that it changed.
    */
   lastTouched: { id: string; at: number } | null;
+  /**
+   * The stream as text, newest last and capped. Kept here rather than in the
+   * component so a viewer who navigates away and back does not lose what they
+   * were watching.
+   */
+  log: readonly LogLine[];
 };
 
 const initial: ConsoleState = {
@@ -55,6 +62,7 @@ const initial: ConsoleState = {
   scan: null,
   lastRefetchAt: null,
   lastTouched: null,
+  log: [],
 };
 
 let state: ConsoleState = initial;
@@ -151,6 +159,11 @@ function touch(id: string): void {
 }
 
 function applyEvent(event: StreamEvent): void {
+  // Every event is logged, including the ones that change no incident. That is
+  // the difference between this and the list of what was caught.
+  const line = logLine(event);
+  if (line) set({ log: appendLine(state.log, line) });
+
   switch (event.type) {
     case 'incident.created':
     case 'incident.updated':

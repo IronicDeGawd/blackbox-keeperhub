@@ -23,8 +23,35 @@
 .landing__hero {
   display: flex;
   flex-direction: column;
+  gap: var(--s5);
+}
+
+.landing__hero-copy {
+  display: flex;
+  flex-direction: column;
   gap: var(--s3);
   max-width: 68ch;
+}
+
+/*
+ * Two columns only where both fit at full size. Below this the specimen goes
+ * under the copy rather than being squeezed beside it — a shrunken instrument
+ * reads as decoration.
+ */
+@media (min-width: 1000px) {
+  .landing__hero {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: var(--s7);
+  }
+
+  .landing__hero-copy {
+    flex: 1 1 60%;
+  }
+
+  .specimen {
+    flex: 0 1 26rem;
+  }
 }
 
 .landing__headline {
@@ -282,5 +309,278 @@
   }
   .landing__step:last-child {
     border-bottom: none;
+  }
+}
+
+/* --- taxonomy ------------------------------------------------------------ */
+
+/*
+ * Ten cells, hairline-separated. No cards: a boxed grid would read as a
+ * feature list, and this is a specification.
+ */
+.taxonomy {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: 0;
+  margin: var(--s4) 0 0;
+  border-top: 1px solid var(--rule);
+}
+
+.taxonomy__item {
+  padding: var(--s3) var(--s4) var(--s3) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.taxonomy__class {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+.taxonomy__line {
+  margin: var(--s1) 0 0;
+  font-size: var(--t-body);
+  color: var(--ink-soft);
+  max-width: 46ch;
+}
+
+/* --- the arc ------------------------------------------------------------- */
+
+.arc {
+  display: flex;
+  align-items: flex-start;
+  margin-top: var(--s5);
+}
+
+.arc__pair {
+  display: contents;
+}
+
+.arc__stage {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--rule);
+}
+
+/* The one place the accent appears: the end of the arc is the claim. */
+.arc__stage--fix {
+  border-top-color: var(--accent);
+}
+
+.arc__time {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.arc__head {
+  margin: var(--s1) 0 0;
+  font-size: var(--t-body);
+  font-weight: 600;
+}
+
+.arc__line {
+  margin: var(--s1) 0 0;
+  font-size: var(--t-small);
+  color: var(--ink-soft);
+  max-width: 34ch;
+}
+
+.arc__hash {
+  display: inline-block;
+  margin-top: var(--s2);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+}
+
+.arc__gap {
+  flex: 0 1 8rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s1);
+  padding: 0 var(--s3);
+  margin-top: var(--s4);
+}
+
+/*
+ * The page's only animation: the connecting rule draws left to right, once,
+ * when the arc is first scrolled into view. Under prefers-reduced-motion the
+ * base stylesheet collapses the transition, so the rule is simply there.
+ */
+.arc__rule {
+  display: block;
+  width: 100%;
+  height: 1px;
+  background: var(--rule-strong);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 600ms ease-out;
+}
+
+.arc--drawn .arc__rule {
+  transform: scaleX(1);
+}
+
+/* The second one waits for the first, so the arc reads in order. */
+.arc__pair:nth-of-type(2) .arc__rule {
+  transition-delay: 250ms;
+}
+
+.arc__elapsed {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Below this the three stages stop fitting without shrinking type past the floor. */
+@media (max-width: 700px) {
+  .arc {
+    flex-direction: column;
+  }
+
+  .arc__gap {
+    flex: none;
+    align-self: flex-start;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--s2);
+    width: 100%;
+    padding: 0;
+    margin: var(--s3) 0;
+  }
+
+  .arc__rule {
+    width: 3rem;
+  }
+}
+
+/* --- specimen ------------------------------------------------------------ */
+
+/*
+ * Rendered by the console's own parts, so what is shown here is literally what
+ * an operator sees. Bordered rather than boxed-and-shadowed: it needs to read
+ * as an exhibit, not as a card.
+ */
+.specimen {
+  margin: 0;
+  padding: var(--s4);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.specimen__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
+.specimen__summary {
+  margin: var(--s3) 0 0;
+  font-size: var(--t-body);
+  font-weight: 600;
+}
+
+.specimen__facts {
+  margin: var(--s4) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.specimen__fact {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s3);
+  border-top: 1px solid var(--rule);
+  padding-top: var(--s2);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+}
+
+.specimen__fact dt {
+  color: var(--ink-faint);
+}
+
+.specimen__fact dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The threshold beside the measurement is the whole argument. */
+.specimen__against {
+  color: var(--ink-faint);
+}
+
+.specimen__caption {
+  margin-top: var(--s4);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-faint);
+}
+
+/* --- the three numbers ---------------------------------------------------- */
+
+/*
+ * A quiet band, not a stats strip. Hairlines top and bottom, no panel, and no
+ * live updating — this is evidence about the product, not an instrument.
+ */
+.numbers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s3) var(--s7);
+  padding: var(--s4) 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.numbers__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.numbers__value {
+  font-size: var(--t-title);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.numbers__label {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.numbers__note {
+  margin: 0;
+  flex: 1 1 16ch;
+  align-self: flex-end;
+  text-align: right;
+  font-size: var(--t-micro);
+  color: var(--ink-faint);
+}
+
+@media (max-width: 700px) {
+  .numbers {
+    gap: var(--s3) var(--s5);
+  }
+
+  .numbers__note {
+    flex-basis: 100%;
+    text-align: left;
   }
 }

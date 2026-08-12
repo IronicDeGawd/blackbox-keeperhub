@@ -12,10 +12,13 @@ import type {
   IncidentDetail,
   IncidentList,
   IncidentSummary,
+  LedgerVerification,
   RemediateResponse,
   RemediationPlan,
   RemediationTxResult,
+  RunLog,
   SignerHealth,
+  SpendPosition,
   Stats,
   WatchedAddress,
 } from './types';
@@ -145,6 +148,15 @@ export const api = {
 
   incident: (id: string, init?: RequestInit): Promise<IncidentDetail> =>
     request<IncidentDetail>(`/api/incidents/${encodeURIComponent(id)}`, init),
+
+  ledger: (): Promise<LedgerVerification> => request<LedgerVerification>('/api/ledger/verify'),
+
+  /** The caller's own organisation. 409 when nothing is connected. */
+  spend: (): Promise<SpendPosition> =>
+    request<SpendPosition>('/api/connections/keeperhub/spend'),
+
+  runLog: (id: string): Promise<RunLog> =>
+    request<RunLog>(`/api/incidents/${encodeURIComponent(id)}/run-log`),
 
   acknowledge: (id: string): Promise<IncidentSummary> =>
     request<IncidentSummary>(`/api/incidents/${encodeURIComponent(id)}/acknowledge`, {

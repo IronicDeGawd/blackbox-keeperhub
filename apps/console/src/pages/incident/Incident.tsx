@@ -21,6 +21,7 @@ import { EventTimeline } from './EventTimeline';
 import { ProposePanel } from './ProposePanel';
 import { Rca } from './Rca';
 import { Remediation } from './Remediation';
+import { RunLog } from './RunLog';
 import './incident.css';
 
 /**
@@ -161,6 +162,15 @@ export function Incident(): React.JSX.Element {
       />
 
       <EventTimeline events={detail.events ?? []} chains={chains} chainId={detail.chainId} />
+
+      {/* Follows the same pulse as the page, so a run still in flight fills in
+          without a reload. Renders nothing for anyone who does not own it. */}
+      <RunLog
+        incidentId={detail.id}
+        chains={chains}
+        chainId={detail.chainId}
+        refreshKey={touchedAt}
+      />
 
       <Rca rca={detail.rca} />
 

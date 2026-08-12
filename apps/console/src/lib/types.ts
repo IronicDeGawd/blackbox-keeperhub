@@ -19,7 +19,10 @@ export type IncidentClass =
   | 'SIM_PASS_EXEC_REVERT'
   | 'RETRY_STORM'
   | 'SIGNER_GAS_STARVED'
-  | 'ADVERSE_INCLUSION';
+  | 'ADVERSE_INCLUSION'
+  | 'EXECUTION_STALLED'
+  | 'WORKFLOW_MISCONFIGURED'
+  | 'SPEND_CAP_EXHAUSTED';
 
 export type Severity = 'critical' | 'warning' | 'info';
 
@@ -31,7 +34,17 @@ export type IncidentStatus =
   | 'failed'
   | 'acknowledged';
 
-export type RuleId = 'R1' | 'R2' | 'R3' | 'R4' | 'R5' | 'R6' | 'R7';
+export type RuleId =
+  | 'R1'
+  | 'R2'
+  | 'R3'
+  | 'R4'
+  | 'R5'
+  | 'R6'
+  | 'R7'
+  | 'R8'
+  | 'R9'
+  | 'R10';
 
 /**
  * Who actually fixed it. `blackbox-proposed` means Blackbox planned the
@@ -45,7 +58,14 @@ export type Executor = 'signer' | 'keeperhub' | 'keeperhub-workflow' | 'user-sig
 
 export type FinalStatus = 'succeeded' | 'failed' | 'skipped_by_guard' | 'skipped_by_policy';
 
-/** The rule-ordered class list. Index + 1 is the rule number. */
+/**
+ * Every class, in the order `incidentClass` declares them in
+ * packages/core/src/schemas.ts. That order is rule order for the first seven
+ * and is not for the last three — R8 is SPEND_CAP_EXHAUSTED, which comes last
+ * here. Matching core exactly is what lets a test compare the two lists and
+ * fail when a rule adds a class the console cannot filter for. Three of these
+ * were missing until that test existed.
+ */
 export const INCIDENT_CLASSES: readonly IncidentClass[] = [
   'STUCK_TRANSACTION',
   'NONCE_GAP',
@@ -54,6 +74,9 @@ export const INCIDENT_CLASSES: readonly IncidentClass[] = [
   'RETRY_STORM',
   'SIGNER_GAS_STARVED',
   'ADVERSE_INCLUSION',
+  'EXECUTION_STALLED',
+  'WORKFLOW_MISCONFIGURED',
+  'SPEND_CAP_EXHAUSTED',
 ];
 
 export const SEVERITIES: readonly Severity[] = ['critical', 'warning', 'info'];
@@ -184,6 +207,58 @@ export type IncidentDetail = IncidentSummary & {
   remediation: Remediation | null;
   events: IncidentEvent[];
   explorerUrls?: string[];
+};
+
+/**
+ * The per-node record of one KeeperHub run, read through the operator's own
+ * connection. Only they can see it, so the page asks for it separately rather
+ * than folding it into the incident everybody can read.
+ */
+export type RunLogStep = {
+  nodeId: string;
+  nodeType: string;
+  status: string;
+  txHash: string | null;
+  gasUsed: string | null;
+  sponsored: boolean | null;
+};
+
+export type RunLogEntry = {
+  executionId: string;
+  status: string;
+  error: string | null;
+  steps: RunLogStep[];
+};
+
+export type RunLog = {
+  incidentId: string;
+  runs: RunLogEntry[];
+};
+
+/**
+ * Whether the remediation record is intact. Each entry carries the hash of the
+ * one before it, so this answers a question no single entry can: nothing has
+ * been edited and nothing has been quietly removed.
+ */
+export type LedgerVerification = {
+  ok: boolean;
+  entries: number;
+  /** Attempts recorded before the chain existed. Not verifiable, not claimed. */
+  unchained: number;
+  brokenAt: string | null;
+  reason: 'ok' | 'hash_mismatch' | 'broken_link' | 'empty' | null;
+  checkedAt: string;
+};
+
+/**
+ * Where the connected organisation stands against its daily execution budget.
+ * `ratio` is null only when there is no cap to be a fraction of.
+ */
+export type SpendPosition = {
+  capWei: string | null;
+  usedWei: string;
+  ratio: number | null;
+  uncapped: boolean;
 };
 
 export type IncidentList = {

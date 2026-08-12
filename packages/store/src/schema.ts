@@ -1,5 +1,6 @@
 import {
   bigint,
+  bigserial,
   boolean,
   index,
   integer,
@@ -274,9 +275,34 @@ export const remediationLedger = pgTable(
      * whole organisation's allowance. Absent on rows written before this.
      */
     agentId: text('agent_id'),
+    /**
+     * Append order, independent of `attemptedAt`.
+     *
+     * The chain below has to be walked in the order it was written, and a
+     * timestamp is not that order: two attempts can share a millisecond, and
+     * an attempt backdated from a provider's own record can arrive out of
+     * sequence. This is the only column that says what came after what.
+     */
+    seq: bigserial('seq', { mode: 'number' }).notNull(),
+    /**
+     * The hash of the entry before this one, making the ledger tamper-evident.
+     *
+     * The product's claim is that every remediation is a real transaction with
+     * a retrievable hash. Chaining extends that from *each entry is checkable*
+     * to *the sequence is checkable*: an entry cannot be edited, and a failed
+     * attempt cannot be quietly deleted to improve the record, without
+     * breaking every hash after it.
+     *
+     * Null on the first chained entry, and on rows written before the chain
+     * existed — those are reported as preceding it rather than pretended into
+     * it, because a hash we invent now would prove nothing about then.
+     */
+    prevHash: text('prev_hash'),
+    entryHash: text('entry_hash'),
   },
   (t) => ({
     budget: index('remediation_ledger_budget_idx').on(t.signer, t.chainId, t.attemptedAt),
+    bySeq: index('remediation_ledger_seq_idx').on(t.seq),
     byAgent: index('remediation_ledger_agent_idx').on(t.agentId, t.attemptedAt),
     byIncident: index('remediation_ledger_incident_idx').on(t.incidentId),
   }),

@@ -1,6 +1,10 @@
 import { Link } from '@tanstack/react-router';
 import { useConsole } from '../../lib/store';
 import type { AppConfig } from '../../lib/types';
+import { Arc } from './Arc';
+import { Numbers } from './Numbers';
+import { Specimen } from './Specimen';
+import { Taxonomy } from './Taxonomy';
 import './landing.css';
 
 /**
@@ -131,6 +135,7 @@ export function Landing(): React.JSX.Element {
   return (
     <div className="page landing">
       <section className="landing__hero">
+        <div className="landing__hero-copy">
         <p className="eyebrow eyebrow--accent">Incident response for onchain agents</p>
         <h1 className="landing__headline">Agents are good at reasoning and bad at execution.</h1>
         <p className="landing__lead">
@@ -162,7 +167,13 @@ export function Landing(): React.JSX.Element {
           For teams running agents that transact — keepers, treasury automation, rebalancing and
           trading bots. Nothing is installed on the agent’s side.
         </p>
+        </div>
+
+        {/* The output itself, beside the claim about it. */}
+        <Specimen />
       </section>
+
+      <Numbers />
 
       <section>
         <h2 className="eyebrow eyebrow--ruled">What it does</h2>
@@ -175,6 +186,10 @@ export function Landing(): React.JSX.Element {
           ))}
         </div>
       </section>
+
+      <Arc />
+
+      <Taxonomy />
 
       <section>
         <h2 className="eyebrow eyebrow--ruled">Getting started</h2>

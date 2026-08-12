@@ -506,6 +506,28 @@ const server = createServer(async (req, res) => {
 
   if (path === '/api/stats') return json(res, 200, stats());
 
+  // A quarter of the day's budget gone: enough to render, not enough to warn.
+  if (path === '/api/connections/keeperhub/spend') {
+    return json(res, 200, {
+      capWei: '1000000000000000000',
+      usedWei: '250000000000000000',
+      ratio: 0.25,
+      uncapped: false,
+    });
+  }
+
+  // Intact, so the console's quiet state is the one being built against.
+  if (path === '/api/ledger/verify') {
+    return json(res, 200, {
+      ok: true,
+      entries: 3,
+      unchained: 0,
+      brokenAt: null,
+      reason: 'ok',
+      checkedAt: new Date().toISOString(),
+    });
+  }
+
   if (path === '/api/config') {
     return json(res, 200, {
       chains: [
@@ -558,6 +580,50 @@ const server = createServer(async (req, res) => {
       explorerUrls: (incident.remediation?.attempts ?? [])
         .filter((a) => a.txHash)
         .map((a) => explorer(a.txHash)),
+    });
+  }
+
+  // The per-node record of the runs behind an incident. Live, this needs the
+  // operator's own connection; here it is just enough shape to build against.
+  const runLog = path.match(/^\/api\/incidents\/([^/]+)\/run-log$/);
+  if (runLog && req.method === 'GET') {
+    const incident = incidents.get(runLog[1]);
+    if (!incident) return notFound(res, `Incident ${runLog[1]} not found`);
+    return json(res, 200, {
+      incidentId: incident.id,
+      runs: [
+        {
+          executionId: `exec-${incident.id}`,
+          status: 'failed',
+          error: 'execution reverted: transfer amount exceeds balance',
+          steps: [
+            {
+              nodeId: 'trigger',
+              nodeType: 'schedule',
+              status: 'success',
+              txHash: null,
+              gasUsed: null,
+              sponsored: null,
+            },
+            {
+              nodeId: 'check-balance',
+              nodeType: 'contract-read',
+              status: 'success',
+              txHash: null,
+              gasUsed: null,
+              sponsored: null,
+            },
+            {
+              nodeId: 'send',
+              nodeType: 'contract-call',
+              status: 'failed',
+              txHash: null,
+              gasUsed: null,
+              sponsored: null,
+            },
+          ],
+        },
+      ],
     });
   }
 
@@ -774,6 +840,7 @@ server.listen(PORT, HOST, () => {
   console.log(`mock Blackbox API on http://${HOST}:${PORT}`);
   console.log('  GET  /api/incidents            list + filters');
   console.log('  GET  /api/incidents/:id        detail with events');
+console.log('  GET  /api/incidents/:id/run-log  per-node log of the runs behind it');
   console.log('  POST /api/incidents/:id/remediate');
   console.log('  GET  /api/stats                header strip');
   console.log('  GET  /api/chaos/scenarios      chaos panel');
