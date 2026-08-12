@@ -41,11 +41,25 @@
   border-bottom: 1px solid var(--rule-strong);
 }
 
+/*
+ * Wraps. Every item in here refuses to break internally — a chain name, an
+ * organisation id and a sign-in button are all nowrap — so on a narrow screen
+ * an unwrapped row does not overflow the bar, it makes the whole document
+ * wider than the viewport and clips every page behind it.
+ */
 .masthead__bar {
   display: flex;
   align-items: center;
-  gap: var(--s4);
+  flex-wrap: wrap;
+  gap: var(--s3) var(--s4);
   padding: var(--s3) var(--s5);
+}
+
+/* The spacer only earns its keep on one line; wrapped, it forces a blank row. */
+@media (max-width: 900px) {
+  .masthead__spacer {
+    display: none;
+  }
 }
 
 .brand {
@@ -209,7 +223,10 @@
   color: var(--ink);
   display: flex;
   align-items: baseline;
-  gap: var(--s3);
+  /* Four parts in one cell; on a narrow screen the fourth is cut off instead
+     of dropping to a second line, and a truncated count reads as a wrong one. */
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s3);
 }
 
 .stat__part {
@@ -315,4 +332,50 @@
   .rail__note {
     display: none;
   }
+
+  /*
+   * The strip wraps here, and a right-hand rule on a cell that is no longer
+   * followed by anything hangs in the middle of a row. Below the design width
+   * the cells are separated by the line under them instead.
+   */
+  .stat {
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+    flex: 1 1 auto;
+  }
+  .stat:last-child {
+    border-bottom: none;
+  }
+}
+
+/*
+ * Two across on a phone. One per row is five rows of chrome above the content,
+ * and these are glanceable values, not paragraphs.
+ */
+@media (max-width: 700px) {
+  .stat {
+    flex: 1 1 42%;
+    padding-inline: var(--s4);
+  }
+}
+
+/* --- who is signed in ---------------------------------------------------- */
+
+.session {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+/* The organisation id is a fact, not a heading: quiet, monospaced, truncated. */
+.session__org {
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+  color: var(--ink-faint);
+}
+
+.session__error {
+  font-size: var(--t-small);
+  color: var(--critical);
+  max-width: 28ch;
 }

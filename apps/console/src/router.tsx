@@ -7,10 +7,11 @@ import { incidentsRoute } from './routes/incidents';
 import { inspectRoute } from './routes/inspect';
 import { watchedRoute } from './routes/watched';
 import { chaosRoute } from './routes/chaos';
+import { connectionsRoute } from './routes/connections';
 
 /**
  * Routes are declared in code rather than generated from the filesystem: the
- * console has a landing page and five destinations, and a codegen step plus a
+ * console has a landing page and six destinations, and a codegen step plus a
  * generated file in the tree costs more than it saves at that size.
  */
 const routeTree = rootRoute.addChildren([
@@ -21,6 +22,7 @@ const routeTree = rootRoute.addChildren([
   inspectRoute,
   watchedRoute,
   chaosRoute,
+  connectionsRoute,
 ]);
 
 export const router = createRouter({ routeTree });

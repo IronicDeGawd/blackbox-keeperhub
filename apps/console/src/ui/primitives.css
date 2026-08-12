@@ -112,6 +112,64 @@
   white-space: nowrap;
 }
 
+/* --- buttons ------------------------------------------------------------- */
+
+/*
+ * Shared, so they live here rather than in a page's stylesheet. These are worn
+ * by the masthead on every route, by the landing page and by chaos — a button
+ * whose only definition sits in the timeline's stylesheet is styled today only
+ * because nothing is code-split, and would lose its border the day something is.
+ */
+.button {
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  border: 1px solid var(--rule-strong);
+  padding: var(--s1) var(--s3);
+  align-self: flex-start;
+  background: var(--surface);
+}
+.button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.button:disabled {
+  color: var(--ink-faint);
+  border-color: var(--rule);
+  cursor: not-allowed;
+}
+
+/* The one that commits: signing, spending, breaking something. */
+.button--go {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Secondary, for the masthead — present but never competing with the page. */
+.button--quiet {
+  background: transparent;
+  border-color: var(--rule);
+  color: var(--ink-soft);
+  padding: var(--s1) var(--s2);
+}
+.button--quiet:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+
+/*
+ * A finger is not a mouse pointer. The density is deliberate and stays on a
+ * desktop; where the input is coarse the targets grow to the 44px floor
+ * instead, which is the actual condition rather than a guess from screen width.
+ */
+@media (pointer: coarse) {
+  .button {
+    min-height: 44px;
+    padding-inline: var(--s4);
+  }
+}
+
 /* --- skeletons ----------------------------------------------------------- */
 
 .skeleton-row {

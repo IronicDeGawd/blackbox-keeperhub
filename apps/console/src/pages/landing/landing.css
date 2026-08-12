@@ -10,13 +10,110 @@
   padding-bottom: var(--s7);
 }
 
-/* --- statement ----------------------------------------------------------- */
+/* --- hero ---------------------------------------------------------------- */
+
+/*
+ * The statement and the live feed, side by side. The measure is capped at 62ch
+ * so the prose stays readable while the panel takes the width the page was
+ * otherwise wasting.
+ */
+.landing__hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: var(--s6);
+  align-items: start;
+}
 
 .landing__statement {
   display: flex;
   flex-direction: column;
   gap: var(--s4);
-  max-width: 74ch;
+  max-width: 62ch;
+}
+
+/* Below this the panel would be a column of wrapped fragments. */
+@media (max-width: 1000px) {
+  .landing__hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s5);
+  }
+  .landing__statement {
+    max-width: 74ch;
+  }
+}
+
+/* --- what it caught ------------------------------------------------------ */
+
+.landing__now {
+  padding: var(--s4);
+}
+
+.landing__now-head {
+  margin-bottom: var(--s3);
+}
+
+.landing__now-empty {
+  margin: 0;
+  font-size: var(--t-body);
+  color: var(--ink-faint);
+}
+
+.landing__now-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.landing__now-item {
+  padding: var(--s3) 0;
+  border-top: 1px solid var(--rule);
+}
+.landing__now-item:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.landing__now-item:last-child {
+  padding-bottom: 0;
+}
+
+.landing__now-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) 0;
+}
+
+.landing__now-class {
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.landing__now-summary {
+  margin: var(--s1) 0 var(--s2);
+  font-size: var(--t-body);
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+
+.landing__now-all {
+  display: inline-block;
+  margin-top: var(--s4);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--rule);
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+}
+
+.landing__now-facts {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
 }
 
 .landing__headline {
@@ -202,4 +299,33 @@
   .landing__step:last-child {
     border-bottom: none;
   }
+}
+
+/* --- the one thing a visitor can cause ----------------------------------- */
+
+.demo {
+  margin-top: var(--s3);
+}
+
+/*
+ * The only thing on the public page a visitor can *cause*, so it is allowed to
+ * be the largest control in the console. Still an outline and still square —
+ * a filled pill here would be the first fill in the product.
+ */
+.demo .button {
+  font-size: var(--t-base);
+  padding: var(--s3) var(--s5);
+  border-width: 2px;
+}
+
+.demo__note,
+.demo__message {
+  margin: var(--s2) 0 0;
+  font-size: var(--t-small);
+  color: var(--ink-faint);
+  max-width: 62ch;
+}
+
+.demo__message {
+  color: var(--ink);
 }

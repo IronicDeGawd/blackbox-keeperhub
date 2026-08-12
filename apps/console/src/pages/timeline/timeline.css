@@ -33,26 +33,6 @@
   border-bottom-color: var(--accent);
 }
 
-.button {
-  font-family: var(--font-mono);
-  font-size: var(--t-small);
-  letter-spacing: 0.06em;
-  color: var(--ink);
-  border: 1px solid var(--rule-strong);
-  padding: var(--s1) var(--s3);
-  align-self: flex-start;
-  background: var(--surface);
-}
-.button:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.button:disabled {
-  color: var(--ink-faint);
-  border-color: var(--rule);
-  cursor: not-allowed;
-}
-
 /* --- banners and states -------------------------------------------------- */
 
 .banner {

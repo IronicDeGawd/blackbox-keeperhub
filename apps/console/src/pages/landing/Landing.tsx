@@ -1,6 +1,10 @@
+import { useEffect, useState } from 'react';
 import { Link } from '@tanstack/react-router';
+import { api } from '../../lib/api';
 import { useConsole } from '../../lib/store';
-import type { Capabilities } from '../../lib/types';
+import { DemoButton } from '../../ui/DemoButton';
+import { RelativeTime, RuleTag, SeverityDot, StatusPill } from '../../ui/primitives';
+import type { Capabilities, IncidentSummary } from '../../lib/types';
 import './landing.css';
 
 /**
@@ -46,7 +50,9 @@ const DESTINATIONS: Destination[] = [
     to: '/chaos',
     label: 'Chaos',
     line: 'Break something on a testnet on purpose, then watch it get caught, explained and fixed.',
-    needs: 'chaos',
+    // `signChaos`, not `chaos`: the public deployment holds no key, so the
+    // panel it *can* offer is the one the visitor signs themselves.
+    needs: 'signChaos',
   },
 ];
 
@@ -96,7 +102,7 @@ const STEPS: { n: string; head: string; body: string }[] = [
   {
     n: '02',
     head: 'Detect',
-    body: 'Seven rules, R1 to R7, fire on measured facts. Detection is deterministic — no model decides whether something is wrong.',
+    body: 'Ten rules, R1 to R10, fire on measured facts — including three that only a KeeperHub-managed wallet can trigger. Detection is deterministic: no model decides whether something is wrong.',
   },
   {
     n: '03',
@@ -110,6 +116,83 @@ const STEPS: { n: string; head: string; body: string }[] = [
   },
 ];
 
+/**
+ * What it has actually caught, newest first.
+ *
+ * A landing page for a live system that shows no live data is a brochure. This
+ * is the same feed the timeline renders, cut to three — and it is deliberately
+ * beside the claim rather than under it, because the claim is what it is
+ * evidence for.
+ *
+ * Refetched whenever the stats strip moves. The strip is driven by the event
+ * stream, so a run started with the button below appears here without a reload
+ * and without this panel holding a socket of its own.
+ */
+function Latest(): React.JSX.Element {
+  const { stats } = useConsole();
+  const [items, setItems] = useState<IncidentSummary[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const pulse = stats ? JSON.stringify(stats.openBySeverity) + stats.remediations.total : '';
+
+  useEffect(() => {
+    let live = true;
+    void api
+      .incidents({ limit: 3 })
+      .then((list) => {
+        if (live) setItems(list.items);
+      })
+      .catch(() => {
+        if (live) setFailed(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [pulse]);
+
+  return (
+    <aside className="landing__now panel">
+      <h2 className="eyebrow eyebrow--accent landing__now-head">Caught most recently</h2>
+
+      {failed ? (
+        <p className="landing__now-empty">The feed is unreachable from here.</p>
+      ) : items === null ? (
+        <p className="landing__now-empty">Reading…</p>
+      ) : items.length === 0 ? (
+        <p className="landing__now-empty">
+          Nothing detected yet. Press the button and watch one arrive.
+        </p>
+      ) : (
+        <ul className="landing__now-list">
+          {items.map((incident) => (
+            <li key={incident.id} className="landing__now-item">
+              <Link
+                to="/incidents/$id"
+                params={{ id: incident.id }}
+                className="landing__now-link"
+              >
+                <SeverityDot severity={incident.severity} />
+                <span className="landing__now-class">{incident.class}</span>
+              </Link>
+              <p className="landing__now-summary">{incident.summary}</p>
+              <span className="landing__now-facts">
+                <RuleTag ruleId={incident.ruleId} />
+                <StatusPill status={incident.status} />
+                <RelativeTime at={incident.detectedAt} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {items && items.length > 0 ? (
+        <Link to="/timeline" className="landing__now-all">
+          All incidents, as they arrive →
+        </Link>
+      ) : null}
+    </aside>
+  );
+}
+
 export function Landing(): React.JSX.Element {
   const { config } = useConsole();
   const capabilities = config?.capabilities ?? null;
@@ -120,49 +203,38 @@ export function Landing(): React.JSX.Element {
 
   return (
     <div className="page landing">
-      <section className="landing__statement">
-        <p className="eyebrow eyebrow--accent">Blackbox</p>
-        <h1 className="landing__headline">
-          Agents are good at reasoning and bad at execution.
-        </h1>
-        <p className="landing__lead">
-          Nonce gaps wedge signers, gas estimates go stale, transactions simulate clean and revert
-          on inclusion, and a retry loop quietly burns a wallet down. Blackbox watches onchain agent
-          execution, works out what went wrong, explains it, and fixes it with a real transaction.
-        </p>
-        <p className="panel panel--accent landing__claim">
-          Every remediation is a real transaction with a retrievable hash. There are no simulated
-          remediations anywhere in the product.
-        </p>
+      {/*
+       * The claim and the evidence for it, side by side. Putting the live feed
+       * here rather than three sections down is the whole difference between
+       * "this is what we would do" and "this is what it did".
+       */}
+      <section className="landing__hero">
+        <div className="landing__statement">
+          <p className="eyebrow eyebrow--accent">Blackbox</p>
+          <h1 className="landing__headline">
+            Agents are good at reasoning and bad at execution.
+          </h1>
+          <p className="landing__lead">
+            Nonce gaps wedge signers, gas estimates go stale, transactions simulate clean and
+            revert on inclusion, and a retry loop quietly burns a wallet down. Blackbox watches
+            onchain agent execution, works out what went wrong, explains it, and fixes it with a
+            real transaction.
+          </p>
+          <p className="panel panel--accent landing__claim">
+            Every remediation is a real transaction with a retrievable hash. There are no simulated
+            remediations anywhere in the product.
+          </p>
+          {capabilities?.demo ? <DemoButton /> : null}
+        </div>
+
+        <Latest />
       </section>
 
-      <section>
-        <h2 className="eyebrow eyebrow--ruled">How it works</h2>
-        <ol className="landing__steps">
-          {STEPS.map((step) => (
-            <li key={step.n} className="landing__step">
-              <span className="landing__step-n">{step.n}</span>
-              <h3 className="landing__step-head">{step.head}</h3>
-              <p className="landing__step-body">{step.body}</p>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <section>
-        <h2 className="eyebrow eyebrow--ruled">Start here</h2>
-        <ul className="landing__destinations">
-          {visible.map((destination) => (
-            <li key={destination.to} className="landing__destination">
-              <Link to={destination.to} className="landing__destination-link">
-                {destination.label}
-              </Link>
-              <p className="landing__destination-line">{destination.line}</p>
-            </li>
-          ))}
-        </ul>
-      </section>
-
+      {/*
+       * Immediately after the claim, because it is the receipt for it. Six
+       * links a reader can check for themselves beat any amount of prose about
+       * what the system is capable of.
+       */}
       <section>
         <h2 className="eyebrow eyebrow--ruled">Proof onchain</h2>
         <p className="landing__note">
@@ -190,6 +262,33 @@ export function Landing(): React.JSX.Element {
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section>
+        <h2 className="eyebrow eyebrow--ruled">How it works</h2>
+        <ol className="landing__steps">
+          {STEPS.map((step) => (
+            <li key={step.n} className="landing__step">
+              <span className="landing__step-n">{step.n}</span>
+              <h3 className="landing__step-head">{step.head}</h3>
+              <p className="landing__step-body">{step.body}</p>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <section>
+        <h2 className="eyebrow eyebrow--ruled">Start here</h2>
+        <ul className="landing__destinations">
+          {visible.map((destination) => (
+            <li key={destination.to} className="landing__destination">
+              <Link to={destination.to} className="landing__destination-link">
+                {destination.label}
+              </Link>
+              <p className="landing__destination-line">{destination.line}</p>
+            </li>
+          ))}
+        </ul>
       </section>
     </div>
   );

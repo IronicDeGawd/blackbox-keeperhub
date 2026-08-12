@@ -44,19 +44,34 @@ export function ChainBanner({ chains }: { chains: ChainConfig[] }): React.JSX.El
 }
 
 /**
- * Configured mainnets get their own line, not just a differently coloured chip.
- * Everything the console can trigger spends real gas, and the difference
- * between a testnet and a mainnet is the whole of the risk.
+ * A mainnet Blackbox can *spend on* gets its own line, not just a differently
+ * coloured chip. The difference between a testnet and a mainnet is the whole of
+ * the risk.
+ *
+ * Keyed on the remediation chain allowlist rather than on the chain list,
+ * because those are two different facts. A mainnet is usually configured so
+ * that a transaction on it can be read and explained; remediation reaches only
+ * the chains named in the allowlist. Warning about the first as though it were
+ * the second is a false alarm, and a banner that cries wolf on every page load
+ * is one nobody reads on the day it is true.
  */
-export function MainnetWarning({ chains }: { chains: ChainConfig[] }): React.JSX.Element | null {
-  const live = chains.filter((chain) => !chain.testnet);
-  if (live.length === 0) return null;
+export function MainnetWarning({
+  chains,
+  remediableChainIds,
+}: {
+  chains: ChainConfig[];
+  remediableChainIds: number[];
+}): React.JSX.Element | null {
+  const spendable = chains.filter(
+    (chain) => !chain.testnet && remediableChainIds.includes(chain.chainId),
+  );
+  if (spendable.length === 0) return null;
 
   return (
     <div className="mainnet-warning" role="alert">
-      <strong>MAINNET CONFIGURED</strong>
+      <strong>MAINNET REMEDIATION ENABLED</strong>
       <span>
-        {live.map((chain) => chain.name).join(', ')} — remediation here spends real funds.
+        {spendable.map((chain) => chain.name).join(', ')} — a fix submitted here spends real funds.
       </span>
     </div>
   );
@@ -128,7 +143,16 @@ const DESTINATIONS: Destination[] = [
   { to: '/incidents', label: 'Incidents' },
   { to: '/inspect', label: 'Inspect', needs: 'diagnose' },
   { to: '/watched', label: 'Watched' },
-  { to: '/chaos', label: 'Chaos', needs: 'chaos' },
+  /**
+   * Gated on `signChaos`, not `chaos`.
+   *
+   * The public deployment holds no key, so `chaos` is false there by design —
+   * and gating on it hid the one thing a visitor is meant to do. The panel
+   * plans a failure for the visitor's own wallet to sign, which is exactly
+   * what `signChaos` reports.
+   */
+  { to: '/chaos', label: 'Chaos', needs: 'signChaos' },
+  { to: '/connections', label: 'Connections', needs: 'connectKeeperHub' },
 ];
 
 /**

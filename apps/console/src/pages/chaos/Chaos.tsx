@@ -6,6 +6,7 @@ import { formatWei } from '../../lib/format';
 import { useConsole } from '../../lib/store';
 import type { ChaosContext, ChaosRun } from '../../lib/types';
 import { CopyableAddress, ExplorerLink } from '../../ui/primitives';
+import { SelfSigned } from './SelfSigned';
 import './chaos.css';
 
 /**
@@ -32,6 +33,17 @@ export function Chaos(): React.JSX.Element {
       if (cause instanceof ApiError) setError(cause);
     }
   }, []);
+
+  /**
+   * Two different catalogues answer this route.
+   *
+   * A deployment holding a signer key returns its own context — the address it
+   * will sign as, its balance, the target contracts — because it runs the
+   * scenario itself. One without a key returns only what can be *planned* for
+   * somebody else's wallet. Telling them apart by the context, rather than by
+   * a capability flag, means the page cannot be wrong about which it got.
+   */
+  const serverSigned = context !== null && typeof context.signer === 'string';
 
   useEffect(() => {
     void load();
@@ -62,8 +74,30 @@ export function Chaos(): React.JSX.Element {
     }
   };
 
-  const balance = context ? formatWei(context.signerBalanceWei, true) : null;
-  const drained = context ? BigInt(context.signerBalanceWei || '0') < 10n ** 15n : false;
+  const balance = serverSigned ? formatWei(context!.signerBalanceWei, true) : null;
+  const drained = serverSigned ? BigInt(context!.signerBalanceWei || '0') < 10n ** 15n : false;
+
+  if (context && !serverSigned) {
+    return (
+      <section className="page">
+        <header className="pagehead">
+          <p className="eyebrow eyebrow--accent eyebrow--ruled">Chaos</p>
+          <div className="pagehead__row">
+            <h1 className="pagehead__title">Induce a failure</h1>
+          </div>
+        </header>
+        <SelfSigned
+          scenarios={
+            (context as unknown as {
+              items: { id: string; induces: string; summary: string; signable: boolean }[];
+            }).items
+          }
+          chains={chains}
+          chainId={config?.chains.find((c) => c.testnet)?.chainId ?? 11155111}
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="page">
@@ -72,7 +106,7 @@ export function Chaos(): React.JSX.Element {
         <div className="pagehead__row">
           <h1 className="pagehead__title">Induce a failure</h1>
           <span className="row__gap" />
-          {context ? (
+          {serverSigned ? (
             <button
               type="button"
               className="button"
@@ -85,7 +119,7 @@ export function Chaos(): React.JSX.Element {
         </div>
       </header>
 
-      {context ? (
+      {serverSigned && context ? (
         <div
           className={context.isTestnet ? 'panel banner banner--testnet' : 'mainnet-warning'}
           role="alert"
