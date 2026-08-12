@@ -156,7 +156,7 @@ export class IncidentTracker {
         ctx.now.getTime() - existing.lastSeenAt.getTime() <= this.causalWindowMs;
 
       if (existing && withinWindow) {
-        updated.push(this.append(existing, draft, ctx));
+        updated.push(this.append(existing, draft, ctx, window));
         continue;
       }
       if (existing && !withinWindow) {
@@ -170,7 +170,7 @@ export class IncidentTracker {
         this.finish(existing, ctx.now, 'unknown', 'resolved');
         superseded.push(existing);
       }
-      const incident = this.create(draft, ctx, key);
+      const incident = this.create(draft, ctx, key, window);
       this.open.set(key, incident);
       created.push(incident);
     }
@@ -200,7 +200,39 @@ export class IncidentTracker {
     return incident;
   }
 
-  private create(draft: EvaluatedDraft, ctx: RuleContext, key: IncidentKey): TrackedIncident {
+  /**
+   * When the earliest event this incident cites was submitted.
+   *
+   * `ctx.now` is when the rule fired, and using it made
+   * `meanTimeToDetectionMs` structurally zero — the gap between the failure
+   * happening and Blackbox noticing is the whole thing that statistic exists
+   * to measure, and it was measuring nothing.
+   *
+   * Falls back to `ctx.now` when the cited events are not in this window,
+   * which is the honest answer for an incident with no event behind it: R8
+   * reads a platform figure and cites none at all.
+   */
+  private earliestCited(
+    draft: EvaluatedDraft,
+    ctx: RuleContext,
+    window: readonly ExecutionEvent[],
+  ): Date {
+    const cited = new Set(draft.eventIds);
+    let earliest: Date | null = null;
+    for (const event of window) {
+      if (!cited.has(event.id)) continue;
+      const at = event.submission.submittedAt;
+      if (earliest === null || at.getTime() < earliest.getTime()) earliest = at;
+    }
+    return earliest ?? ctx.now;
+  }
+
+  private create(
+    draft: EvaluatedDraft,
+    ctx: RuleContext,
+    key: IncidentKey,
+    window: readonly ExecutionEvent[],
+  ): TrackedIncident {
     return {
       id: this.makeId(),
       key,
@@ -211,7 +243,7 @@ export class IncidentTracker {
       signer: ctx.signer,
       chainId: ctx.chainId,
       detectedAt: ctx.now,
-      firstEventAt: ctx.now,
+      firstEventAt: this.earliestCited(draft, ctx, window),
       lastSeenAt: ctx.now,
       evidence: {
         eventIds: [...draft.eventIds],
@@ -228,6 +260,7 @@ export class IncidentTracker {
     incident: TrackedIncident,
     draft: EvaluatedDraft,
     ctx: RuleContext,
+    window: readonly ExecutionEvent[],
   ): TrackedIncident {
     const merged = new Set([...incident.evidence.eventIds, ...draft.eventIds]);
     incident.evidence.eventIds = [...merged];
@@ -242,6 +275,10 @@ export class IncidentTracker {
     // critical once should not be quietly downgraded by a later softer read.
     if (rank(draft.severity) < rank(incident.severity)) incident.severity = draft.severity;
     incident.confidence = Math.max(incident.confidence, draft.confidence);
+    // A later confirmation can cite an older event than the one that opened
+    // this incident. When it does, the failure started earlier than recorded.
+    const earliest = this.earliestCited(draft, ctx, window);
+    if (earliest.getTime() < incident.firstEventAt.getTime()) incident.firstEventAt = earliest;
     incident.lastSeenAt = ctx.now;
     return incident;
   }

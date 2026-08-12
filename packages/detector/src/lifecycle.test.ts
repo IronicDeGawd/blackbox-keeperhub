@@ -37,6 +37,63 @@ const stuckDraft = (facts: Record<string, unknown> = { nonce: 5 }): EvaluatedDra
 
 beforeEach(resetSeq);
 
+/**
+ * The gap between a failure happening and Blackbox noticing is what
+ * `meanTimeToDetectionMs` reports, and it was structurally zero: firstEventAt
+ * was the moment the rule fired, so the statistic subtracted a value from
+ * itself for every incident ever recorded.
+ */
+describe('when the failure actually started', () => {
+  it('is the earliest event the incident cites, not when the rule fired', () => {
+    const t = tracker();
+    const window = [evt({ id: 'e0', submittedAt: at(20_000), status: 'pending', nonce: 5 })];
+    const res = t.ingest([stuckDraft()], window, ctx({ now: at(200_000) }));
+
+    expect(res.created[0]!.firstEventAt).toEqual(at(20_000));
+    expect(res.created[0]!.detectedAt).toEqual(at(200_000));
+  });
+
+  it('takes the earliest of several cited events', () => {
+    const t = tracker();
+    const window = [
+      evt({ id: 'e0', submittedAt: at(90_000), status: 'pending', nonce: 5 }),
+      evt({ id: 'e1', submittedAt: at(30_000), status: 'pending', nonce: 6 }),
+    ];
+    const res = t.ingest(
+      [{ ...stuckDraft(), eventIds: ['e0', 'e1'] }],
+      window,
+      ctx({ now: at(200_000) }),
+    );
+    expect(res.created[0]!.firstEventAt).toEqual(at(30_000));
+  });
+
+  it('moves earlier when a later confirmation cites an older event', () => {
+    const t = tracker();
+    const window = [
+      evt({ id: 'e0', submittedAt: at(90_000), status: 'pending', nonce: 5 }),
+      evt({ id: 'e1', submittedAt: at(10_000), status: 'pending', nonce: 6 }),
+    ];
+    t.ingest([stuckDraft()], window, ctx({ now: at(150_000) }));
+    const second = t.ingest(
+      [{ ...stuckDraft(), eventIds: ['e1'] }],
+      window,
+      ctx({ now: at(200_000) }),
+    );
+    expect(second.updated[0]!.firstEventAt).toEqual(at(10_000));
+  });
+
+  it('falls back to now for a rule that cites no event at all', () => {
+    // R8 reads a platform figure; there is no execution behind it to date.
+    const t = tracker();
+    const res = t.ingest(
+      [{ ...stuckDraft(), eventIds: [] }],
+      [evt({ id: 'e0', submittedAt: at(20_000), status: 'pending', nonce: 5 })],
+      ctx({ now: at(200_000) }),
+    );
+    expect(res.created[0]!.firstEventAt).toEqual(at(200_000));
+  });
+});
+
 describe('correlation', () => {
   it('creates one incident on first sighting', () => {
     const t = tracker();

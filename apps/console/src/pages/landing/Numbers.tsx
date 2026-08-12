@@ -22,11 +22,12 @@ export function Numbers(): React.JSX.Element | null {
 
   useEffect(() => {
     let live = true;
-    void Promise.all([api.stats(), api.incidents({ limit: 1 })])
-      .then(([stats, list]) => {
+    void api
+      .stats()
+      .then((stats) => {
         if (!live) return;
         setFigures({
-          detected: list.total,
+          detected: stats.incidentsDetected,
           fixed: stats.remediations.succeeded,
           detectionMs: stats.meanTimeToDetectionMs,
         });
@@ -56,11 +57,19 @@ export function Numbers(): React.JSX.Element | null {
       </div>
       <div className="numbers__item">
         <span className="numbers__value num">
-          {figures.detectionMs === null ? EM_DASH : formatDuration(figures.detectionMs)}
+          {figures.detectionMs === null ? EM_DASH : detection(figures.detectionMs)}
         </span>
         <span className="numbers__label">mean time to detection</span>
       </div>
       <p className="numbers__note">On this deployment, since it was first switched on.</p>
     </section>
   );
+}
+
+/**
+ * Sub-second detection is real and worth saying, but "0ms" reads as a broken
+ * counter rather than as a fast one, so it is stated as a bound instead.
+ */
+function detection(ms: number): string {
+  return ms < 1000 ? 'under 1s' : formatDuration(ms);
 }

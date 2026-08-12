@@ -327,6 +327,13 @@ export async function ledgerForIncident(db: Database, incidentId: string): Promi
 }
 
 export type Stats = {
+  /**
+   * Every incident ever recorded here, not just the open ones. The severity
+   * buckets below answer "what needs attention now"; this answers "has this
+   * ever found anything", which is a different question and the one a reader
+   * who has not signed in is actually asking.
+   */
+  incidentsDetected: number;
   openBySeverity: { critical: number; warning: number; info: number };
   remediations: {
     total: number;
@@ -398,6 +405,7 @@ export async function stats(
     values.length === 0 ? null : Math.round(values.reduce((a, b) => a + b, 0) / values.length);
 
   return {
+    incidentsDetected: incidentRows.length,
     openBySeverity: {
       critical: countSeverity('critical'),
       warning: countSeverity('warning'),

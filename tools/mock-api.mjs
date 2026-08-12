@@ -303,6 +303,7 @@ function stats() {
   const remediations = all.flatMap((i) => i.remediation?.attempts ?? []);
   const succeeded = remediations.filter((a) => a.status === 'succeeded');
   return {
+    incidentsDetected: all.length,
     openBySeverity: {
       critical: open.filter((i) => i.severity === 'critical').length,
       warning: open.filter((i) => i.severity === 'warning').length,

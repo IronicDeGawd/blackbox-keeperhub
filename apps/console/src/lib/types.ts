@@ -270,6 +270,8 @@ export type IncidentList = {
 // ------------------------------------------------------------------- console
 
 export type Stats = {
+  /** Every incident recorded, not just the open ones. */
+  incidentsDetected: number;
   openBySeverity: Record<Severity, number>;
   remediations: {
     total: number;
