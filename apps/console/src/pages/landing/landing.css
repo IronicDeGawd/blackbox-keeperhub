@@ -5,122 +5,33 @@
  * marketing hero here would undercut the exact thing the page is claiming.
  */
 
-.landing {
+/* Doubled selector: `.page` also sets a gap, and this one has to win. */
+.page.landing {
   gap: var(--s7);
-  padding-bottom: var(--s7);
+  padding-block: var(--s5) var(--s7);
+  /* No rail beside it, so the column centres rather than hugging the edge. */
+  margin-inline: auto;
 }
 
 /* --- hero ---------------------------------------------------------------- */
 
 /*
- * The statement and the live feed, side by side. The measure is capped at 62ch
- * so the prose stays readable while the panel takes the width the page was
- * otherwise wasting.
+ * One column, not two. The page is prose that has to be read in order, and a
+ * panel beside the opening statement pulls the eye out of the sentence that
+ * has to land first.
  */
 .landing__hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
-  gap: var(--s6);
-  align-items: start;
-}
-
-.landing__statement {
   display: flex;
   flex-direction: column;
-  gap: var(--s4);
-  max-width: 62ch;
-}
-
-/* Below this the panel would be a column of wrapped fragments. */
-@media (max-width: 1000px) {
-  .landing__hero {
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--s5);
-  }
-  .landing__statement {
-    max-width: 74ch;
-  }
-}
-
-/* --- what it caught ------------------------------------------------------ */
-
-.landing__now {
-  padding: var(--s4);
-}
-
-.landing__now-head {
-  margin-bottom: var(--s3);
-}
-
-.landing__now-empty {
-  margin: 0;
-  font-size: var(--t-body);
-  color: var(--ink-faint);
-}
-
-.landing__now-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.landing__now-item {
-  padding: var(--s3) 0;
-  border-top: 1px solid var(--rule);
-}
-.landing__now-item:first-child {
-  border-top: none;
-  padding-top: 0;
-}
-.landing__now-item:last-child {
-  padding-bottom: 0;
-}
-
-.landing__now-link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s2);
-  padding: var(--s1) 0;
-}
-
-.landing__now-class {
-  font-family: var(--font-mono);
-  font-size: var(--t-small);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
-.landing__now-summary {
-  margin: var(--s1) 0 var(--s2);
-  font-size: var(--t-body);
-  line-height: 1.5;
-  color: var(--ink-soft);
-}
-
-.landing__now-all {
-  display: inline-block;
-  margin-top: var(--s4);
-  padding-top: var(--s3);
-  border-top: 1px solid var(--rule);
-  width: 100%;
-  font-family: var(--font-mono);
-  font-size: var(--t-small);
-}
-
-.landing__now-facts {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  flex-wrap: wrap;
+  gap: var(--s3);
+  max-width: 68ch;
 }
 
 .landing__headline {
   font-size: var(--t-display);
   line-height: 1.18;
   letter-spacing: -0.02em;
-  margin: var(--s2) 0 0;
+  margin: var(--s1) 0 var(--s2);
   color: var(--ink);
 }
 
@@ -131,13 +42,117 @@
   color: var(--ink-soft);
 }
 
-.landing__claim {
-  margin: 0;
-  padding: var(--s3) var(--s4);
-  font-family: var(--font-mono);
+.landing__who {
+  margin: var(--s2) 0 0;
   font-size: var(--t-body);
-  line-height: 1.55;
+  color: var(--ink-faint);
+  max-width: 68ch;
+}
+
+/* --- the one action ------------------------------------------------------ */
+
+.landing__cta {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  margin-top: var(--s3);
+}
+
+/* The largest control on the page, and the only filled-weight border on it. */
+.landing__cta-main {
+  font-size: var(--t-base);
+  padding: var(--s3) var(--s5);
+  border-width: 2px;
+  text-decoration: none;
+}
+.landing__cta-main:hover {
+  text-decoration: none;
+}
+
+.landing__cta-alt {
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+  color: var(--ink-soft);
+}
+.landing__cta-alt:hover {
+  color: var(--accent);
+}
+
+/* --- what it does -------------------------------------------------------- */
+
+.landing__what {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0;
+  margin-top: var(--s4);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.landing__whatitem {
+  padding: var(--s4);
+  border-right: 1px solid var(--rule);
+}
+.landing__whatitem:last-child {
+  border-right: none;
+}
+
+.landing__whathead {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: normal;
+  font-size: var(--t-lead);
+  line-height: 1.3;
+  margin: 0 0 var(--s3);
   color: var(--ink);
+}
+
+.landing__whatbody {
+  margin: 0;
+  font-size: var(--t-body);
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+/* --- what it will not do ------------------------------------------------- */
+
+.landing__limits {
+  list-style: none;
+  margin: var(--s4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  max-width: 84ch;
+}
+
+/* A hairline rather than a bullet: these are boundaries, not features. */
+.landing__limits li {
+  padding-left: var(--s4);
+  border-left: 1px solid var(--rule-strong);
+  font-size: var(--t-body);
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+/* --- foot ---------------------------------------------------------------- */
+
+.landing__foot {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  padding-top: var(--s4);
+  border-top: 1px solid var(--rule);
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+}
+
+.landing__foot .landing__note {
+  margin: 0;
+  flex: 1;
+  min-width: 40ch;
 }
 
 /* --- how it works -------------------------------------------------------- */
@@ -184,37 +199,6 @@
 }
 
 /* --- start here ---------------------------------------------------------- */
-
-.landing__destinations {
-  list-style: none;
-  margin: var(--s4) 0 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: var(--s4) var(--s6);
-}
-
-.landing__destination {
-  border-left: 1px solid var(--rule);
-  padding-left: var(--s4);
-}
-
-/* Padded to clear the 24px target minimum: these stand alone on their own
-   line, so the inline-text exemption does not cover them. */
-.landing__destination-link {
-  display: inline-block;
-  padding: var(--s1) 0;
-  font-family: var(--font-mono);
-  font-size: var(--t-base);
-  font-weight: 600;
-}
-
-.landing__destination-line {
-  margin: var(--s1) 0 0;
-  font-size: var(--t-body);
-  line-height: 1.55;
-  color: var(--ink-soft);
-}
 
 /* --- proof --------------------------------------------------------------- */
 
@@ -299,33 +283,4 @@
   .landing__step:last-child {
     border-bottom: none;
   }
-}
-
-/* --- the one thing a visitor can cause ----------------------------------- */
-
-.demo {
-  margin-top: var(--s3);
-}
-
-/*
- * The only thing on the public page a visitor can *cause*, so it is allowed to
- * be the largest control in the console. Still an outline and still square —
- * a filled pill here would be the first fill in the product.
- */
-.demo .button {
-  font-size: var(--t-base);
-  padding: var(--s3) var(--s5);
-  border-width: 2px;
-}
-
-.demo__note,
-.demo__message {
-  margin: var(--s2) 0 0;
-  font-size: var(--t-small);
-  color: var(--ink-faint);
-  max-width: 62ch;
-}
-
-.demo__message {
-  color: var(--ink);
 }

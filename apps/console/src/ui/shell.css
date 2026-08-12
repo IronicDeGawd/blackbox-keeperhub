@@ -70,6 +70,22 @@
   text-transform: uppercase;
   color: var(--ink);
   white-space: nowrap;
+  text-decoration: none;
+}
+.brand:hover {
+  text-decoration: none;
+  color: var(--ink);
+}
+
+/* The way back into the console from the front page. */
+.masthead__link {
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.masthead__link:hover {
+  color: var(--accent);
 }
 
 .brand__mark {
@@ -252,6 +268,11 @@
   display: grid;
   grid-template-columns: 172px minmax(0, 1fr);
   min-height: 0;
+}
+
+/* No rail on the front page, so nothing should be holding a column open. */
+.body--wide {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .rail {

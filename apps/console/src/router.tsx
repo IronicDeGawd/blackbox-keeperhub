@@ -8,6 +8,7 @@ import { inspectRoute } from './routes/inspect';
 import { watchedRoute } from './routes/watched';
 import { chaosRoute } from './routes/chaos';
 import { connectionsRoute } from './routes/connections';
+import { dashboardRoute } from './routes/dashboard';
 
 /**
  * Routes are declared in code rather than generated from the filesystem: the
@@ -23,6 +24,7 @@ const routeTree = rootRoute.addChildren([
   watchedRoute,
   chaosRoute,
   connectionsRoute,
+  dashboardRoute,
 ]);
 
 export const router = createRouter({ routeTree });

@@ -138,7 +138,9 @@ export function StatsStrip({ stats }: { stats: Stats | null }): React.JSX.Elemen
 type Destination = { to: string; label: string; needs?: keyof Capabilities };
 
 const DESTINATIONS: Destination[] = [
-  { to: '/', label: 'Overview' },
+  // The console's own front door. `/` is the product page, reached from the
+  // wordmark, and it deliberately carries none of this.
+  { to: '/dashboard', label: 'Console' },
   { to: '/timeline', label: 'Timeline' },
   { to: '/incidents', label: 'Incidents' },
   { to: '/inspect', label: 'Inspect', needs: 'diagnose' },
