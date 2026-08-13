@@ -15,6 +15,9 @@ simulated remediations anywhere in the product.
 — the console, the live incident feed, and a button that induces a real failure
 so you can watch it get caught. No account needed to look.
 
+**Watch it work: [a demo, end to end](https://youtu.be/7dIDS5rjCb0)** — connect
+read-only, break something, and watch the incident arrive without a reload.
+
 ---
 
 ## Proof

@@ -3,6 +3,7 @@
 **Autonomous incident intelligence and remediation for onchain agent execution, built on KeeperHub.**
 
 - **Live:** [https://blackbox-kh.parakramlabs.com](https://blackbox-kh.parakramlabs.com/)
+- **Demo:** [https://youtu.be/7dIDS5rjCb0](https://youtu.be/7dIDS5rjCb0)
 - **Code:** [https://github.com/IronicDeGawd/blackbox-keeperhub](https://github.com/IronicDeGawd/blackbox-keeperhub)
 
 ## The problem
