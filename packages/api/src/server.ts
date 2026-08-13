@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createPublicClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
   blackboxConfigSchema,
@@ -87,6 +88,7 @@ function loadEnv(): Record<string, string | undefined> {
 
 const env = loadEnv();
 const chainId = Number(env['CHAIN_ID'] ?? 11155111);
+const configuredChainId = chainId;
 const rpcUrl = env['ALCHEMY_RPC_URL'] ?? env['SEPOLIA_RPC_URL'];
 if (!rpcUrl) throw new Error('No RPC URL: set ALCHEMY_RPC_URL or SEPOLIA_RPC_URL');
 // Every endpoint we know of, for finding a transaction a stranger's wallet
@@ -290,6 +292,51 @@ const verifier = new ReceiptVerifier({ [chainId]: rpcUrl });
  * to one hardcoded agent id meant no connected agent could ever match.
  */
 const seededBreaker = env['CIRCUIT_BREAKER_ADDRESS'] as `0x${string}` | undefined;
+
+/**
+ * Can Blackbox actually pause this contract?
+ *
+ * CircuitBreaker grants the right through an `isPauser` mapping, and the owner
+ * always may. The address that would do the pausing is the KeeperHub managed
+ * wallet, because a halt on a connected operator's agent routes through their
+ * KeeperHub account rather than through a held key.
+ *
+ * Checked at registration so the operator learns now, while a role grant is
+ * one transaction away, rather than during the incident it was meant to stop.
+ */
+const pauserAbi = [
+  {
+    inputs: [{ name: '', type: 'address' }],
+    name: 'isPauser',
+    outputs: [{ type: 'bool' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+  { inputs: [], name: 'owner', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },
+] as const;
+
+const pauserCandidate = (env['KH_MANAGED_WALLET_ADDRESS'] ?? signerAccount?.address) as
+  | `0x${string}`
+  | undefined;
+
+const verifyPauser = pauserCandidate
+  ? async ({ address, chainId }: { address: `0x${string}`; chainId: number }): Promise<boolean> => {
+      // Only the chain this deployment has an RPC for can be checked; a
+      // breaker elsewhere registers unverified rather than falsely verified.
+      if (chainId !== configuredChainId) return false;
+      const client = createPublicClient({ transport: http(rpcUrl) });
+      const [allowed, owner] = await Promise.all([
+        client
+          .readContract({ address, abi: pauserAbi, functionName: 'isPauser', args: [pauserCandidate] })
+          .catch(() => false),
+        client.readContract({ address, abi: pauserAbi, functionName: 'owner' }).catch(() => null),
+      ]);
+      return (
+        allowed === true ||
+        (typeof owner === 'string' && owner.toLowerCase() === pauserCandidate.toLowerCase())
+      );
+    }
+  : undefined;
 const breakerFor = async (agentId: string): Promise<`0x${string}` | null> => {
   const registered = await breakerForAgent(db, agentId);
   if (registered) return registered.address as `0x${string}`;
@@ -574,6 +621,7 @@ const app = await buildApp({
   bus,
   identity,
   oauth,
+  ...(verifyPauser ? { verifyPauser } : {}),
   ...(connections ? { connections } : {}),
   ...(demo ? { demo } : {}),
   sweepsOwnOrg: Boolean(keeperHubOrg),
