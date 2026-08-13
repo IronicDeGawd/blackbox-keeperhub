@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Blackbox — demo screens</title>
+<!--
+  Capture frames for the demo video.
+
+  Every value here is real, taken from the live deployment and from KeeperHub's
+  own execution log for run 820jxst61wt0oosm7h0bm on 13 Aug 2026. Nothing is
+  invented, so a frame captured from this file shows what the product actually
+  produced.
+
+  Each .frame is exactly 1440x900 so a capture is deterministic and every shot
+  in the video is the same size. Use ?frame=2 to isolate one, or capture the
+  page and cut.
+
+  Frame 0 is a reconstruction of the connect step, not a copy of KeeperHub's
+  consent page — it carries no KeeperHub branding, has no input fields and
+  submits nowhere. It exists to put the scope on screen, which is the only part
+  of that step the video needs to make. If you want their actual page in the
+  cut, capture it from the real flow.
+-->
+<style>
+  :root {
+    --ground: #101317;
+    --surface: #171b21;
+    --surface-sunk: #1d222a;
+    --ink: #e7eaef;
+    --ink-soft: #a8b0bc;
+    --ink-faint: #868e9c;
+    --rule: #2a3039;
+    --rule-strong: #3a424e;
+    --accent: #ff7a3d;
+    --accent-soft: #2a1a12;
+    --critical: #f2685f;
+    --warning: #d9a036;
+    --ok: #4fbe87;
+    --code-bg: #1b2028;
+
+    --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+    --t-micro: 0.75rem;
+    --t-small: 0.8125rem;
+    --t-body: 0.9375rem;
+    --t-lead: 1.0625rem;
+    --t-title: 1.375rem;
+
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px;
+    --s5: 22px; --s6: 32px; --s7: 48px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: #05070a;
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: var(--t-body);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--s7);
+    padding: var(--s7) var(--s4);
+  }
+
+  .caption {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    align-self: flex-start;
+    max-width: 1440px;
+    width: 100%;
+    margin-bottom: calc(var(--s5) * -1);
+  }
+
+  /* Fixed capture size. Do not make this responsive — a video needs every
+     frame identical. */
+  .frame {
+    width: 1440px;
+    height: 900px;
+    background: var(--ground);
+    border: 1px solid var(--rule);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    flex: none;
+  }
+
+  /* --- chrome ------------------------------------------------------------ */
+
+  .masthead {
+    display: flex;
+    align-items: center;
+    gap: var(--s4);
+    padding: var(--s3) var(--s5);
+    border-bottom: 1px solid var(--rule);
+    background: var(--surface);
+  }
+
+  .brand {
+    font-family: var(--font-mono);
+    font-size: var(--t-body);
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+  .brand b { color: var(--accent); font-weight: 600; }
+
+  .chip {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    color: var(--ink-soft);
+    border: 1px solid var(--rule);
+    padding: 2px var(--s2);
+  }
+  .chip em { font-style: normal; color: var(--ink-faint); letter-spacing: 0.08em; }
+
+  .spacer { flex: 1; }
+
+  .live {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    color: var(--ok);
+    letter-spacing: 0.1em;
+  }
+  .live::before {
+    content: "";
+    display: inline-block;
+    width: 7px; height: 7px;
+    background: var(--ok);
+    margin-right: var(--s2);
+  }
+
+  .stats {
+    display: flex;
+    border-bottom: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  .stat {
+    padding: var(--s3) var(--s5);
+    border-right: 1px solid var(--rule);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .stat dt {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0;
+  }
+  .stat dd {
+    margin: 0;
+    font-size: var(--t-lead);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat dd small { font-size: var(--t-micro); color: var(--ink-faint); }
+
+  .body { display: flex; flex: 1; min-height: 0; }
+
+  .rail {
+    width: 172px;
+    flex: none;
+    border-right: 1px solid var(--rule);
+    padding: var(--s4) 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s1);
+  }
+  .rail a {
+    padding: var(--s2) var(--s5);
+    color: var(--ink-soft);
+    text-decoration: none;
+    font-size: var(--t-body);
+  }
+  .rail a.on { color: var(--accent); }
+
+  .main {
+    flex: 1;
+    min-width: 0;
+    padding: var(--s5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s4);
+    overflow: hidden;
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+  }
+  .eyebrow--ruled { padding-bottom: var(--s2); border-bottom: 1px solid var(--rule); }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: var(--s4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s3);
+    min-height: 0;
+  }
+
+  /* --- ledger line ------------------------------------------------------- */
+
+  .ledger {
+    display: flex;
+    gap: var(--s2);
+    align-items: baseline;
+    padding: var(--s2) 0;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    font-size: var(--t-small);
+    color: var(--ink-soft);
+  }
+  .ledger .tick { color: var(--ok); font-weight: 600; }
+  .ledger a { color: var(--accent); text-decoration: none; }
+
+  /* --- event log --------------------------------------------------------- */
+
+  .log {
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    padding: var(--s2);
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+  .logline {
+    display: grid;
+    grid-template-columns: 7rem 5rem 1fr;
+    gap: var(--s2);
+    padding: 1px 0;
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+  }
+  .logline .at { color: var(--ink-faint); }
+  .logline .tag { text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); }
+  .logline.crit .tag, .logline.crit .text { color: var(--critical); }
+  .logline.good .tag { color: var(--ok); }
+  .logline.warn .tag { color: var(--warning); }
+
+  /* --- incident ---------------------------------------------------------- */
+
+  .sev {
+    display: inline-block;
+    width: 8px; height: 8px;
+    background: var(--critical);
+  }
+  .badge {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    color: var(--accent);
+    letter-spacing: 0.06em;
+  }
+  .tag-box {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    border: 1px solid var(--rule-strong);
+    padding: 1px 6px;
+    color: var(--ink-soft);
+  }
+  .pill {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    border: 1px solid var(--critical);
+    color: var(--critical);
+    padding: 1px 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .headline { margin: 0; font-size: var(--t-title); font-weight: 600; }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s2) var(--s6);
+    margin: 0;
+  }
+  .meta dt {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .meta dd { margin: 2px 0 0; font-size: var(--t-small); font-variant-numeric: tabular-nums; }
+
+  table { border-collapse: collapse; width: 100%; font-size: var(--t-small); font-variant-numeric: tabular-nums; }
+  th {
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding: 0 var(--s4) var(--s2) 0;
+    border-bottom: 1px solid var(--rule-strong);
+    white-space: nowrap;
+  }
+  td { padding: var(--s2) var(--s4) var(--s2) 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  td:last-child, th:last-child { padding-right: 0; }
+  .k { font-family: var(--font-mono); font-size: var(--t-micro); color: var(--ink-faint); }
+  .v { font-family: var(--font-mono); font-size: var(--t-micro); }
+  .v .against { color: var(--ink-faint); }
+  .v .hot { color: var(--critical); }
+
+  .prose { margin: 0; font-size: var(--t-small); color: var(--ink-soft); max-width: 78ch; }
+  .prose-label {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  /* --- run log ----------------------------------------------------------- */
+
+  .step {
+    display: grid;
+    grid-template-columns: 12rem 12rem 7rem 1fr;
+    gap: var(--s3);
+    padding: var(--s3) 0;
+    border-top: 1px solid var(--rule);
+    align-items: baseline;
+    font-size: var(--t-small);
+  }
+  .step.bad { border-left: 2px solid var(--critical); padding-left: var(--s3); }
+  .step .node { font-weight: 500; }
+  .step .type, .step .dur { font-family: var(--font-mono); font-size: var(--t-micro); color: var(--ink-faint); }
+  .step .state { font-family: var(--font-mono); font-size: var(--t-micro); text-transform: uppercase; letter-spacing: 0.06em; }
+  .step.bad .state { color: var(--critical); }
+  .step.ok .state { color: var(--ok); }
+  .step .why { font-family: var(--font-mono); font-size: var(--t-micro); color: var(--critical); }
+
+  /* --- workflow list ----------------------------------------------------- */
+
+  .wf { display: grid; grid-template-columns: 1fr 7rem; gap: var(--s3); padding: var(--s3) 0; border-top: 1px solid var(--rule); }
+  .wf .name { font-family: var(--font-mono); font-size: var(--t-small); overflow-wrap: anywhere; }
+  .wf .name.mine { color: var(--accent); }
+  .wf .note { font-size: var(--t-micro); color: var(--ink-faint); margin-top: 2px; }
+  .wf .state { font-family: var(--font-mono); font-size: var(--t-micro); text-transform: uppercase; letter-spacing: 0.06em; text-align: right; }
+  .wf .state.on { color: var(--ok); }
+  .wf .state.off { color: var(--ink-faint); }
+</style>
+</head>
+<body>
+
+<!-- ==================================================================== 0 -->
+<p class="caption">Frame 0 · the connect step — scope is the only thing that matters here</p>
+<div class="frame" id="frame-0" style="align-items:center;justify-content:center">
+  <div style="width:560px;border:1px solid var(--rule);background:var(--surface);padding:var(--s6);display:flex;flex-direction:column;gap:var(--s4)">
+    <p class="eyebrow">Authorise access</p>
+    <h1 class="headline" style="font-size:var(--t-lead)">
+      Blackbox is asking to read your KeeperHub execution history
+    </h1>
+
+    <div style="border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);padding:var(--s4) 0;display:flex;flex-direction:column;gap:var(--s3)">
+      <div style="display:flex;gap:var(--s3);align-items:baseline">
+        <span style="color:var(--ok);font-weight:600">✓</span>
+        <div>
+          <div class="v" style="color:var(--accent);font-size:var(--t-small)">mcp:read</div>
+          <div class="note" style="font-size:var(--t-micro);color:var(--ink-faint);margin-top:2px">
+            Read your workflows and their execution history
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:var(--s3);align-items:baseline">
+        <span style="color:var(--ink-faint)">—</span>
+        <div>
+          <div class="v" style="color:var(--ink-faint);font-size:var(--t-small)">no write scope requested</div>
+          <div class="note" style="font-size:var(--t-micro);color:var(--ink-faint);margin-top:2px">
+            Blackbox cannot execute, edit or cancel anything as you
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="prose" style="font-size:var(--t-micro)">
+      Access expires after 30 days idle. Disconnecting deletes Blackbox's copy of the
+      credential.
+    </p>
+
+    <div style="display:flex;gap:var(--s3);margin-top:var(--s2)">
+      <span style="border:1px solid var(--accent);color:var(--accent);font-family:var(--font-mono);font-size:var(--t-micro);letter-spacing:.06em;text-transform:uppercase;padding:var(--s2) var(--s4)">Authorise</span>
+      <span style="border:1px solid var(--rule);color:var(--ink-faint);font-family:var(--font-mono);font-size:var(--t-micro);letter-spacing:.06em;text-transform:uppercase;padding:var(--s2) var(--s4)">Cancel</span>
+    </div>
+  </div>
+</div>
+
+<!-- ==================================================================== 1 -->
+<p class="caption">Frame 1 · dashboard, the moment the incident lands</p>
+<div class="frame" id="frame-1">
+  <div class="masthead">
+    <span class="brand">Black<b>box</b></span>
+    <span class="chip">Ethereum Sepolia <em>TESTNET</em></span>
+    <span class="chip">Base Sepolia <em>TESTNET</em></span>
+    <span class="spacer"></span>
+    <span class="live">LIVE</span>
+  </div>
+
+  <dl class="stats">
+    <div class="stat"><dt>Open incidents</dt><dd>3 <small>CRIT</small> 1 <small>WARN</small></dd></div>
+    <div class="stat"><dt>Remediations</dt><dd>1 <small>TOTAL</small> 1 <small>OK</small></dd></div>
+    <div class="stat"><dt>Gas spent</dt><dd>65429748111000 <small>WEI</small></dd></div>
+    <div class="stat"><dt>Mean time to detection</dt><dd>12.9s</dd></div>
+    <div class="stat"><dt>Mean time to remediation</dt><dd>1m 00s</dd></div>
+  </dl>
+
+  <div class="body">
+    <nav class="rail">
+      <a class="on" href="#">Console</a>
+      <a href="#">Timeline</a>
+      <a href="#">Incidents</a>
+      <a href="#">Inspect</a>
+      <a href="#">Watched</a>
+      <a href="#">Chaos</a>
+      <a href="#">Connections</a>
+    </nav>
+
+    <div class="main">
+      <p class="eyebrow eyebrow--ruled">Console</p>
+
+      <p class="ledger">
+        <span class="tick">✓</span>
+        Remediation record intact — 1 entry, carrying the hash of the one before it.
+        <a href="#">Check it yourself</a>
+      </p>
+
+      <section class="panel">
+        <p class="eyebrow">Caught most recently</p>
+        <div style="display:flex;flex-direction:column;gap:var(--s3)">
+          <div>
+            <div style="display:flex;align-items:center;gap:var(--s2)">
+              <span class="sev"></span><span class="badge">WORKFLOW_MISCONFIGURED</span>
+              <span class="tag-box">R10</span><span class="pill">Open</span>
+              <span class="spacer"></span>
+              <span class="type" style="font-family:var(--font-mono);font-size:var(--t-micro);color:var(--ink-faint)">just now</span>
+            </div>
+            <p class="prose" style="margin-top:var(--s1)">3 rejections before the chain, at the same workflow</p>
+          </div>
+          <div style="border-top:1px solid var(--rule);padding-top:var(--s3)">
+            <div style="display:flex;align-items:center;gap:var(--s2)">
+              <span class="sev" style="background:var(--warning)"></span>
+              <span class="badge">SPEND_CAP_EXHAUSTED</span>
+              <span class="tag-box">R8</span>
+              <span class="spacer"></span>
+              <span class="type" style="font-family:var(--font-mono);font-size:var(--t-micro);color:var(--ink-faint)">yesterday</span>
+            </div>
+            <p class="prose" style="margin-top:var(--s1)">daily spending cap 100% used</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <p class="eyebrow">Everything, as it happens</p>
+        <div class="log" style="height:15rem;flex:none">
+          <div class="logline"><span class="at">19:17:54</span><span class="tag">scan</span><span class="text">blocks 11458003–11458003 · 0 matched · 1 watched</span></div>
+          <div class="logline good"><span class="at">19:17:58</span><span class="tag">open</span><span class="text">stream open</span></div>
+          <div class="logline warn"><span class="at">19:18:00</span><span class="tag">demo</span><span class="text">blackbox/demo/refused-transfer · 3 runs requested</span></div>
+          <div class="logline"><span class="at">19:18:00</span><span class="tag">run</span><span class="text">820jxst61wt0oosm7h0bm started</span></div>
+          <div class="logline"><span class="at">19:18:01</span><span class="tag">run</span><span class="text">820jxst61wt0oosm7h0bm error · Daily spending cap exceeded</span></div>
+          <div class="logline crit"><span class="at">19:18:01</span><span class="tag">CRIT</span><span class="text">WORKFLOW_MISCONFIGURED · 3 rejections before the chain, at the same workflow</span></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- ==================================================================== 2 -->
+<p class="caption">Frame 2 · the incident, evidence first</p>
+<div class="frame" id="frame-2">
+  <div class="masthead">
+    <span class="brand">Black<b>box</b></span>
+    <span class="chip">Ethereum Sepolia <em>TESTNET</em></span>
+    <span class="spacer"></span>
+    <span class="live">LIVE</span>
+  </div>
+
+  <div class="body">
+    <nav class="rail">
+      <a href="#">Console</a>
+      <a class="on" href="#">Timeline</a>
+      <a href="#">Incidents</a>
+      <a href="#">Inspect</a>
+      <a href="#">Watched</a>
+      <a href="#">Chaos</a>
+      <a href="#">Connections</a>
+    </nav>
+
+    <div class="main">
+      <p class="eyebrow eyebrow--ruled">Incident inc-1786648681639-40</p>
+
+      <div style="display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap">
+        <span class="sev"></span>
+        <span style="color:var(--critical);font-family:var(--font-mono);font-size:var(--t-micro);letter-spacing:.06em">CRITICAL</span>
+        <span class="badge">WORKFLOW_MISCONFIGURED</span>
+        <span class="tag-box">R10</span>
+        <span class="spacer"></span>
+        <span class="pill">Open</span>
+      </div>
+
+      <h1 class="headline">3 rejections before the chain, at the same workflow</h1>
+
+      <dl class="meta">
+        <div><dt>Agent</dt><dd>kh:dylvomthaaou2yvn9yop4</dd></div>
+        <div><dt>Chain</dt><dd>Ethereum Sepolia</dd></div>
+        <div><dt>Detected</dt><dd>13 Aug 2026, 19:18:01</dd></div>
+        <div><dt>Confidence</dt><dd>0.75</dd></div>
+      </dl>
+
+      <section class="panel">
+        <p class="eyebrow">Evidence — what the rule measured</p>
+        <table>
+          <thead><tr><th>Fact</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td class="k">workflowName</td><td class="v">blackbox/demo/refused-transfer</td></tr>
+            <tr><td class="k">workflowId</td><td class="v">dylvomthaaou2yvn9yop4</td></tr>
+            <tr><td class="k">failureCount</td><td class="v"><span class="hot">3</span> <span class="against">vs 3 required (workflowNodeFailures)</span></td></tr>
+            <tr><td class="k">windowMs</td><td class="v">300000</td></tr>
+            <tr><td class="k">distinctFailingSteps</td><td class="v">2</td></tr>
+            <tr><td class="k">distinctReasons</td><td class="v"><span class="hot">Daily spending cap exceeded</span></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <p class="prose-label">Explanation — written after the evidence, never before it</p>
+        <p class="prose">
+          The workflow executed three separate operations that each hit the daily spending cap
+          limit of the agent. Because the protocol enforces budget constraints at the execution
+          layer, every transaction aborted before state changes could commit. The agent incurred
+          execution overhead costs while failing to progress its workflow named
+          blackbox/demo/refused-transfer.
+        </p>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- ==================================================================== 3 -->
+<p class="caption">Frame 3 · the run log, read from KeeperHub through the operator's connection</p>
+<div class="frame" id="frame-3">
+  <div class="masthead">
+    <span class="brand">Black<b>box</b></span>
+    <span class="chip">Ethereum Sepolia <em>TESTNET</em></span>
+    <span class="spacer"></span>
+    <span class="live">LIVE</span>
+  </div>
+
+  <div class="body">
+    <nav class="rail">
+      <a href="#">Console</a>
+      <a class="on" href="#">Timeline</a>
+      <a href="#">Incidents</a>
+      <a href="#">Inspect</a>
+      <a href="#">Watched</a>
+      <a href="#">Chaos</a>
+      <a href="#">Connections</a>
+    </nav>
+
+    <div class="main">
+      <p class="eyebrow eyebrow--ruled">Incident inc-1786648681639-40</p>
+
+      <section class="panel">
+        <p class="eyebrow">Run log</p>
+        <p class="prose">
+          The 3 runs behind this incident, step by step, as KeeperHub recorded them.
+        </p>
+
+        <div style="margin-top:var(--s3)">
+          <div style="display:flex;gap:var(--s3);align-items:baseline">
+            <span class="v" style="color:var(--ink-soft)">820jxst61wt0oosm7h0bm</span>
+            <span class="step-state" style="font-family:var(--font-mono);font-size:var(--t-micro);text-transform:uppercase;letter-spacing:.06em;color:var(--critical)">error</span>
+            <span class="spacer"></span>
+            <span class="type" style="font-family:var(--font-mono);font-size:var(--t-micro);color:var(--ink-faint)">383ms · 2 steps completed</span>
+          </div>
+          <p class="why" style="font-family:var(--font-mono);font-size:var(--t-micro);color:var(--critical);margin:var(--s2) 0 0">
+            Daily spending cap exceeded <span style="color:var(--ink-faint)">· C-0001 · workflow_engine</span>
+          </p>
+
+          <div class="step ok">
+            <span class="node">Manual</span>
+            <span class="type">trigger</span>
+            <span class="state">success</span>
+            <span class="dur">19:18:01.105 → .112 · no transaction</span>
+          </div>
+          <div class="step bad">
+            <span class="node">Transfer far beyond the spending cap</span>
+            <span class="type">web3/transfer-funds</span>
+            <span class="state">error</span>
+            <span class="why">Daily spending cap exceeded · refused before broadcast</span>
+          </div>
+        </div>
+
+        <div style="margin-top:var(--s5);border-top:1px solid var(--rule);padding-top:var(--s3);display:flex;gap:var(--s3)">
+          <span class="v" style="color:var(--ink-soft)">0jufp1agg4tcgj8ynqi3n</span>
+          <span style="font-family:var(--font-mono);font-size:var(--t-micro);color:var(--critical);text-transform:uppercase;letter-spacing:.06em">error</span>
+          <span class="spacer"></span>
+          <span style="font-family:var(--font-mono);font-size:var(--t-micro);color:var(--ink-faint)">same two steps, same reason</span>
+        </div>
+        <div style="margin-top:var(--s3);display:flex;gap:var(--s3)">
+          <span class="v" style="color:var(--ink-soft)">vss76xr2g527oek6grksn</span>
+          <span style="font-family:var(--font-mono);font-size:var(--t-micro);color:var(--critical);text-transform:uppercase;letter-spacing:.06em">error</span>
+          <span class="spacer"></span>
+          <span style="font-family:var(--font-mono);font-size:var(--t-micro);color:var(--ink-faint)">same two steps, same reason</span>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- ==================================================================== 4 -->
+<p class="caption">Frame 4 · the workflows Blackbox authored inside KeeperHub</p>
+<div class="frame" id="frame-4">
+  <div class="masthead">
+    <span class="brand">Black<b>box</b></span>
+    <span class="chip">org <em>4f512248…</em></span>
+    <span class="spacer"></span>
+    <span class="live">LIVE</span>
+  </div>
+
+  <div class="body">
+    <div class="main">
+      <p class="eyebrow eyebrow--ruled">Workflows in the KeeperHub organisation</p>
+      <p class="prose">
+        Blackbox writes these over the API, enables them, and fires them. The first name was
+        generated by the machine that wrote it — chain, action, target.
+      </p>
+
+      <div style="margin-top:var(--s3)">
+        <div class="wf">
+          <div>
+            <div class="name mine">blackbox/remediation/11155111/pause/0x69c744bb9f953d822a52e88604d26c9a895ac0e0</div>
+            <div class="note">Webhook trigger → web3/write-contract · written at remediation time · executed 0x783823d5…</div>
+          </div>
+          <div class="state on">enabled</div>
+        </div>
+        <div class="wf">
+          <div>
+            <div class="name mine">Blackbox Incident Responder</div>
+            <div class="note">Webhook trigger → web3/write-contract · the path the detector fires</div>
+          </div>
+          <div class="state on">enabled</div>
+        </div>
+        <div class="wf">
+          <div>
+            <div class="name mine">Blackbox: signer gas runway</div>
+            <div class="note">R6 published to the Marketplace · paid per call over x402</div>
+          </div>
+          <div class="state on">enabled</div>
+        </div>
+        <div class="wf">
+          <div>
+            <div class="name mine">blackbox/demo/refused-transfer</div>
+            <div class="note">A transfer far beyond the daily cap, refused before it reaches a chain</div>
+          </div>
+          <div class="state on">enabled</div>
+        </div>
+        <div class="wf">
+          <div>
+            <div class="name mine">blackbox/demo/insufficient-funds</div>
+            <div class="note">A second inducible failure shape</div>
+          </div>
+          <div class="state on">enabled</div>
+        </div>
+        <div class="wf">
+          <div>
+            <div class="name mine">blackbox/audit-probe</div>
+            <div class="note">Exercises the live integration from the audit scripts</div>
+          </div>
+          <div class="state on">enabled</div>
+        </div>
+        <div class="wf">
+          <div>
+            <div class="name">Aave Health Factor Monitor</div>
+            <div class="note">Pre-existing in the organisation, untouched by Blackbox</div>
+          </div>
+          <div class="state off">disabled</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ?frame=2 isolates a single frame, so a capture tool gets exactly one shot
+  // at 1440x900 with nothing else on the page.
+  const wanted = new URLSearchParams(location.search).get('frame');
+  if (wanted) {
+    for (const el of document.querySelectorAll('.caption')) el.remove();
+    for (const el of document.querySelectorAll('.frame')) {
+      if (el.id !== `frame-${wanted}`) el.remove();
+    }
+    document.body.style.padding = '0';
+    document.body.style.gap = '0';
+  }
+</script>
+</body>
+</html>
