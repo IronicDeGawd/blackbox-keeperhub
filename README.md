@@ -91,7 +91,9 @@ One structural finding shaped the architecture, established by probing rather
 than assuming: KeeperHub executes through a sponsored relayer at the *sponsor's*
 nonce, so it can never occupy a specific nonce belonging to an agent's signer.
 Playbooks that must fill a nonce gap therefore route to a held key or to the
-owner's wallet.
+owner's wallet. Everything that does not name a nonce goes through KeeperHub,
+because that keeps the remediation inside the operator's own audit trail and
+spend controls — including the halt described under **What it detects**.
 
 ---
 
@@ -148,14 +150,42 @@ actual output, block position, neighbouring transactions — and nothing builds
 that yet, so it fires in tests and cannot fire live no matter what the chaos
 harness does. The field is declared and unpopulated.
 
-Five playbooks. P2 (fill a nonce gap) and P4 (halt via circuit breaker) have run
-against a live chain; P1, P3 and P5 have not. Where a playbook cannot act it
-declines with a stated reason, and that refusal is recorded as carefully as a
-success — P3 on a chain with no private mempool is the clearest example.
+Seven playbooks. P2 (fill a nonce gap) and P4 (halt via circuit breaker) have
+run against a live chain; P1, P3 and P5 have not. Three of the seven exist to
+say *why no transaction can help* — a stalled workflow has to be cancelled in
+KeeperHub, an exhausted spend cap is a billing action, and a reroute needs the
+agent's own signer. Naming the reason is more use to an operator than silence,
+and that refusal is recorded as carefully as a success.
 
 Every remediation attempt records **which path executed it**:
 `keeperhub-workflow`, `keeperhub`, `signer` or `user-signed`. A fix a human
 signed resolves as `blackbox-proposed`, never as `blackbox`.
+
+### Halting a KeeperHub agent
+
+Detection needs nothing from you but a read-only connection. **Remediation on a
+KeeperHub agent needs one more step**, and it is worth understanding why.
+
+KeeperHub executes through a sponsored relayer at the *sponsor's* nonce, so
+Blackbox can never act *as* your agent — it cannot replace your transaction or
+fill your nonce gap, because neither is its to occupy. What it can do is call a
+contract you have authorised it to call. So halting a runaway agent means
+pausing a **circuit breaker you deploy and grant Blackbox the pauser role on**.
+
+Register it per agent, on the Watched page or over the API:
+
+```bash
+curl -XPOST $BLACKBOX/api/agents/<agentId>/breaker \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"address":"0x…","chainId":11155111}'
+```
+
+The pauser role is checked **at registration**, not during the incident it was
+meant to stop — a breaker Blackbox cannot pause registers in amber with the
+reason rather than looking done. Once registered, R4, R5 and R10 on that agent
+can be halted, and the halt runs as a KeeperHub workflow in your own account.
+`CircuitBreaker` allows pausing and nothing else: it cannot unpause, change
+roles, or move funds.
 
 ---
 
@@ -202,7 +232,7 @@ chaos ──▶ chain ──▶ recorder ──▶ rules ──▶ incident ─�
 | `recorder` | Ingest and normalise; block scanner for watched addresses |
 | `detector` | Rules R1–R10 and incident lifecycle. No LLM |
 | `diagnostician` | Root cause analysis via Gemini, with a deterministic template floor |
-| `remediator` | Guards, playbooks P1–P5, and the four execution paths |
+| `remediator` | Guards, playbooks P1–P7, and the four execution paths |
 | `chaos` | Induces each failure class on testnet; doubles as the E2E suite |
 | `api` | Fastify REST + SSE, the detection loop, and the console it serves |
 | `mcp` | MCP server exposing Blackbox to other agents |
