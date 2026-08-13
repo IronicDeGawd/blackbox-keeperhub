@@ -1,0 +1,908 @@
+<title>Blackbox</title>
+<style>
+  :root {
+    --ground: #f6f7f9;
+    --surface: #ffffff;
+    --surface-sunk: #edeff3;
+    --ink: #14171d;
+    --ink-soft: #4a515e;
+    --ink-faint: #656c7a;
+    --rule: #dbdfe6;
+    --rule-strong: #c3c9d4;
+    --accent: #d24608;
+    --ok: #1f7a4d;
+    --warn: #a66a00;
+    --code-bg: #f1f3f7;
+
+    --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+    --t-micro: 0.75rem;
+    --t-small: 0.8125rem;
+    --t-body: 0.9375rem;
+    --t-lead: 1.0625rem;
+    --t-title: 1.375rem;
+
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px;
+    --s5: 22px; --s6: 32px; --s7: 48px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #101317; --surface: #171b21; --surface-sunk: #1d222a;
+      --ink: #e7eaef; --ink-soft: #a8b0bc; --ink-faint: #868e9c;
+      --rule: #2a3039; --rule-strong: #3a424e; --accent: #ff7a3d;
+      --ok: #4fbe87; --warn: #d9a036; --code-bg: #1b2028;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #101317; --surface: #171b21; --surface-sunk: #1d222a;
+    --ink: #e7eaef; --ink-soft: #a8b0bc; --ink-faint: #868e9c;
+    --rule: #2a3039; --rule-strong: #3a424e; --accent: #ff7a3d;
+    --ok: #4fbe87; --warn: #d9a036; --code-bg: #1b2028;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: var(--t-body);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 76ch;
+    margin: 0 auto;
+    padding: var(--s7) var(--s5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s7);
+  }
+
+  .masthead { display: flex; flex-direction: column; gap: var(--s4); }
+
+  .wordmark {
+    font-family: var(--font-mono);
+    font-size: var(--t-title);
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin: 0;
+  }
+  .wordmark b { color: var(--accent); font-weight: 600; }
+
+  .tagline { margin: 0; font-size: var(--t-lead); max-width: 60ch; text-wrap: balance; }
+
+  .links {
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: var(--s2) var(--s5);
+    padding-top: var(--s3);
+    border-top: 1px solid var(--accent);
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+  }
+  .links span { color: var(--ink-faint); }
+
+  .copy {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--accent);
+    padding: var(--s2) var(--s3);
+    cursor: pointer;
+    min-height: 32px;
+  }
+  .copy:hover { background: var(--accent); color: var(--ground); }
+  .copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .copy[data-state="done"] { border-color: var(--ok); color: var(--ok); background: transparent; }
+  .copy[data-state="failed"] { border-color: var(--warn); color: var(--warn); }
+  @media (pointer: coarse) { .copy { min-height: 44px; } }
+
+  section { display: flex; flex-direction: column; gap: var(--s3); }
+
+  h2 {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+    padding-bottom: var(--s2);
+    border-bottom: 1px solid var(--rule);
+  }
+
+  h3 { margin: var(--s3) 0 0; font-size: var(--t-body); font-weight: 600; }
+
+  p { margin: 0; max-width: 70ch; }
+  p + p { margin-top: var(--s3); }
+
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+  a:hover { border-bottom-color: var(--accent); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    background: var(--code-bg);
+    padding: 1px 4px;
+  }
+
+  ul { margin: 0; padding-left: var(--s4); display: flex; flex-direction: column; gap: var(--s2); }
+  li { max-width: 68ch; }
+
+  /* --- runsheet --------------------------------------------------------- */
+
+  /*
+   * Numbered because this genuinely is a sequence — the order carries the
+   * demo. Everything else on the page is deliberately unnumbered.
+   */
+  .runsheet { display: flex; flex-direction: column; gap: 0; margin-top: var(--s2); }
+
+  .beat {
+    display: grid;
+    grid-template-columns: 3ch 1fr;
+    gap: var(--s2) var(--s4);
+    padding: var(--s4) 0;
+    border-top: 1px solid var(--rule);
+  }
+  .beat:last-child { border-bottom: 1px solid var(--rule); }
+
+  .beat__n {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    color: var(--accent);
+    padding-top: 3px;
+  }
+
+  .beat__do {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    letter-spacing: 0.04em;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+  }
+
+  /* The line to read aloud. Set apart so the eye finds it at a glance. */
+  .beat__say {
+    margin: var(--s2) 0 0;
+    font-size: var(--t-body);
+    border-left: 2px solid var(--accent);
+    padding-left: var(--s3);
+    max-width: 62ch;
+  }
+
+  .beat__note {
+    margin: var(--s2) 0 0;
+    font-size: var(--t-small);
+    color: var(--ink-soft);
+  }
+
+  .callout {
+    border: 1px solid var(--accent);
+    padding: var(--s4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s2);
+  }
+  .callout p { max-width: none; }
+  .callout strong { color: var(--accent); }
+
+  .tablewrap { overflow-x: auto; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: var(--t-small);
+    font-variant-numeric: tabular-nums;
+  }
+
+  th {
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding: 0 var(--s4) var(--s2) 0;
+    border-bottom: 1px solid var(--rule-strong);
+    white-space: nowrap;
+  }
+
+  td { padding: var(--s2) var(--s4) var(--s2) 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  td:last-child, th:last-child { padding-right: 0; }
+
+  .rule-id, .hash { font-family: var(--font-mono); font-size: var(--t-micro); }
+  .cls { font-family: var(--font-mono); font-size: var(--t-micro); color: var(--accent); }
+
+  .yes { color: var(--ok); }
+  .no { color: var(--ink-faint); }
+  .partial { color: var(--warn); }
+
+  .merged {
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ok);
+  }
+
+  .note { font-size: var(--t-small); color: var(--ink-soft); max-width: 70ch; }
+
+  .sr-status {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: var(--s4);
+    font-family: var(--font-mono);
+    font-size: var(--t-micro);
+    color: var(--ink-faint);
+  }
+
+  @media (max-width: 600px) {
+    .page { padding: var(--s5) var(--s4); gap: var(--s6); }
+    .wordmark { font-size: var(--t-lead); }
+    .copy { margin-left: 0; width: 100%; }
+    .beat { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="page">
+  <header class="masthead">
+    <h1 class="wordmark">Black<b>box</b></h1>
+    <p class="tagline">
+      Autonomous incident intelligence and remediation for onchain agent execution,
+      built on KeeperHub.
+    </p>
+    <div class="links">
+      <span>Live</span>
+      <a href="https://blackbox-kh.parakramlabs.com">blackbox-kh.parakramlabs.com</a>
+      <span>Code</span>
+      <a href="https://github.com/IronicDeGawd/blackbox-keeperhub">github.com/IronicDeGawd/blackbox-keeperhub</a>
+      <button class="copy" id="copy" type="button">Copy as Markdown</button>
+    </div>
+    <p class="sr-status" id="status" role="status" aria-live="polite"></p>
+  </header>
+
+  <section>
+    <h2>Demo runsheet</h2>
+
+    <div class="callout">
+      <p>
+        <strong>Before you start.</strong> Open
+        <a href="https://blackbox-kh.parakramlabs.com">blackbox-kh.parakramlabs.com</a>
+        in a clean window at 1440&times;900, signed out. Have your KeeperHub login ready —
+        beat&nbsp;2 connects live, and it is what unlocks the run log in beat&nbsp;8.
+        Check <a href="https://blackbox-kh.parakramlabs.com/api/demo"><code>/api/demo</code></a>
+        says <code>"ready": true</code>. One press per 30 minutes, shared by everyone, so
+        do not rehearse the press.
+      </p>
+      <p>
+        About four minutes. Beat&nbsp;6 is the moment; beat&nbsp;8 is the one that proves
+        the KeeperHub integration is real rather than a wrapper.
+      </p>
+    </div>
+
+    <div class="runsheet">
+
+      <div class="beat">
+        <div class="beat__n">01</div>
+        <div>
+          <div class="beat__do">Front page — 20 seconds, do not linger</div>
+          <p class="beat__say">
+            Agents are good at reasoning and bad at execution. A nonce gap wedges a signer
+            and everything behind it stops. A workflow gets refused before it ever reaches
+            the chain. None of it raises an error the agent knows how to report — so you
+            find out from a user, or from the balance. Here is one real incident, and note
+            what it leads with: not a verdict, the numbers it measured.
+          </p>
+        </div>
+      </div>
+
+      <div class="beat">
+        <div class="beat__n">02</div>
+        <div>
+          <div class="beat__do">Click Connect KeeperHub. Go through the real consent screen.</div>
+          <p class="beat__say">
+            This is KeeperHub's own authorisation page, not ours. Read what it asks for:
+            <em>mcp:read</em>. Read only. Blackbox never sees a credential of yours typed
+            into our site, and it cannot execute anything on your behalf with this — when
+            it fixes something it uses its own credentials, inside its own budget.
+          </p>
+          <p class="beat__note">
+            Point at the scope on the consent screen while you say &ldquo;read
+            only&rdquo;. That single frame answers the question every judge is about to
+            ask.
+          </p>
+        </div>
+      </div>
+
+      <div class="beat">
+        <div class="beat__n">03</div>
+        <div>
+          <div class="beat__do">Land on Connections. Show the workflow list.</div>
+          <p class="beat__say">
+            These are my actual KeeperHub workflows, read over their API. Nothing is
+            watched until I say so — Blackbox does not assume the run of your account just
+            because you signed in. I pick the ones I want watched, and from that moment
+            every execution of those workflows is evidence the rules reason over.
+          </p>
+        </div>
+      </div>
+
+      <div class="beat">
+        <div class="beat__n">04</div>
+        <div>
+          <div class="beat__do">Go to /dashboard. Point at the event log.</div>
+          <p class="beat__say">
+            That was the product. This is the instrument. Everything as it arrives,
+            including what never becomes an incident — blocks being swept, workflow runs
+            starting, fixes going out.
+          </p>
+        </div>
+      </div>
+
+      <div class="beat">
+        <div class="beat__n">05</div>
+        <div>
+          <div class="beat__do">Press &ldquo;Break something now&rdquo;</div>
+          <p class="beat__say">
+            Now let's break something for real. This executes a KeeperHub workflow —
+            <em>blackbox/demo/refused-transfer</em> — that asks to spend beyond the
+            organisation's daily cap. KeeperHub refuses it before any chain is involved, so
+            it costs no gas. It runs three times, the way a retry loop would.
+          </p>
+        </div>
+      </div>
+
+      <div class="beat">
+        <div class="beat__n">06</div>
+        <div>
+          <div class="beat__do">Watch the log. Say almost nothing. This is the moment.</div>
+          <p class="beat__say">
+            Nothing has been reloaded.
+          </p>
+          <p class="beat__note">
+            Let it land — about ten seconds. Then: there it is. Blackbox read that out of
+            KeeperHub's audit trail on its own tick and raised it. Nobody told it.
+          </p>
+        </div>
+      </div>
+
+      <div class="beat">
+        <div class="beat__n">07</div>
+        <div>
+          <div class="beat__do">Open the incident. Stay on the evidence block.</div>
+          <p class="beat__say">
+            Workflow misconfigured — and look at what that is built from. The workflow by
+            name. Three failures inside a five-minute window, against the three it takes to
+            fire. Two distinct failing steps. And the reason, straight from KeeperHub:
+            daily spending cap exceeded. Not &ldquo;it failed&rdquo; — refused repeatedly,
+            before the chain, which is a broken definition rather than bad luck. Retrying
+            will not help.
+          </p>
+        </div>
+      </div>
+
+      <div class="beat">
+        <div class="beat__n">08</div>
+        <div>
+          <div class="beat__do">Scroll to the Run log. This is the KeeperHub depth beat.</div>
+          <p class="beat__say">
+            And this is the run itself, step by step, pulled from KeeperHub through the
+            connection I made two minutes ago. Which node ran, which one failed, what it
+            said, gas where there is any. Before this existed, the answer to &ldquo;which
+            step&rdquo; was another dashboard. This is also why the connection is
+            per-operator: these are your organisation's internals, so only the account that
+            owns the agent can read them.
+          </p>
+          <p class="beat__note">
+            Only visible because of beat 2. If you skipped the connect, this panel is
+            absent — skip it, do not explain it.
+          </p>
+        </div>
+      </div>
+
+      <div class="beat">
+        <div class="beat__n">09</div>
+        <div>
+          <div class="beat__do">Scroll to the remediation plan / guards</div>
+          <p class="beat__say">
+            Now the part I like best: it is not going to fix this one, and it says exactly
+            why. Confidence came out at 0.75 against the 0.8 required to spend gas, and the
+            signer is not on the operator's allowlist. Six guards passed, two failed, and
+            the refusal is recorded as carefully as a success would be. A tool that spends
+            money on your behalf has to be able to say no.
+          </p>
+        </div>
+      </div>
+
+      <div class="beat">
+        <div class="beat__n">10</div>
+        <div>
+          <div class="beat__do">Back to the front page, Receipts table</div>
+          <p class="beat__say">
+            When it does act, this is what it looks like. Blackbox detected a retry storm,
+            decided to halt the agent, then <em>wrote a KeeperHub workflow over the API,
+            enabled it, and executed it</em> — that hash is the result. The remediation is
+            a workflow run sitting in the operator's own KeeperHub dashboard with per-node
+            logs, not a side channel only we can see. Every row here is a real transaction
+            on a public chain.
+          </p>
+        </div>
+      </div>
+
+      <div class="beat">
+        <div class="beat__n">11</div>
+        <div>
+          <div class="beat__do">Close</div>
+          <p class="beat__say">
+            So: connect read-only, pick what it watches, and it reads KeeperHub's execution
+            history the way a flight recorder reads a flight. Ten deterministic rules, no
+            model deciding anything, every detection a measurement against a threshold. And
+            when it fixes something, the fix is a KeeperHub workflow run with a hash you
+            can look up. There are no simulated remediations anywhere in this product.
+          </p>
+        </div>
+      </div>
+
+    </div>
+
+    <p class="note">
+      <strong>What this deployment will not do live, and why.</strong> It runs with
+      <code>dryRun</code> on and holds no signer key, so no remediation executes during the
+      demo — beat 9 turns that into the point rather than hiding it, and beat 10 shows the
+      transactions from runs where it did act. If a judge pushes, the honest line is: the
+      public instance can plan a fix and let your own wallet sign it, and it will not spend
+      gas on a chain outside its allowlist or on a diagnosis below its confidence floor.
+    </p>
+  </section>
+
+  <section>
+    <h2>The problem</h2>
+    <p>
+      Agents are good at reasoning and bad at execution. A nonce gap wedges a signer and
+      everything queued behind it stops. A gas estimate goes stale and the transaction
+      sits. A call simulates clean and reverts on inclusion because the state moved
+      underneath it. A retry loop quietly burns a wallet down.
+    </p>
+    <p>
+      None of it raises an error the agent knows how to report. The agent believes it
+      acted; the chain disagrees. You find out from a user, or from the balance.
+    </p>
+  </section>
+
+  <section>
+    <h2>What it does</h2>
+    <p>
+      Watches execution, decides what went wrong, explains it with the numbers it
+      measured, then executes the fix onchain through KeeperHub as a real transaction.
+    </p>
+
+    <h3>Ten deterministic rules</h3>
+    <p>
+      No model decides whether something is wrong. Each rule compares a measured value
+      against a threshold, so a detection can be argued with rather than merely trusted.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th scope="col">Rule</th><th scope="col">Class</th><th scope="col">Proven live</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="rule-id">R1</td><td class="cls">STUCK_TRANSACTION</td><td class="yes">yes</td></tr>
+          <tr><td class="rule-id">R2</td><td class="cls">NONCE_GAP</td><td class="yes">yes</td></tr>
+          <tr><td class="rule-id">R3</td><td class="cls">GAS_UNDERPRICED</td><td class="partial">suppression path only</td></tr>
+          <tr><td class="rule-id">R4</td><td class="cls">SIM_PASS_EXEC_REVERT</td><td class="yes">yes</td></tr>
+          <tr><td class="rule-id">R5</td><td class="cls">RETRY_STORM</td><td class="yes">yes</td></tr>
+          <tr><td class="rule-id">R6</td><td class="cls">SIGNER_GAS_STARVED</td><td class="yes">yes</td></tr>
+          <tr><td class="rule-id">R7</td><td class="cls">ADVERSE_INCLUSION</td><td class="no">no — needs inclusion analysis nothing builds yet</td></tr>
+          <tr><td class="rule-id">R8</td><td class="cls">SPEND_CAP_EXHAUSTED</td><td class="yes">yes</td></tr>
+          <tr><td class="rule-id">R9</td><td class="cls">EXECUTION_STALLED</td><td class="no">no</td></tr>
+          <tr><td class="rule-id">R10</td><td class="cls">WORKFLOW_MISCONFIGURED</td><td class="yes">yes — what the public demo raises</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note">
+      R1–R7 read a signer's own transactions. R8–R10 read a KeeperHub organisation's
+      execution history and catch failures no chain scan can see: a workflow that stalls
+      before producing a transaction, one refused at the same step every time, and an
+      organisation that has spent its daily budget.
+    </p>
+
+    <h3>Five playbooks</h3>
+    <p>
+      Each records which path executed it — <code>keeperhub-workflow</code>,
+      <code>keeperhub</code>, <code>signer</code> or <code>user-signed</code>. A fix a
+      human signed resolves as <code>blackbox-proposed</code>, never as
+      <code>blackbox</code>.
+    </p>
+  </section>
+
+  <section>
+    <h2>Proof</h2>
+    <p>Real transactions on Ethereum Sepolia, produced by the system end to end.</p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th scope="col">What happened</th><th scope="col">Transaction</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>A KeeperHub workflow Blackbox wrote and ran</strong> paused a failing agent's circuit breaker</td>
+            <td class="hash"><a href="https://sepolia.etherscan.io/tx/0x783823d5ee3afa43222b7ff432faeb45e1e3285d54673ab5b6af5b907248c9a9">0x783823d5…</a></td>
+          </tr>
+          <tr>
+            <td>Blackbox filled a nonce gap it detected, unwedging the signer</td>
+            <td class="hash"><a href="https://sepolia.etherscan.io/tx/0xb198243930fc745817914dd6ff4fee5e57d4a357b7c632b55743dafd292a57ed">0xb1982439…</a></td>
+          </tr>
+          <tr>
+            <td>A user's wallet signed a fix Blackbox planned, which Blackbox then verified</td>
+            <td class="hash"><a href="https://sepolia.etherscan.io/tx/0x5956325573c201d473812a08d0b0aeb96d2c3bace24954835bfda62e0e08d22e">0x59563255…</a></td>
+          </tr>
+          <tr>
+            <td>Chaos: a call that simulated clean and reverted one block later</td>
+            <td class="hash"><a href="https://sepolia.etherscan.io/tx/0xa0dbdb74dc0f19bdcfb6a8cc983b36a9fdbc548af0c716d363500befb45901c6">0xa0dbdb74…</a></td>
+          </tr>
+          <tr>
+            <td>An agent paid Blackbox over x402 for a diagnosis — USDC settled on Base</td>
+            <td class="hash"><a href="https://basescan.org/tx/0x8cd8d6ac5dae125e5f3cf039db1ffb7f6b7dafa44243396d00e30074a93a51f9">0x8cd8d6ac…</a></td>
+          </tr>
+          <tr>
+            <td>A watched wallet ran itself down to no runway, and was told so</td>
+            <td class="hash"><a href="https://sepolia.etherscan.io/tx/0x5aa0a47c64c7030e3e72dbc5a114cd3ff3c2161c6042ac9aefbe573aa1852070">0x5aa0a47c…</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      The first is the interesting one. Blackbox detected a retry storm, decided to halt
+      the agent, <strong>created a KeeperHub workflow over the API, enabled it, and
+      executed it</strong> — so the remediation is a workflow run in the operator's own
+      dashboard with per-node logs, not a side channel only Blackbox can see.
+    </p>
+
+    <p class="note">
+      Contracts on Sepolia:
+      <a href="https://sepolia.etherscan.io/address/0x69C744Bb9f953D822a52E88604D26C9a895ac0E0">CircuitBreaker</a>
+      ·
+      <a href="https://sepolia.etherscan.io/address/0x5d3437a8b5C182B91dC72087f4049ac00b1C528A">ChaosTarget</a>
+    </p>
+  </section>
+
+  <section>
+    <h2>How KeeperHub is used</h2>
+    <p>KeeperHub is the execution engine, not a client library called once.</p>
+    <ul>
+      <li><strong>Workflows</strong> — provisioned per remediation shape, reused across incidents, created, enabled and executed entirely over the API.</li>
+      <li><strong>Direct Execution</strong> as the fallback, following the documented safe sequence: simulate, check <code>wouldRevert</code>, execute with a derived <code>Idempotency-Key</code>, poll on <code>X-Poll-Interval-Hint</code>, and trust the verified receipt over the self-reported hash.</li>
+      <li><strong>Audit trail</strong> — execution records are normalised into the same event stream as chain observations, so KeeperHub's own history is evidence the rules reason over.</li>
+      <li><strong>Gas sponsorship</strong> — remediations execute through the sponsored relayer.</li>
+      <li><strong>MCP, both directions</strong> — Blackbox exposes its own MCP server so other agents can ask why a transaction failed, and consumes KeeperHub's, checking every workflow with <code>validate_workflow</code> before a remediation runs.</li>
+      <li><strong>x402</strong> — one rule is published to the KeeperHub Marketplace as a paid workflow. Settlement is USDC on Base via EIP-3009, and the paying wallet holds no ETH.</li>
+    </ul>
+    <p>
+      One structural finding shaped the architecture, established by probing rather than
+      assuming: KeeperHub executes through a sponsored relayer at the <em>sponsor's</em>
+      nonce, so it can never occupy a specific nonce belonging to an agent's signer.
+      Playbooks that must fill a nonce gap therefore route to a held key or to the owner's
+      wallet.
+    </p>
+  </section>
+
+  <section>
+    <h2>What we sent back upstream</h2>
+    <p>
+      Five fixes to KeeperHub, each found by building on it and each verified against their
+      own test suite. <strong>Three merged</strong>, two in review.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th scope="col">PR</th><th scope="col">Fix</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="rule-id">
+              <a href="https://github.com/KeeperHub/keeperhub/pull/1990">#1990</a>
+              <span class="merged">merged</span>
+            </td>
+            <td>A completed <code>contract-call</code> returned no <code>transactionHash</code>, though the route had it in hand and the docs promise it. It cost us a remediation recorded as failed after it had actually succeeded.</td>
+          </tr>
+          <tr>
+            <td class="rule-id">
+              <a href="https://github.com/KeeperHub/keeperhub/pull/1991">#1991</a>
+              <span class="merged">merged</span>
+            </td>
+            <td><code>undici</code> is imported by <code>lib/safe-fetch.ts</code> but declared in no dependency block, so their test suite will not start on a fresh clone.</td>
+          </tr>
+          <tr>
+            <td class="rule-id">
+              <a href="https://github.com/KeeperHub/keeperhub/pull/1992">#1992</a>
+              <span class="merged">merged</span>
+            </td>
+            <td>Four fields the status endpoint returns — including <code>retryCount</code> — were undocumented.</td>
+          </tr>
+          <tr>
+            <td class="rule-id"><a href="https://github.com/KeeperHub/keeperhub/pull/1993">#1993</a></td>
+            <td>Sub-cent marketplace prices were rounded to whole cents at the payment gate while the 402 advertised full precision, so <strong>every payment below $0.01 failed</strong> — most of their documented pricing range. Found by paying for our own listing.</td>
+          </tr>
+          <tr>
+            <td class="rule-id"><a href="https://github.com/KeeperHub/keeperhub/pull/1995">#1995</a></td>
+            <td><code>validate_workflow</code> reported a workflow whose chain comes from the caller as having an unknown chain id, so a marketplace workflow following their own documented pattern validated as invalid while executing correctly.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Build</h2>
+    <p>
+      pnpm monorepo, eleven packages, TypeScript 5 strict with
+      <code>noUncheckedIndexedAccess</code> and <code>exactOptionalPropertyTypes</code>.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th scope="col">Package</th><th scope="col">Responsibility</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="rule-id">core</td><td>Schemas, chain registry, KeeperHub client</td></tr>
+          <tr><td class="rule-id">store</td><td>Postgres via Drizzle; events, incidents, hash-chained ledger, cursors</td></tr>
+          <tr><td class="rule-id">recorder</td><td>Ingest and normalise; block scanner for watched addresses</td></tr>
+          <tr><td class="rule-id">detector</td><td>Rules R1–R10 and incident lifecycle. No LLM</td></tr>
+          <tr><td class="rule-id">diagnostician</td><td>Root cause analysis via Gemini, with a deterministic template floor</td></tr>
+          <tr><td class="rule-id">remediator</td><td>Guards, playbooks P1–P5, and the four execution paths</td></tr>
+          <tr><td class="rule-id">chaos</td><td>Induces each failure class on testnet; doubles as the E2E suite</td></tr>
+          <tr><td class="rule-id">api</td><td>Fastify REST + SSE, the detection loop, and the console it serves</td></tr>
+          <tr><td class="rule-id">mcp</td><td>MCP server exposing Blackbox to other agents</td></tr>
+          <tr><td class="rule-id">alerter</td><td>Email and webhook delivery</td></tr>
+          <tr><td class="rule-id">console</td><td>React 19 + Vite + TanStack Router</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      <strong>No agent framework.</strong> Detection is a deterministic rule engine; the
+      only LLM call is the written explanation, and it sits after the evidence, never in
+      the detection path.
+    </p>
+    <p class="note">
+      Stack: Fastify 5, Drizzle, Postgres 16, viem, zod,
+      <code>@modelcontextprotocol/sdk</code>, <code>@x402/core</code>, React 19, Vite 6,
+      Node 24. <strong>900 TypeScript tests and 19 Foundry tests.</strong> Deployed on GCP:
+      one VM running Postgres, the API and Caddy, with the console served by the API itself
+      so both share an origin — which is what makes the KeeperHub OAuth return work without
+      a proxy.
+    </p>
+  </section>
+
+  <section>
+    <h2>What is unfinished</h2>
+    <p>
+      Two of the ten rules have never fired outside tests. R7 needs an inclusion analysis —
+      expected against actual output, block position, neighbouring transactions — and
+      nothing builds that yet. R9 needs a run that starts and never finishes, which we have
+      not managed to produce on demand.
+    </p>
+    <p>
+      Three of the five playbooks have not run against a live chain. P1 re-prices and
+      replaces a stuck transaction, and producing a genuinely stuck transaction depends on
+      the market, so it is implemented and unit-tested but unproven. P3 needs a private
+      mempool the testnets do not have, and declines with a stated reason instead.
+    </p>
+    <p>
+      The public deployment holds no signer key, so it cannot induce a failure on a
+      visitor's behalf — only plan a fix their own wallet signs. The live history is thin:
+      four incidents. And there is no recorded demo video; the driver that walks the
+      console exists and is rehearsed, but nothing has been captured.
+    </p>
+  </section>
+
+  <footer>
+    Built for the KeeperHub Agents Onchain Hackathon.
+    <a href="https://blackbox-kh.parakramlabs.com">blackbox-kh.parakramlabs.com</a>
+  </footer>
+</div>
+
+<script type="text/markdown" id="source"># Blackbox
+
+**Autonomous incident intelligence and remediation for onchain agent execution, built on KeeperHub.**
+
+- Live: https://blackbox-kh.parakramlabs.com
+- Code: https://github.com/IronicDeGawd/blackbox-keeperhub
+
+## Demo runsheet
+
+Open the site in a clean window at 1440x900, signed out. Have your KeeperHub login ready — beat 2 connects live and it is what unlocks the run log in beat 8. Check https://blackbox-kh.parakramlabs.com/api/demo says `"ready": true`. One press per 30 minutes, shared by everyone, so do not rehearse the press. About four minutes. Beat 6 is the moment; beat 8 proves the KeeperHub integration is real rather than a wrapper.
+
+**1. Front page, 20 seconds, do not linger.** Agents are good at reasoning and bad at execution. A nonce gap wedges a signer and everything behind it stops. A workflow gets refused before it ever reaches the chain. None of it raises an error the agent knows how to report — so you find out from a user, or from the balance. Here is one real incident, and note what it leads with: not a verdict, the numbers it measured.
+
+**2. Click Connect KeeperHub. Go through the real consent screen.** This is KeeperHub's own authorisation page, not ours. Read what it asks for: mcp:read. Read only. Blackbox never sees a credential of yours typed into our site, and it cannot execute anything on your behalf with this — when it fixes something it uses its own credentials, inside its own budget. *(Point at the scope while you say "read only". That frame answers the question every judge is about to ask.)*
+
+**3. Land on Connections. Show the workflow list.** These are my actual KeeperHub workflows, read over their API. Nothing is watched until I say so — Blackbox does not assume the run of your account just because you signed in. I pick the ones I want watched, and from that moment every execution of those workflows is evidence the rules reason over.
+
+**4. Go to /dashboard. Point at the event log.** That was the product. This is the instrument. Everything as it arrives, including what never becomes an incident — blocks being swept, workflow runs starting, fixes going out.
+
+**5. Press "Break something now".** Now let's break something for real. This executes a KeeperHub workflow — blackbox/demo/refused-transfer — that asks to spend beyond the organisation's daily cap. KeeperHub refuses it before any chain is involved, so it costs no gas. It runs three times, the way a retry loop would.
+
+**6. Watch the log. Say almost nothing. This is the moment.** Nothing has been reloaded. *(let it land, about ten seconds)* There it is. Blackbox read that out of KeeperHub's audit trail on its own tick and raised it. Nobody told it.
+
+**7. Open the incident. Stay on the evidence block.** Workflow misconfigured — and look at what that is built from. The workflow by name. Three failures inside a five-minute window, against the three it takes to fire. Two distinct failing steps. And the reason, straight from KeeperHub: daily spending cap exceeded. Not "it failed" — refused repeatedly, before the chain, which is a broken definition rather than bad luck. Retrying will not help.
+
+**8. Scroll to the Run log. This is the KeeperHub depth beat.** And this is the run itself, step by step, pulled from KeeperHub through the connection I made two minutes ago. Which node ran, which one failed, what it said, gas where there is any. Before this existed, the answer to "which step" was another dashboard. This is also why the connection is per-operator: these are your organisation's internals, so only the account that owns the agent can read them.
+
+**9. Scroll to the remediation plan and guards.** Now the part I like best: it is not going to fix this one, and it says exactly why. Confidence came out at 0.75 against the 0.8 required to spend gas, and the signer is not on the operator's allowlist. Six guards passed, two failed, and the refusal is recorded as carefully as a success would be. A tool that spends money on your behalf has to be able to say no.
+
+**10. Back to the front page, Receipts table.** When it does act, this is what it looks like. Blackbox detected a retry storm, decided to halt the agent, then wrote a KeeperHub workflow over the API, enabled it, and executed it — that hash is the result. The remediation is a workflow run sitting in the operator's own KeeperHub dashboard with per-node logs, not a side channel only we can see. Every row here is a real transaction on a public chain.
+
+**11. Close.** So: connect read-only, pick what it watches, and it reads KeeperHub's execution history the way a flight recorder reads a flight. Ten deterministic rules, no model deciding anything, every detection a measurement against a threshold. And when it fixes something, the fix is a KeeperHub workflow run with a hash you can look up. There are no simulated remediations anywhere in this product.
+
+What this deployment will not do live, and why: it runs with dryRun on and holds no signer key, so no remediation executes during the demo. Beat 9 turns that into the point rather than hiding it, and beat 10 shows the transactions from runs where it did act. A signer key on a public unauthenticated URL would be a spendable key handed to anyone who found it.
+
+## The problem
+
+Agents are good at reasoning and bad at execution. A nonce gap wedges a signer and everything queued behind it stops. A gas estimate goes stale and the transaction sits. A call simulates clean and reverts on inclusion because the state moved underneath it. A retry loop quietly burns a wallet down.
+
+None of it raises an error the agent knows how to report. The agent believes it acted; the chain disagrees. You find out from a user, or from the balance.
+
+## What it does
+
+Watches execution, decides what went wrong, explains it with the numbers it measured, then executes the fix onchain through KeeperHub as a real transaction.
+
+**Ten deterministic rules.** No model decides whether something is wrong. Each compares a measured value against a threshold, so a detection can be argued with rather than merely trusted.
+
+| Rule | Class | Proven live |
+| --- | --- | --- |
+| R1 | STUCK_TRANSACTION | yes |
+| R2 | NONCE_GAP | yes |
+| R3 | GAS_UNDERPRICED | suppression path only |
+| R4 | SIM_PASS_EXEC_REVERT | yes |
+| R5 | RETRY_STORM | yes |
+| R6 | SIGNER_GAS_STARVED | yes |
+| R7 | ADVERSE_INCLUSION | no — needs inclusion analysis nothing builds yet |
+| R8 | SPEND_CAP_EXHAUSTED | yes |
+| R9 | EXECUTION_STALLED | no |
+| R10 | WORKFLOW_MISCONFIGURED | yes — this is what the public demo raises |
+
+R1–R7 read a signer's own transactions. R8–R10 read a KeeperHub organisation's execution history and catch failures no chain scan can see.
+
+**Five playbooks**, each recording which path executed it — `keeperhub-workflow`, `keeperhub`, `signer` or `user-signed`. A fix a human signed resolves as `blackbox-proposed`, never as `blackbox`.
+
+## Proof
+
+| What happened | Transaction |
+| --- | --- |
+| **A KeeperHub workflow Blackbox wrote and ran** paused a failing agent's circuit breaker | [0x783823d5…](https://sepolia.etherscan.io/tx/0x783823d5ee3afa43222b7ff432faeb45e1e3285d54673ab5b6af5b907248c9a9) |
+| Blackbox filled a nonce gap it detected, unwedging the signer | [0xb1982439…](https://sepolia.etherscan.io/tx/0xb198243930fc745817914dd6ff4fee5e57d4a357b7c632b55743dafd292a57ed) |
+| A user's wallet signed a fix Blackbox planned, which Blackbox then verified | [0x59563255…](https://sepolia.etherscan.io/tx/0x5956325573c201d473812a08d0b0aeb96d2c3bace24954835bfda62e0e08d22e) |
+| Chaos: a call that simulated clean and reverted one block later | [0xa0dbdb74…](https://sepolia.etherscan.io/tx/0xa0dbdb74dc0f19bdcfb6a8cc983b36a9fdbc548af0c716d363500befb45901c6) |
+| An agent paid Blackbox over x402 for a diagnosis — USDC settled on Base | [0x8cd8d6ac…](https://basescan.org/tx/0x8cd8d6ac5dae125e5f3cf039db1ffb7f6b7dafa44243396d00e30074a93a51f9) |
+| A watched wallet ran itself down to no runway, and was told so | [0x5aa0a47c…](https://sepolia.etherscan.io/tx/0x5aa0a47c64c7030e3e72dbc5a114cd3ff3c2161c6042ac9aefbe573aa1852070) |
+
+The first one is the interesting one. Blackbox detected a retry storm, decided to halt the agent, **created a KeeperHub workflow over the API, enabled it, and executed it** — so the remediation is a workflow run in the operator's own dashboard with per-node logs, not a side channel only Blackbox can see.
+
+Contracts on Sepolia: [CircuitBreaker](https://sepolia.etherscan.io/address/0x69C744Bb9f953D822a52E88604D26C9a895ac0E0) · [ChaosTarget](https://sepolia.etherscan.io/address/0x5d3437a8b5C182B91dC72087f4049ac00b1C528A)
+
+## How KeeperHub is used
+
+KeeperHub is the execution engine, not a client library called once.
+
+- **Workflows** — provisioned per remediation shape, reused across incidents, created, enabled and executed entirely over the API.
+- **Direct Execution** as the fallback, following the documented safe sequence: simulate, check `wouldRevert`, execute with a derived `Idempotency-Key`, poll on `X-Poll-Interval-Hint`, and trust the verified receipt over the self-reported hash.
+- **Audit trail** — execution records are normalised into the same event stream as chain observations, so KeeperHub's own history is evidence the rules reason over.
+- **Gas sponsorship** — remediations execute through the sponsored relayer.
+- **MCP, both directions** — Blackbox exposes its own MCP server so other agents can ask why a transaction failed, and consumes KeeperHub's, checking every workflow with `validate_workflow` before a remediation runs.
+- **x402** — one rule is published to the KeeperHub Marketplace as a paid workflow. Settlement is USDC on Base via EIP-3009, and the paying wallet holds no ETH.
+
+One structural finding shaped the architecture, established by probing rather than assuming: KeeperHub executes through a sponsored relayer at the *sponsor's* nonce, so it can never occupy a specific nonce belonging to an agent's signer. Playbooks that must fill a nonce gap therefore route to a held key or to the owner's wallet.
+
+## What we sent back upstream
+
+Five fixes to KeeperHub, each found by building on it and each verified against their own test suite. Three merged, two in review.
+
+| PR | Fix |
+| --- | --- |
+| [#1990](https://github.com/KeeperHub/keeperhub/pull/1990) **merged** | A completed `contract-call` returned no `transactionHash`, though the route had it in hand and the docs promise it. It cost us a remediation recorded as failed after it had actually succeeded. |
+| [#1991](https://github.com/KeeperHub/keeperhub/pull/1991) **merged** | `undici` is imported by `lib/safe-fetch.ts` but declared in no dependency block, so their test suite will not start on a fresh clone. |
+| [#1992](https://github.com/KeeperHub/keeperhub/pull/1992) **merged** | Four fields the status endpoint returns — including `retryCount` — were undocumented. |
+| [#1993](https://github.com/KeeperHub/keeperhub/pull/1993) | Sub-cent marketplace prices were rounded to whole cents at the payment gate while the 402 advertised full precision, so **every payment below $0.01 failed** — most of their documented pricing range. Found by paying for our own listing. |
+| [#1995](https://github.com/KeeperHub/keeperhub/pull/1995) | `validate_workflow` reported a workflow whose chain comes from the caller as having an unknown chain id, so a marketplace workflow following their own documented pattern validated as invalid while executing correctly. |
+
+## Build
+
+pnpm monorepo, eleven packages, TypeScript 5 strict with `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`.
+
+| Package | Responsibility |
+| --- | --- |
+| `core` | Schemas, chain registry, KeeperHub client |
+| `store` | Postgres via Drizzle; events, incidents, hash-chained ledger, cursors |
+| `recorder` | Ingest and normalise; block scanner for watched addresses |
+| `detector` | Rules R1–R10 and incident lifecycle. No LLM |
+| `diagnostician` | Root cause analysis via Gemini, with a deterministic template floor |
+| `remediator` | Guards, playbooks P1–P5, and the four execution paths |
+| `chaos` | Induces each failure class on testnet; doubles as the E2E suite |
+| `api` | Fastify REST + SSE, the detection loop, and the console it serves |
+| `mcp` | MCP server exposing Blackbox to other agents |
+| `alerter` | Email and webhook delivery |
+| `console` | React 19 + Vite + TanStack Router |
+
+**No agent framework.** Detection is a deterministic rule engine; the only LLM call is the written explanation, and it sits after the evidence, never in the detection path.
+
+Stack: Fastify 5, Drizzle, Postgres 16, viem, zod, `@modelcontextprotocol/sdk`, `@x402/core`, React 19, Vite 6, Node 24. **900 TypeScript tests and 19 Foundry tests.** Deployed on GCP: one VM running Postgres, the API and Caddy, with the console served by the API itself so both share an origin — which is what makes the KeeperHub OAuth return work without a proxy.
+
+## What is unfinished
+
+Two of the ten rules have never fired outside tests. R7 needs an inclusion analysis — expected against actual output, block position, neighbouring transactions — and nothing builds that yet. R9 needs a run that starts and never finishes, which we have not managed to produce on demand.
+
+Three of the five playbooks have not run against a live chain. P1 re-prices and replaces a stuck transaction, and producing a genuinely stuck transaction depends on the market, so it is implemented and unit-tested but unproven. P3 needs a private mempool the testnets do not have, and declines with a stated reason instead.
+
+The public deployment holds no signer key, so it cannot induce a failure on a visitor's behalf — only plan a fix their own wallet signs. The live history is thin: four incidents. And there is no recorded demo video; the driver that walks the console exists and is rehearsed, but nothing has been captured.
+</script>
+
+<script>
+  (() => {
+    const button = document.getElementById('copy');
+    const status = document.getElementById('status');
+    const source = document.getElementById('source');
+    const label = button.textContent;
+    let timer;
+
+    function legacyCopy(text) {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.top = '-1000px';
+      document.body.appendChild(area);
+      area.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch { ok = false; }
+      document.body.removeChild(area);
+      return ok;
+    }
+
+    function settle(state, text) {
+      button.dataset.state = state;
+      button.textContent = text;
+      status.textContent = text;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        delete button.dataset.state;
+        button.textContent = label;
+        status.textContent = '';
+      }, 2400);
+    }
+
+    button.addEventListener('click', async () => {
+      const markdown = source.textContent.trim() + '\n';
+      try {
+        await navigator.clipboard.writeText(markdown);
+        settle('done', 'Copied');
+      } catch {
+        const ok = legacyCopy(markdown);
+        settle(ok ? 'done' : 'failed', ok ? 'Copied' : 'Select all and copy');
+      }
+    });
+  })();
+</script>
