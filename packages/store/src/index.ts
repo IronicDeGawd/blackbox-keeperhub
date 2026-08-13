@@ -3,6 +3,7 @@ import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import type { ExecutionEvent } from '@blackbox/core';
 import {
+  agentBreakers,
   executionEvents,
   incidents,
   agentOwners,
@@ -866,6 +867,73 @@ export async function claimAgentForOrg(
     .values({ agentId: params.agentId, orgId: params.orgId, claimedAt: params.at })
     .onConflictDoNothing({ target: agentOwners.agentId });
   return 'claimed';
+}
+
+export type AgentBreaker = typeof agentBreakers.$inferSelect;
+
+/**
+ * The breaker registered for an agent, if any.
+ *
+ * Returns the row rather than the address so a caller can tell a registered
+ * breaker from a verified one. P4 will plan against an unverified breaker —
+ * the pause is worth attempting even if the role check has gone stale — but
+ * the console shows the difference.
+ */
+export async function breakerFor(db: Database, agentId: string): Promise<AgentBreaker | null> {
+  const [row] = await db
+    .select()
+    .from(agentBreakers)
+    .where(eq(agentBreakers.agentId, agentId))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function breakersForOrg(db: Database, orgId: string): Promise<AgentBreaker[]> {
+  return db.select().from(agentBreakers).where(eq(agentBreakers.orgId, orgId));
+}
+
+/**
+ * Register or replace the breaker for an agent.
+ *
+ * Idempotent on the agent, because the operator re-registering after
+ * redeploying a contract is the ordinary case, not a conflict. Ownership is
+ * checked by the caller, which already knows who is asking.
+ */
+export async function registerBreaker(
+  db: Database,
+  params: {
+    agentId: string;
+    address: string;
+    chainId: number;
+    orgId: string;
+    at: Date;
+    verifiedAt?: Date | null;
+  },
+): Promise<void> {
+  await db
+    .insert(agentBreakers)
+    .values({
+      agentId: params.agentId,
+      address: params.address.toLowerCase(),
+      chainId: params.chainId,
+      orgId: params.orgId,
+      registeredAt: params.at,
+      verifiedAt: params.verifiedAt ?? null,
+    })
+    .onConflictDoUpdate({
+      target: agentBreakers.agentId,
+      set: {
+        address: params.address.toLowerCase(),
+        chainId: params.chainId,
+        orgId: params.orgId,
+        registeredAt: params.at,
+        verifiedAt: params.verifiedAt ?? null,
+      },
+    });
+}
+
+export async function removeBreaker(db: Database, agentId: string): Promise<void> {
+  await db.delete(agentBreakers).where(eq(agentBreakers.agentId, agentId));
 }
 
 /**

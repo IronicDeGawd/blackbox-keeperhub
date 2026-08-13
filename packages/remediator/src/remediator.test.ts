@@ -377,6 +377,53 @@ describe('P4 circuit breaker', () => {
   });
 });
 
+/**
+ * The regression this table was built for.
+ *
+ * The breaker was looked up in a static map built from one environment
+ * variable keyed to the literal agent id `chaos`. A connected operator's agent
+ * is `kh:<workflowId>`, so the lookup always missed and P4 — the only playbook
+ * that serves a KeeperHub-kind agent — could never produce a plan for anyone
+ * but us. These tests go through the Remediator rather than calling the
+ * playbook directly, because the defect was in the wiring, not the playbook.
+ */
+describe('a breaker registered for a connected agent', () => {
+  const connected = incident({
+    class: 'WORKFLOW_MISCONFIGURED',
+    agentId: 'kh:dylvomthaaou2yvn9yop4',
+    evidence: { eventIds: ['e0'], ruleId: 'R10', facts: { workflowId: 'dylvomthaaou2yvn9yop4' } },
+  });
+  const breaker = `0x${'b'.repeat(40)}` as `0x${string}`;
+
+  it('is skipped when the agent has none, naming what to do about it', async () => {
+    const { record } = await remediator({ breakerFor: async () => null }).remediate(connected);
+    expect(record.finalStatus).toBe('skipped_by_policy');
+    expect(record.attempts[0]!.failureReason).toMatch(/register one and grant Blackbox/);
+  });
+
+  it('pauses it once the agent has one', async () => {
+    const asked: string[] = [];
+    const { record } = await remediator({
+      breakerFor: async (agentId: string) => {
+        asked.push(agentId);
+        return agentId === 'kh:dylvomthaaou2yvn9yop4' ? breaker : null;
+      },
+    }).remediate(connected);
+
+    // Looked up by the agent id a connected workflow actually carries.
+    expect(asked).toEqual(['kh:dylvomthaaou2yvn9yop4']);
+    expect(record.finalStatus).toBe('succeeded');
+    expect(record.attempts[0]!.txHash).toBe(TX);
+  });
+
+  it('does not hand one agent another agents breaker', async () => {
+    const { record } = await remediator({
+      breakerFor: async (agentId: string) => (agentId === 'chaos' ? breaker : null),
+    }).remediate(connected);
+    expect(record.finalStatus).toBe('skipped_by_policy');
+  });
+});
+
 describe('P5 top-up', () => {
   const starved = incident({
     class: 'SIGNER_GAS_STARVED',

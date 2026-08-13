@@ -24,6 +24,7 @@ import {
   recentAgentKinds,
   saveIncident,
   type Database,
+  breakerFor as breakerForAgent,
 } from '@blackbox/store';
 import { buildApp, type ChaosScenario } from './app.js';
 import { EventBus } from './bus.js';
@@ -279,9 +280,21 @@ const runtime = new Runtime({
 // customer's own audit trail and under its spend controls. A held key is the
 // fallback, and only it can serve a plan that names a nonce.
 const verifier = new ReceiptVerifier({ [chainId]: rpcUrl });
-const breakers = env['CIRCUIT_BREAKER_ADDRESS']
-  ? { chaos: env['CIRCUIT_BREAKER_ADDRESS'] as `0x${string}` }
-  : undefined;
+/**
+ * The circuit breaker for an agent, read per agent at plan time.
+ *
+ * `CIRCUIT_BREAKER_ADDRESS` remains as a seed for the deployment's own `chaos`
+ * agent so the proven arc keeps working, but it is no longer the only way an
+ * agent can have one: an operator registers a breaker for their own agent and
+ * that row is what makes the halt reachable for them. Keying a single env var
+ * to one hardcoded agent id meant no connected agent could ever match.
+ */
+const seededBreaker = env['CIRCUIT_BREAKER_ADDRESS'] as `0x${string}` | undefined;
+const breakerFor = async (agentId: string): Promise<`0x${string}` | null> => {
+  const registered = await breakerForAgent(db, agentId);
+  if (registered) return registered.address as `0x${string}`;
+  return agentId === 'chaos' && seededBreaker ? seededBreaker : null;
+};
 
 const keeperHubExecutor = keeperHub
   ? new KeeperHubExecutor(
@@ -345,7 +358,7 @@ const remediator = canRemediate
         ...(signerExecutor ? { signer: signerExecutor } : {}),
       }),
       market: async () => runtime.market(),
-      ...(breakers ? { breakers } : {}),
+      breakerFor,
       /**
        * What this process can actually execute with, so the router refuses a
        * playbook it could never carry out — and names the reason — instead of
@@ -446,7 +459,7 @@ const proposalDeps = {
   db,
   config,
   market: async () => runtime.market(),
-  ...(breakers ? { breakers } : {}),
+  breakerFor,
 };
 
 async function loadIncident(id: string): Promise<{ row: Record<string, unknown>; incident: import('@blackbox/core').Incident } | null> {
