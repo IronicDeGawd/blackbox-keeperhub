@@ -30,6 +30,7 @@ import { codeNodeSnippet, type Webhooks } from './webhooks.js';
 import type { WalletAuth } from './wallet-auth.js';
 import {
   activeSigners,
+  breakerFor,
   claimAgentForOrg,
   countConnections,
   eventsByIds,
@@ -40,6 +41,8 @@ import {
   ledgerForIncident,
   listAgents,
   listIncidents,
+  registerBreaker,
+  removeBreaker,
   saveIncident,
   stats,
   unwatchSigner,
@@ -155,6 +158,12 @@ export type AppOptions = {
   /** Plans chaos for the caller's own wallet. Needs no key, so it is safe on a public URL. */
   chaosPlan?: ChaosPlanHandler;
   signerHealth?: SignerHealthHandler;
+  /**
+   * Confirm Blackbox holds the pauser role on a contract, at registration.
+   * Absent on a deployment with no chain access; a breaker then registers
+   * unverified rather than not at all.
+   */
+  verifyPauser?: (params: { address: `0x${string}`; chainId: number }) => Promise<boolean>;
   /** Explains any transaction hash, for someone who has integrated nothing. */
   diagnose?: DiagnoseHandler;
   /** Propose-and-verify remediation, for a signer Blackbox has no key for. */
@@ -1501,13 +1510,125 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     const readable = await readableAgents(await callerOf(request));
     const agents = await listAgents(db, readable ?? undefined);
     const watched = await activeSigners(db);
+    // Registered breakers come back with the agents so the console can show
+    // which ones can actually be halted without a request per row.
+    const registered = await Promise.all(agents.map((a) => breakerFor(db, a.agentId)));
     return {
-      items: agents.map((agent) => ({
-        ...agent,
-        label: watched.find((w) => w.agentId === agent.agentId)?.label ?? null,
-        selfRemediation: agent.agentId !== 'blackbox',
-      })),
+      items: agents.map((agent, i) => {
+        const breaker = registered[i];
+        return {
+          ...agent,
+          label: watched.find((w) => w.agentId === agent.agentId)?.label ?? null,
+          selfRemediation: agent.agentId !== 'blackbox',
+          breaker: breaker
+            ? {
+                address: breaker.address,
+                chainId: breaker.chainId,
+                verified: breaker.verifiedAt !== null,
+              }
+            : null,
+        };
+      }),
     };
+  });
+
+  /**
+   * Register the circuit breaker Blackbox may pause for an agent.
+   *
+   * Without one, P4 — the only playbook that serves a KeeperHub-kind agent —
+   * has nothing to call, so this is the step that turns detection into
+   * remediation for a connected operator. It answers to the same ownership as
+   * remediating, because it decides what Blackbox is allowed to do with
+   * somebody's money and uptime.
+   */
+  app.post('/api/agents/:agentId/breaker', async (request, reply) => {
+    const { agentId } = request.params as { agentId: string };
+    if (!(await mayRemediateHere(agentId, request))) {
+      return reply.code(403).send({
+        error: 'forbidden',
+        detail: `Sign in as the organisation that owns ${agentId} to register a breaker for it.`,
+        requestId: request.id,
+      });
+    }
+    const caller = await callerOf(request);
+
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const address = typeof body['address'] === 'string' ? body['address'].trim() : '';
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+      return reply.code(400).send({
+        error: 'invalid_address',
+        detail: `"${address}" is not an address.`,
+        requestId: request.id,
+      });
+    }
+    const chainId = Number(body['chainId']);
+    if (!Number.isInteger(chainId) || !getChain(chainId)) {
+      return reply.code(400).send({
+        error: 'unsupported_chain',
+        detail: `Chain ${body['chainId']} is not one this deployment knows.`,
+        requestId: request.id,
+      });
+    }
+    // Mirrors the chain_allowlist guard exactly, including that an empty
+    // allowlist permits nothing. A breaker on a chain remediation will never
+    // touch would register happily and then never fire, which is worse than
+    // refusing it while the operator is here to fix it.
+    if (!config.remediation.chainAllowlist.includes(chainId)) {
+      return reply.code(400).send({
+        error: 'chain_not_remediable',
+        detail: `Remediation is not enabled on chain ${chainId}, so a breaker there would never be paused.`,
+        requestId: request.id,
+      });
+    }
+
+    /**
+     * Confirm Blackbox can actually pause it before recording it as usable.
+     * Finding out at registration is worth far more than finding out during an
+     * incident: the operator is here, and the fix is one role grant away.
+     */
+    let verifiedAt: Date | null = null;
+    let unverifiedReason: string | null = null;
+    if (options.verifyPauser) {
+      try {
+        const ok = await options.verifyPauser({ address: address as `0x${string}`, chainId });
+        if (ok) verifiedAt = new Date();
+        else unverifiedReason = 'Blackbox does not hold the pauser role on that contract yet.';
+      } catch (error) {
+        unverifiedReason = `Could not check the pauser role: ${String((error as Error)?.message ?? error)}`;
+      }
+    } else {
+      unverifiedReason = 'This deployment cannot check the pauser role.';
+    }
+
+    await registerBreaker(db, {
+      agentId,
+      address,
+      chainId,
+      orgId: caller?.orgId ?? 'local',
+      at: new Date(),
+      verifiedAt,
+    });
+
+    return reply.code(201).send({
+      agentId,
+      address: address.toLowerCase(),
+      chainId,
+      verified: verifiedAt !== null,
+      ...(unverifiedReason ? { detail: unverifiedReason } : {}),
+    });
+  });
+
+  app.delete('/api/agents/:agentId/breaker', async (request, reply) => {
+    const { agentId } = request.params as { agentId: string };
+    if (!(await mayRemediateHere(agentId, request))) {
+      return reply.code(403).send({
+        error: 'forbidden',
+        detail: `Sign in as the organisation that owns ${agentId} to remove its breaker.`,
+        requestId: request.id,
+      });
+    }
+    await removeBreaker(db, agentId);
+    return { agentId, breaker: null };
   });
 
   if (options.demo) {

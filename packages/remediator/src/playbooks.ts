@@ -75,6 +75,14 @@ export type Playbook = {
    */
   appliesTo: readonly AgentKind[];
   /**
+   * Why this playbook cannot serve a kind of agent, in the operator's terms.
+   *
+   * "P1 does not apply to a keeperhub agent" is true and useless; it names a
+   * rule rather than a reason, and leaves the operator with nothing to do.
+   * Where the answer is structural, say what the structure is.
+   */
+  inapplicable?: Partial<Record<AgentKind, string>>;
+  /**
    * Which executors can carry it out. A plan that names a nonce needs a signer;
    * one that pauses a contract does not care who sends it.
    */
@@ -97,7 +105,9 @@ export function servability(
   if (agentKind && !playbook.appliesTo.includes(agentKind)) {
     return {
       servable: false,
-      reason: `${playbook.id} does not apply to a ${agentKind} agent`,
+      reason:
+        playbook.inapplicable?.[agentKind] ??
+        `${playbook.id} does not apply to a ${agentKind} agent`,
     };
   }
   const usable = playbook.executors.filter((e) => availableExecutors.includes(e));
@@ -132,6 +142,13 @@ const asBigInt = (v: unknown): bigint | undefined => {
 export const P1: Playbook = {
   id: 'P1',
   handles: ['GAS_UNDERPRICED', 'STUCK_TRANSACTION'],
+  inapplicable: {
+    keeperhub:
+      'KeeperHub prices and re-prices its own submissions through the sponsored relayer, ' +
+      'and a replacement has to reuse the original nonce — which belongs to that relayer, ' +
+      'not to this agent. Raise it with KeeperHub if their gas strategy is leaving ' +
+      'transactions unmined.',
+  },
   // A replacement reuses the stuck transaction's nonce, so it can only be sent
   // by something that controls that nonce. KeeperHub manages its own.
   appliesTo: ['signer'],
@@ -227,6 +244,12 @@ export const P2: Playbook = {
 export const P3: Playbook = {
   id: 'P3',
   handles: ['ADVERSE_INCLUSION'],
+  inapplicable: {
+    keeperhub:
+      'Rerouting means resubmitting the same action through a private mempool, which ' +
+      'requires signing as the agent. KeeperHub submits from a shared relayer, so there ' +
+      'is nothing here for Blackbox to reroute.',
+  },
   // Rerouting picks the mempool a transaction is sent to, which is a choice
   // KeeperHub makes for itself.
   appliesTo: ['signer'],
@@ -301,6 +324,11 @@ export const P4: Playbook = {
 export const P5: Playbook = {
   id: 'P5',
   handles: ['SIGNER_GAS_STARVED'],
+  inapplicable: {
+    keeperhub:
+      'A managed wallet is funded through KeeperHub, not by a transfer from Blackbox. ' +
+      'Top it up in KeeperHub, or raise the organisation spending cap.',
+  },
   // Topping up a balance only helps an agent that pays from one. A managed
   // wallet's equivalent problem is the organisation's spend cap, which is
   // raised in KeeperHub's own settings rather than fixed by a transfer.

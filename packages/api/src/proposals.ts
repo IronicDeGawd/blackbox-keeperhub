@@ -30,8 +30,8 @@ export type ProposalDeps = {
   db: Database;
   config: BlackboxConfig;
   market: MarketReader;
-  /** Registered circuit breakers by agent id, for P4. */
-  breakers?: Record<string, `0x${string}`>;
+  /** The circuit breaker registered for an agent, if any (P4). */
+  breakerFor?: (agentId: string) => Promise<`0x${string}` | null>;
   fundingWallet?: `0x${string}`;
   now?: () => Date;
 };
@@ -112,13 +112,14 @@ export async function buildProposal(
   const failed = guards.failed.filter((f) => f.guard !== 'dry_run');
 
   const market = await deps.market(incident);
+  const breakerAddress = (await deps.breakerFor?.(incident.agentId)) ?? null;
   const plan: PlaybookPlan = playbook.plan({
     incident,
     config: deps.config,
     baseFee: market.baseFee,
     suggestedPriorityFee: market.suggestedPriorityFee,
     ...(market.signerBalance !== undefined ? { signerBalance: market.signerBalance } : {}),
-    ...(deps.breakers?.[incident.agentId] ? { breakerAddress: deps.breakers[incident.agentId]! } : {}),
+    ...(breakerAddress ? { breakerAddress } : {}),
     ...(deps.fundingWallet ? { fundingWallet: deps.fundingWallet } : {}),
   });
 

@@ -339,6 +339,12 @@ export type Agent = {
   openIncidents: number;
   label: string | null;
   selfRemediation: boolean;
+  /**
+   * The circuit breaker Blackbox may pause for this agent. Null means it can
+   * be diagnosed but not halted — which is worth showing, because registering
+   * one is what turns detection into remediation.
+   */
+  breaker: { address: string; chainId: number; verified: boolean } | null;
 };
 
 /** Measured, not inferred — every field here is read from a chain. */

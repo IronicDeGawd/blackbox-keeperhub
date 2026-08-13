@@ -65,3 +65,34 @@
 .watched__agents .listing {
   margin-top: var(--s4);
 }
+
+/* --- breaker registration ------------------------------------------------ */
+
+.breaker { margin-top: var(--s4); }
+
+.breaker__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s3);
+}
+
+.breaker__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.breaker__label {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* A registered breaker that cannot actually be paused is worth an amber, not
+   a green: it reads as done until the incident it was meant to stop. */
+.warn { color: var(--warning); }

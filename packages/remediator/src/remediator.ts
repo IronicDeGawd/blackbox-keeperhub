@@ -54,8 +54,15 @@ export type RemediatorOptions = {
   market: (incident: Incident) => Promise<MarketData>;
   makeId: () => string;
   now?: () => Date;
-  /** Registered circuit breakers, by agent id (P4). */
-  breakers?: Record<string, `0x${string}`>;
+  /**
+   * The circuit breaker registered for an agent, if any (P4).
+   *
+   * A lookup rather than a map, because breakers are registered per agent at
+   * runtime by whoever owns it. It used to be a static map built from one
+   * environment variable keyed to a single hardcoded agent id, which meant no
+   * connected operator's agent could ever match and P4 could never plan.
+   */
+  breakerFor?: (agentId: string) => Promise<`0x${string}` | null>;
   fundingWallet?: `0x${string}`;
   /**
    * How the agent behind an incident executes, when it has been established.
@@ -159,15 +166,14 @@ export class Remediator {
     }
 
     const market = await this.options.market(incident);
+    const breakerAddress = (await this.options.breakerFor?.(incident.agentId)) ?? null;
     const planCtx: PlanContext = {
       incident,
       config: this.options.config,
       baseFee: market.baseFee,
       suggestedPriorityFee: market.suggestedPriorityFee,
       ...(market.signerBalance !== undefined ? { signerBalance: market.signerBalance } : {}),
-      ...(this.options.breakers?.[incident.agentId]
-        ? { breakerAddress: this.options.breakers[incident.agentId]! }
-        : {}),
+      ...(breakerAddress ? { breakerAddress } : {}),
       ...(this.options.fundingWallet ? { fundingWallet: this.options.fundingWallet } : {}),
     };
 

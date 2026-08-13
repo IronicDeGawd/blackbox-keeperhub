@@ -196,6 +196,136 @@ describe('verifying the remediation record', () => {
   });
 });
 
+/**
+ * Registering a breaker is what turns detection into remediation for a
+ * connected operator: without one, the only playbook that serves a
+ * KeeperHub-kind agent has nothing to call.
+ */
+describe('registering a circuit breaker for an agent', () => {
+  const BREAKER = `0x${'b'.repeat(40)}`;
+
+  const owned = async (over: Record<string, unknown> = {}) => {
+    const server = await app({
+      identity: new Identity(db, { listKeys: async () => [{ id: 'k1' }] }),
+      config: blackboxConfigSchema.parse({
+        keeperHub: { orgKey: 'kh_test' },
+        databaseUrl: URL,
+        remediation: { chainAllowlist: [CHAIN_IDS.sepolia] },
+      }),
+      ...over,
+    });
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/auth/keeperhub',
+      payload: { orgKey: 'kh_live_key' },
+    });
+    const headers = { authorization: `Bearer ${res.json().token}` };
+    await claimAgentForOrg(db, { agentId: 'kh:wf-1', orgId: res.json().orgId, at: T0 });
+    return { server, headers };
+  };
+
+  it('refuses an agent the caller does not own', async () => {
+    const { server } = await owned();
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/agents/kh:someone-else/breaker',
+      payload: { address: BREAKER, chainId: CHAIN_IDS.sepolia },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('records one for an agent the caller owns, and reports it unverified', async () => {
+    // No verifyPauser on this instance: the registration is still worth
+    // keeping, but the console must not claim the halt will work.
+    const { server, headers } = await owned();
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/agents/kh:wf-1/breaker',
+      headers,
+      payload: { address: BREAKER, chainId: CHAIN_IDS.sepolia },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ agentId: 'kh:wf-1', verified: false });
+    expect(res.json().detail).toMatch(/cannot check the pauser role/);
+  });
+
+  it('marks it verified when Blackbox holds the pauser role', async () => {
+    const { server, headers } = await owned({ verifyPauser: async () => true });
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/agents/kh:wf-1/breaker',
+      headers,
+      payload: { address: BREAKER, chainId: CHAIN_IDS.sepolia },
+    });
+    expect(res.json()).toMatchObject({ verified: true });
+    expect(res.json().detail).toBeUndefined();
+  });
+
+  it('says so when the role is missing, rather than failing during an incident', async () => {
+    const { server, headers } = await owned({ verifyPauser: async () => false });
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/agents/kh:wf-1/breaker',
+      headers,
+      payload: { address: BREAKER, chainId: CHAIN_IDS.sepolia },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ verified: false });
+    expect(res.json().detail).toMatch(/pauser role/);
+  });
+
+  it('refuses an address that is not one', async () => {
+    const { server, headers } = await owned();
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/agents/kh:wf-1/breaker',
+      headers,
+      payload: { address: 'not-an-address', chainId: CHAIN_IDS.sepolia },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('invalid_address');
+  });
+
+  it('refuses a chain remediation will never touch', async () => {
+    // Registering happily and then never firing is worse than refusing now.
+    const { server, headers } = await owned();
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/agents/kh:wf-1/breaker',
+      headers,
+      payload: { address: BREAKER, chainId: CHAIN_IDS.baseSepolia },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('chain_not_remediable');
+  });
+
+  it('shows up on the agent, and can be removed', async () => {
+    const { server, headers } = await owned({ verifyPauser: async () => true });
+    await saveIncident(db, row({ agentId: 'kh:wf-1' }) as never);
+    await server.inject({
+      method: 'POST',
+      url: '/api/agents/kh:wf-1/breaker',
+      headers,
+      payload: { address: BREAKER, chainId: CHAIN_IDS.sepolia },
+    });
+
+    const listed = await server.inject({ url: '/api/agents', headers });
+    const agent = listed.json().items.find((a: { agentId: string }) => a.agentId === 'kh:wf-1');
+    expect(agent.breaker).toMatchObject({ chainId: CHAIN_IDS.sepolia, verified: true });
+
+    const removed = await server.inject({
+      method: 'DELETE',
+      url: '/api/agents/kh:wf-1/breaker',
+      headers,
+    });
+    expect(removed.statusCode).toBe(200);
+    const after = await server.inject({ url: '/api/agents', headers });
+    expect(
+      after.json().items.find((a: { agentId: string }) => a.agentId === 'kh:wf-1').breaker,
+    ).toBeNull();
+  });
+});
+
 describe('acknowledging', () => {
   it('moves the incident out of the open set and announces it', async () => {
     await saveIncident(db, row() as never);

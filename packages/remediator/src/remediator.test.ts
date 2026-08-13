@@ -377,6 +377,75 @@ describe('P4 circuit breaker', () => {
   });
 });
 
+/**
+ * The regression this table was built for.
+ *
+ * The breaker was looked up in a static map built from one environment
+ * variable keyed to the literal agent id `chaos`. A connected operator's agent
+ * is `kh:<workflowId>`, so the lookup always missed and P4 — the only playbook
+ * that serves a KeeperHub-kind agent — could never produce a plan for anyone
+ * but us. These tests go through the Remediator rather than calling the
+ * playbook directly, because the defect was in the wiring, not the playbook.
+ */
+describe('a breaker registered for a connected agent', () => {
+  const connected = incident({
+    class: 'WORKFLOW_MISCONFIGURED',
+    agentId: 'kh:dylvomthaaou2yvn9yop4',
+    evidence: { eventIds: ['e0'], ruleId: 'R10', facts: { workflowId: 'dylvomthaaou2yvn9yop4' } },
+  });
+  const breaker = `0x${'b'.repeat(40)}` as `0x${string}`;
+
+  it('is skipped when the agent has none, naming what to do about it', async () => {
+    const { record } = await remediator({ breakerFor: async () => null }).remediate(connected);
+    expect(record.finalStatus).toBe('skipped_by_policy');
+    expect(record.attempts[0]!.failureReason).toMatch(/register one and grant Blackbox/);
+  });
+
+  it('pauses it once the agent has one', async () => {
+    const asked: string[] = [];
+    const { record } = await remediator({
+      breakerFor: async (agentId: string) => {
+        asked.push(agentId);
+        return agentId === 'kh:dylvomthaaou2yvn9yop4' ? breaker : null;
+      },
+    }).remediate(connected);
+
+    // Looked up by the agent id a connected workflow actually carries.
+    expect(asked).toEqual(['kh:dylvomthaaou2yvn9yop4']);
+    expect(record.finalStatus).toBe('succeeded');
+    expect(record.attempts[0]!.txHash).toBe(TX);
+  });
+
+  it('does not hand one agent another agents breaker', async () => {
+    const { record } = await remediator({
+      breakerFor: async (agentId: string) => (agentId === 'chaos' ? breaker : null),
+    }).remediate(connected);
+    expect(record.finalStatus).toBe('skipped_by_policy');
+  });
+});
+
+describe('what a KeeperHub agent is told when no playbook can serve it', () => {
+  it('explains why a replacement cannot be made for a managed wallet', () => {
+    // "P1 does not apply to a keeperhub agent" names a rule, not a reason.
+    const { servable, reason } = servability(P1, 'keeperhub', ['keeperhub']);
+    expect(servable).toBe(false);
+    expect(reason).toMatch(/sponsored relayer/);
+    expect(reason).not.toMatch(/does not apply to a/);
+  });
+
+  it('explains why a reroute needs the agents own signer', () => {
+    expect(servability(P3, 'keeperhub', ['keeperhub']).reason).toMatch(/shared relayer/);
+  });
+
+  it('sends a starved managed wallet to KeeperHub rather than to a transfer', () => {
+    expect(servability(P5, 'keeperhub', ['keeperhub']).reason).toMatch(/funded through KeeperHub/);
+  });
+
+  it('still falls back to the plain reason for a pairing with nothing to add', () => {
+    expect(servability(P2, 'keeperhub', ['signer']).reason).toMatch(/does not apply to a keeperhub/);
+  });
+});
+
 describe('P5 top-up', () => {
   const starved = incident({
     class: 'SIGNER_GAS_STARVED',
@@ -565,7 +634,9 @@ describe('who a playbook can serve', () => {
   it('refuses a nonce-bearing playbook for a managed wallet, and says why', () => {
     const check = servability(P1, 'keeperhub', ['signer', 'keeperhub']);
     expect(check.servable).toBe(false);
-    expect(check.reason).toContain('does not apply to a keeperhub agent');
+    // Names the structure rather than the rule: a replacement has to reuse a
+    // nonce that belongs to KeeperHub's relayer, not to this agent.
+    expect(check.reason).toContain('sponsored relayer');
   });
 
   it('serves the same playbook for an agent that holds its own key', () => {

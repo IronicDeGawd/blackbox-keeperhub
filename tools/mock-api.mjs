@@ -768,8 +768,10 @@ const server = createServer(async (req, res) => {
   if (path === '/api/agents') {
     return json(res, 200, {
       items: [
-        { agentId: AGENT, label: 'Chaos harness', signers: [SIGNER], chainIds: [11155111, 84532], openIncidents: 2 },
-        { agentId: 'blackbox', label: 'Blackbox itself', signers: [SIGNER], chainIds: [11155111], openIncidents: 0, selfRemediation: false },
+        // One agent with a breaker and one without, so both states of the
+        // auto-halt column can be built against.
+        { agentId: AGENT, label: 'Chaos harness', signers: [SIGNER], chainIds: [11155111, 84532], openIncidents: 2, selfRemediation: true, breaker: { address: '0x69c744bb9f953d822a52e88604d26c9a895ac0e0', chainId: 11155111, verified: true } },
+        { agentId: 'blackbox', label: 'Blackbox itself', signers: [SIGNER], chainIds: [11155111], openIncidents: 0, selfRemediation: false, breaker: null },
       ],
     });
   }

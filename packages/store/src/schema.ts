@@ -361,6 +361,38 @@ export const agentOwners = pgTable(
 );
 
 /**
+ * The circuit breaker Blackbox may pause for an agent.
+ *
+ * Halting a misbehaving agent means calling `pause()` on a contract the
+ * operator deployed and granted Blackbox the pauser role on. Without a
+ * registered address there is nothing to call, so P4 — the only playbook that
+ * serves a KeeperHub-kind agent — can produce no plan at all.
+ *
+ * This was previously a single deployment-level environment variable keyed to
+ * one hardcoded agent id, which meant a connected operator could never reach
+ * remediation no matter what they did. One row per agent is what makes the
+ * halt path theirs rather than ours.
+ */
+export const agentBreakers = pgTable(
+  'agent_breakers',
+  {
+    agentId: text('agent_id').primaryKey(),
+    address: text('address').notNull(),
+    chainId: integer('chain_id').notNull(),
+    /** Who registered it. Removing it answers to the same owner. */
+    orgId: text('org_id').notNull(),
+    /**
+     * When we last confirmed Blackbox holds the pauser role on it. Null means
+     * unverified — the registration is recorded but the halt would fail, and
+     * the console says so rather than letting an incident discover it.
+     */
+    verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    registeredAt: timestamp('registered_at', { withTimezone: true }).notNull(),
+  },
+  (t) => ({ byOrg: index('agent_breakers_org_idx').on(t.orgId) }),
+);
+
+/**
  * Our registration with an OAuth provider.
  *
  * KeeperHub supports dynamic client registration (RFC 7591), so Blackbox
