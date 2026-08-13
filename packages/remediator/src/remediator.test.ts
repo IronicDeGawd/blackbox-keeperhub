@@ -424,6 +424,28 @@ describe('a breaker registered for a connected agent', () => {
   });
 });
 
+describe('what a KeeperHub agent is told when no playbook can serve it', () => {
+  it('explains why a replacement cannot be made for a managed wallet', () => {
+    // "P1 does not apply to a keeperhub agent" names a rule, not a reason.
+    const { servable, reason } = servability(P1, 'keeperhub', ['keeperhub']);
+    expect(servable).toBe(false);
+    expect(reason).toMatch(/sponsored relayer/);
+    expect(reason).not.toMatch(/does not apply to a/);
+  });
+
+  it('explains why a reroute needs the agents own signer', () => {
+    expect(servability(P3, 'keeperhub', ['keeperhub']).reason).toMatch(/shared relayer/);
+  });
+
+  it('sends a starved managed wallet to KeeperHub rather than to a transfer', () => {
+    expect(servability(P5, 'keeperhub', ['keeperhub']).reason).toMatch(/funded through KeeperHub/);
+  });
+
+  it('still falls back to the plain reason for a pairing with nothing to add', () => {
+    expect(servability(P2, 'keeperhub', ['signer']).reason).toMatch(/does not apply to a keeperhub/);
+  });
+});
+
 describe('P5 top-up', () => {
   const starved = incident({
     class: 'SIGNER_GAS_STARVED',
@@ -612,7 +634,9 @@ describe('who a playbook can serve', () => {
   it('refuses a nonce-bearing playbook for a managed wallet, and says why', () => {
     const check = servability(P1, 'keeperhub', ['signer', 'keeperhub']);
     expect(check.servable).toBe(false);
-    expect(check.reason).toContain('does not apply to a keeperhub agent');
+    // Names the structure rather than the rule: a replacement has to reuse a
+    // nonce that belongs to KeeperHub's relayer, not to this agent.
+    expect(check.reason).toContain('sponsored relayer');
   });
 
   it('serves the same playbook for an agent that holds its own key', () => {

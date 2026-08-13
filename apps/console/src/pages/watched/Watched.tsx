@@ -316,8 +316,113 @@ export function Watched(): React.JSX.Element {
  * The list is already filtered by the server to what the caller may read, so an
  * anonymous visitor sees the public ones and an operator sees their own.
  */
+/**
+ * Register the breaker Blackbox may pause for an agent.
+ *
+ * This is the step that turns detection into remediation: P4 halts a runaway
+ * agent by calling pause() on a contract the operator deployed and granted
+ * Blackbox the pauser role on, and without one there is nothing to call. The
+ * role is checked at registration rather than during an incident, because now
+ * is when the operator can do something about it.
+ */
+function RegisterBreaker({
+  agentId,
+  chains,
+  onDone,
+}: {
+  agentId: string;
+  chains: ChainConfig[];
+  onDone: () => void;
+}): React.JSX.Element {
+  const [address, setAddress] = useState('');
+  const [chainId, setChainId] = useState(chains[0]?.chainId ?? 11155111);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ tone: 'ok' | 'warn' | 'bad'; text: string } | null>(null);
+
+  const submit = async (event: React.FormEvent): Promise<void> => {
+    event.preventDefault();
+    setBusy(true);
+    setResult(null);
+    try {
+      const res = await api.registerBreaker(agentId, { address: address.trim(), chainId });
+      setResult(
+        res.verified
+          ? { tone: 'ok', text: 'Registered. Blackbox can pause this agent.' }
+          : { tone: 'warn', text: res.detail ?? 'Registered, but the pauser role is missing.' },
+      );
+      onDone();
+    } catch (cause) {
+      setResult({
+        tone: 'bad',
+        text: cause instanceof ApiError ? cause.detail : 'Could not register that.',
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="panel section breaker" onSubmit={submit}>
+      <h3 className="eyebrow eyebrow--accent">Register a breaker for {agentId}</h3>
+      <p className="soft">
+        Deploy a circuit breaker, grant Blackbox the pauser role on it, then register the address
+        here. Blackbox may then halt this agent when a retry storm, a misconfigured workflow or a
+        simulate-pass/execute-revert is detected. It can do nothing else with it — the contract
+        allows pausing and nothing more.
+      </p>
+
+      <div className="breaker__row">
+        <label className="breaker__field">
+          <span className="breaker__label">Contract address</span>
+          <input
+            className="input mono"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder="0x…"
+            required
+          />
+        </label>
+        <label className="breaker__field">
+          <span className="breaker__label">Chain</span>
+          <select
+            className="input"
+            value={chainId}
+            onChange={(e) => setChainId(Number(e.target.value))}
+          >
+            {chains.map((chain) => (
+              <option key={chain.chainId} value={chain.chainId}>
+                {chain.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="button button--go" type="submit" disabled={busy}>
+          {busy ? 'Checking…' : 'Register'}
+        </button>
+      </div>
+
+      {result ? (
+        <p
+          className={result.tone === 'ok' ? 'ok' : result.tone === 'warn' ? 'warn' : 'crit'}
+          role={result.tone === 'bad' ? 'alert' : 'status'}
+        >
+          {result.text}
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
 function Agents({ chains }: { chains: ChainConfig[] }): React.JSX.Element | null {
   const [items, setItems] = useState<Agent[] | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+
+  const load = (): void => {
+    void api
+      .agents()
+      .then((result) => setItems(result.items))
+      .catch(() => setItems([]));
+  };
 
   useEffect(() => {
     let live = true;
@@ -348,6 +453,7 @@ function Agents({ chains }: { chains: ChainConfig[] }): React.JSX.Element | null
               <th>Chains</th>
               <th>Open</th>
               <th>Remediation</th>
+              <th>Auto-halt</th>
             </tr>
           </thead>
           <tbody>
@@ -373,11 +479,34 @@ function Agents({ chains }: { chains: ChainConfig[] }): React.JSX.Element | null
                 <td className={agent.selfRemediation ? 'ok' : 'dim'}>
                   {agent.selfRemediation ? 'can be executed' : 'proposal only'}
                 </td>
+                {/*
+                 * Halting a runaway agent means pausing a breaker it has
+                 * registered. Without one there is nothing to call, so this
+                 * column is the difference between an agent that can be
+                 * stopped and one that can only be described.
+                 */}
+                <td>
+                  {agent.breaker ? (
+                    <span className={agent.breaker.verified ? 'ok' : 'warn'}>
+                      {agent.breaker.verified ? 'ready' : 'needs pauser role'}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="button button--quiet"
+                      onClick={() => setOpen(open === agent.agentId ? null : agent.agentId)}
+                    >
+                      Register a breaker
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {open ? <RegisterBreaker agentId={open} chains={chains} onDone={load} /> : null}
     </section>
   );
 }

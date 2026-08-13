@@ -151,6 +151,19 @@ export const api = {
 
   ledger: (): Promise<LedgerVerification> => request<LedgerVerification>('/api/ledger/verify'),
 
+  /** Register the breaker Blackbox may pause for an agent. 403 unless it is yours. */
+  registerBreaker: (
+    agentId: string,
+    body: { address: string; chainId: number },
+  ): Promise<{ address: string; chainId: number; verified: boolean; detail?: string }> =>
+    request(`/api/agents/${encodeURIComponent(agentId)}/breaker`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  removeBreaker: (agentId: string): Promise<{ agentId: string; breaker: null }> =>
+    request(`/api/agents/${encodeURIComponent(agentId)}/breaker`, { method: 'DELETE' }),
+
   /** The caller's own organisation. 409 when nothing is connected. */
   spend: (): Promise<SpendPosition> =>
     request<SpendPosition>('/api/connections/keeperhub/spend'),
