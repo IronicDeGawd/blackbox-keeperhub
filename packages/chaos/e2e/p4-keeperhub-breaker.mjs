@@ -74,7 +74,9 @@ const loop = new RemediationLoop({
       return { baseFee: block.baseFeePerGas ?? 1_000_000_000n, suggestedPriorityFee: 1_000_000_000n };
     },
     // The breaker this agent registered. P4 declines with a reason without one.
-    breakers: { chaos: BREAKER },
+    // A lookup rather than a map: breakers are registered per agent at runtime,
+    // so a connected operator's agent can have one too.
+    breakerFor: async (agentId) => (agentId === 'chaos' ? BREAKER : null),
     makeId: makeId('rem'),
     logger: { info: () => {}, error: (m, d) => console.log('  [rem err]', m, d?.error?.message ?? '') },
   }),
