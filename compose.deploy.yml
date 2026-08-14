@@ -88,6 +88,12 @@ services:
       # — visitors sign their own chaos and their own fixes. Setting it here
       # would hand a spendable key to an unauthenticated URL.
       BLACKBOX_DRY_RUN: ${BLACKBOX_DRY_RUN:-true}
+      # Which chains a remediation may touch, and where to read them. Empty
+      # falls back to CHAIN_ID alone, so a single-chain deployment needs
+      # neither. Widening the allowlist is a decision about where this
+      # deployment may spend, so it is set rather than inferred.
+      BLACKBOX_CHAIN_ALLOWLIST: ${BLACKBOX_CHAIN_ALLOWLIST:-}
+      BLACKBOX_RPC_URLS: ${BLACKBOX_RPC_URLS:-}
     depends_on:
       postgres:
         condition: service_healthy
