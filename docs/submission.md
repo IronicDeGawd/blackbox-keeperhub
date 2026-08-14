@@ -91,6 +91,35 @@ The first transaction is the other one worth reading. Blackbox detected a retry 
 - [ChaosTarget](https://sepolia.etherscan.io/address/0x5d3437a8b5C182B91dC72087f4049ac00b1C528A) — Sepolia
 - [CircuitBreaker](https://basescan.org/address/0x8ecbE030145794596A98167Fc4b56817CeA1E36c) — **Base mainnet**
 
+## What a chain scanner cannot see
+
+Most monitoring watches transactions or the mempool. That is a reasonable place to watch, and it has a blind spot: **a workflow refused before broadcast emits nothing to watch.**
+
+No transaction. No gas. No trace on any chain. Every failed run behind the Base mainnet remediation came back from KeeperHub like this:
+
+```
+status: error   transactionHashes: 0   gasUsedWei: null
+```
+
+Nine of them. A monitor reading the chain sees an agent that has simply gone quiet — and quiet is indistinguishable from idle.
+
+Three of the ten rules exist only in that gap, and they are the three that read KeeperHub's audit trail rather than a chain:
+
+| Rule | What it catches | Onchain footprint |
+|---|---|---|
+| R8 `SPEND_CAP_EXHAUSTED` | The organisation's daily budget is gone, so nothing else will execute | none |
+| R9 `EXECUTION_STALLED` | A workflow started and never finished | none |
+| R10 `WORKFLOW_MISCONFIGURED` | Refused repeatedly at the same step — broken, not unlucky | none |
+
+That is the whole claim, and it is narrow on purpose: **Blackbox detects agent failures that produce no transaction at all, and then fixes them with one.** The Base mainnet arc is that sentence end to end — nine invisible failures, detected at 0.9 confidence, halted with a transaction anyone can look up.
+
+### Proofs that are inconvenient to fake
+
+- **The remediation's sender is not us.** On the Base transaction, `from` is KeeperHub's relayer, and the organisation's wallet holds **zero ETH** before and after. Gas sponsorship, demonstrated.
+- **The x402 payer holds no ETH either.** Settlement is USDC via EIP-3009, so a facilitator submits the transfer and the paying agent needs no native balance.
+- **It refuses to act, in public.** The demo incident's remediation plan is `signable` and *not* `actionable`: confidence came out at 0.75 against the 0.8 floor to spend gas. Six guards passed, two failed, and the refusal is recorded as carefully as a success would be.
+- **You can check our record, not just believe it.** [`/api/ledger/verify`](https://blackbox-kh.parakramlabs.com/api/ledger/verify) walks the hash chain over every remediation. An entry edited or a failed attempt quietly deleted breaks every hash after it.
+
 ## How KeeperHub is used
 
 KeeperHub is the execution engine, not a client library called once.
@@ -122,7 +151,7 @@ The pauser role is checked **at registration**, not during the incident it was m
 
 ## What we sent back upstream
 
-Five fixes to KeeperHub, each found by building on it and each verified against their own test suite. **Three merged, two in review.**
+Six fixes to KeeperHub, each found by building on it and each verified against their own test suite. **Three merged, one approved, two in review.**
 
 | PR | Fix |
 |---|---|
@@ -130,11 +159,12 @@ Five fixes to KeeperHub, each found by building on it and each verified against 
 | [#1991](https://github.com/KeeperHub/keeperhub/pull/1991) **merged** | `undici` is imported by `lib/safe-fetch.ts` but declared in no dependency block, so their test suite will not start on a fresh clone. |
 | [#1992](https://github.com/KeeperHub/keeperhub/pull/1992) **merged** | Four fields the status endpoint returns — including `retryCount` — were undocumented. |
 | [#1993](https://github.com/KeeperHub/keeperhub/pull/1993) | Sub-cent marketplace prices were rounded to whole cents at the payment gate while the 402 advertised full precision, so **every payment below $0.01 failed** — most of their documented pricing range. Found by paying for our own listing. |
-| [#1995](https://github.com/KeeperHub/keeperhub/pull/1995) | `validate_workflow` reported a workflow whose chain comes from the caller as having an unknown chain id, so a marketplace workflow following their own documented pattern validated as invalid while executing correctly. |
+| [#1995](https://github.com/KeeperHub/keeperhub/pull/1995) **approved** | `validate_workflow` reported a workflow whose chain comes from the caller as having an unknown chain id, so a marketplace workflow following their own documented pattern validated as invalid while executing correctly. |
+| [#2081](https://github.com/KeeperHub/keeperhub/pull/2081) | `/analytics/runs` returned `network: null` for a run that failed before broadcast, even when its own error named the chain — the aggregate read the network only from a step that produced gas. A consumer of the audit trail could not tell which chain a failed run was on. |
 
 Each merge took two review rounds. On #1990 the maintainer caught a docs paragraph promising a hash on the one response that cannot carry it; on #1992 they retracted one of their own earlier citations as wrong. Both were fixed before merge.
 
-A sixth was found while landing the Base mainnet remediation and is being written up: `/analytics/runs` reports `network: null` and `networks: []` for a run that fails *after* the chain was resolved, even when the error names that chain ("Insufficient **BASE** balance"). A consumer of the audit trail therefore cannot tell which chain a failed run was on.
+The sixth was found while landing the Base mainnet remediation — building on the audit trail is what surfaced it. On #1995 the maintainer independently re-derived the predicate against live `staging` code before approving, rather than taking the PR's own account of it.
 
 ## Build
 
