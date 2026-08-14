@@ -4,12 +4,17 @@
 
 Agents are good at reasoning and bad at execution. Nonce gaps wedge signers, gas
 estimates go stale, transactions simulate clean and revert on inclusion, and a
-retry loop quietly burns a wallet down. Blackbox watches execution, works out
-what went wrong with a deterministic rule engine, explains it in plain language,
-and then executes the fix onchain through KeeperHub.
+retry loop quietly burns a wallet down.
 
-Every remediation is a real transaction with a retrievable hash. There are no
-simulated remediations anywhere in the product.
+**Most tooling tells you an agent failed. Blackbox tells you why, with the
+numbers it measured.** Not "execution reverted" — *nonce 122 was never filled,
+one action is blocked behind it, and that held across five consecutive polls
+where two were required*. Ten deterministic rules, each comparing a measured
+value against a threshold, so a diagnosis is something you can argue with rather
+than a verdict you have to trust. No model decides whether something is wrong.
+
+Then it fixes it, onchain through KeeperHub, as a real transaction with a
+retrievable hash. There are no simulated remediations anywhere in the product.
 
 **It is running: [blackbox-kh.parakramlabs.com](https://blackbox-kh.parakramlabs.com/)**
 — the console, the live incident feed, and a button that induces a real failure
@@ -22,7 +27,8 @@ read-only, break something, and watch the incident arrive without a reload.
 
 ## Proof
 
-Real transactions on Ethereum Sepolia, produced by the system end to end.
+Real transactions produced by the system end to end — five on Ethereum Sepolia,
+one on **Base mainnet**.
 
 | What happened | Transaction |
 | --- | --- |
@@ -30,7 +36,7 @@ Real transactions on Ethereum Sepolia, produced by the system end to end.
 | Blackbox filled a nonce gap it detected, unwedging the signer | [`0xb1982439…`](https://sepolia.etherscan.io/tx/0xb198243930fc745817914dd6ff4fee5e57d4a357b7c632b55743dafd292a57ed) |
 | A user's wallet signed a fix Blackbox planned, which Blackbox then verified | [`0x59563255…`](https://sepolia.etherscan.io/tx/0x5956325573c201d473812a08d0b0aeb96d2c3bace24954835bfda62e0e08d22e) |
 | Chaos: a call that simulated clean and reverted one block later | [`0xa0dbdb74…`](https://sepolia.etherscan.io/tx/0xa0dbdb74dc0f19bdcfb6a8cc983b36a9fdbc548af0c716d363500befb45901c6) |
-| An agent paid Blackbox over x402 for a diagnosis — USDC settled on Base | [`0x8cd8d6ac…`](https://basescan.org/tx/0x8cd8d6ac5dae125e5f3cf039db1ffb7f6b7dafa44243396d00e30074a93a51f9) |
+| An agent paid Blackbox over x402 for a diagnosis — USDC settled on **Base mainnet** | [`0x8cd8d6ac…`](https://basescan.org/tx/0x8cd8d6ac5dae125e5f3cf039db1ffb7f6b7dafa44243396d00e30074a93a51f9) |
 | A watched wallet ran itself down to no runway, and was told so | [`0x5aa0a47c…`](https://sepolia.etherscan.io/tx/0x5aa0a47c64c7030e3e72dbc5a114cd3ff3c2161c6042ac9aefbe573aa1852070) |
 
 The first one is the interesting one. Blackbox detected a retry storm, decided
@@ -364,6 +370,12 @@ comes back as an answer naming what blocked it rather than as an error.
 ---
 
 ## Chaos harness
+
+**Five of the six failure modes are induced on a live chain, detected, and
+correctly classified — the sixth needs control over block ordering that no
+wallet has.** These are real transactions on Sepolia, not fixtures: the harness
+breaks something, and the same detection path that watches a customer's agent
+picks it up.
 
 Hard-restricted to testnets in code, with no runtime override.
 

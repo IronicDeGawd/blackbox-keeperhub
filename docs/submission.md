@@ -8,6 +8,12 @@
 
 ## The problem
 
+**Most tooling tells you an agent failed. Blackbox tells you why, with the
+numbers it measured.** Not "execution reverted" — *nonce 122 was never filled,
+one action is blocked behind it, and that held across five consecutive polls
+where two were required*. A dozen tools react to failure; diagnosing it is the
+rarer thing, and it is what the rest of the product is built on.
+
 Agents are good at reasoning and bad at execution.
 
 A nonce gap wedges a signer and everything queued behind it stops. A gas estimate goes stale and the transaction sits. A call simulates clean and reverts on inclusion because the state moved underneath it. A retry loop quietly burns a wallet down.
@@ -60,7 +66,8 @@ The division of labour is the one the hackathon prescribes: **the deciding is ou
 
 ## Proof
 
-Real transactions on Ethereum Sepolia, produced by the system end to end.
+Real transactions produced by the system end to end — five on Ethereum Sepolia,
+one on **Base mainnet**.
 
 | What happened | Transaction |
 |---|---|
@@ -68,7 +75,7 @@ Real transactions on Ethereum Sepolia, produced by the system end to end.
 | Blackbox filled a nonce gap it detected, unwedging the signer | [0xb1982439…](https://sepolia.etherscan.io/tx/0xb198243930fc745817914dd6ff4fee5e57d4a357b7c632b55743dafd292a57ed) |
 | A user's wallet signed a fix Blackbox planned, which Blackbox then verified | [0x59563255…](https://sepolia.etherscan.io/tx/0x5956325573c201d473812a08d0b0aeb96d2c3bace24954835bfda62e0e08d22e) |
 | Chaos: a call that simulated clean and reverted one block later | [0xa0dbdb74…](https://sepolia.etherscan.io/tx/0xa0dbdb74dc0f19bdcfb6a8cc983b36a9fdbc548af0c716d363500befb45901c6) |
-| An agent paid Blackbox over x402 for a diagnosis — USDC settled on Base | [0x8cd8d6ac…](https://basescan.org/tx/0x8cd8d6ac5dae125e5f3cf039db1ffb7f6b7dafa44243396d00e30074a93a51f9) |
+| An agent paid Blackbox over x402 for a diagnosis — USDC settled on **Base mainnet** | [0x8cd8d6ac…](https://basescan.org/tx/0x8cd8d6ac5dae125e5f3cf039db1ffb7f6b7dafa44243396d00e30074a93a51f9) |
 | A watched wallet ran itself down to no runway, and was told so | [0x5aa0a47c…](https://sepolia.etherscan.io/tx/0x5aa0a47c64c7030e3e72dbc5a114cd3ff3c2161c6042ac9aefbe573aa1852070) |
 
 The first one is the interesting one.
