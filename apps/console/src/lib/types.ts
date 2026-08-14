@@ -171,6 +171,12 @@ export type RemediationAttempt = {
   explorerUrl?: string;
   description?: string;
   route?: string;
+  /**
+   * What KeeperHub's own validator said about the workflow just before it ran.
+   * `knownFalsePositive` marks the templated-chain complaint we reported and
+   * fixed upstream — a flag, but not a fault.
+   */
+  validation?: { valid: boolean; detail: string; knownFalsePositive: boolean };
 };
 
 export type Remediation = {

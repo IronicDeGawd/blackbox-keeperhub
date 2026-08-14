@@ -183,6 +183,24 @@ export const remediationAttemptSchema = z.object({
   status: z.enum(['succeeded', 'failed', 'skipped']),
   failureReason: z.string().optional(),
   gasUsed: bigintString.optional(),
+  /**
+   * What KeeperHub's own validator said about the workflow, immediately before
+   * it was run.
+   *
+   * Recorded rather than logged, because "we checked with their MCP server" is
+   * a claim an operator should be able to see rather than take on trust — and
+   * because their validator has a known false positive on templated chain
+   * fields (KeeperHub#1995, ours), so a flag is not the same as a fault. The
+   * distinction is kept here rather than collapsed into a boolean.
+   */
+  validation: z
+    .object({
+      valid: z.boolean(),
+      detail: z.string(),
+      /** True when the only complaint is the templated-chain false positive. */
+      knownFalsePositive: z.boolean(),
+    })
+    .optional(),
   completedAt: z.coerce.date().optional(),
 });
 

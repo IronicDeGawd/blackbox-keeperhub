@@ -665,3 +665,27 @@
     grid-column: 1 / -1;
   }
 }
+
+/* --- validation verdict --------------------------------------------------- */
+
+.attempt__validation {
+  margin: var(--s3) 0 0;
+  font-size: var(--t-small);
+  color: var(--ink-soft);
+  border-left: 2px solid var(--rule-strong);
+  padding-left: var(--s3);
+  max-width: 78ch;
+}
+
+/* A genuine complaint reads differently from the one we already know about. */
+.attempt__validation--flagged {
+  border-left-color: var(--warning);
+  color: var(--ink);
+}
+
+.attempt__validation-label {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+}

@@ -65,6 +65,24 @@ export type WorkflowExecutorOptions = {
   logger?: { info: (m: string, d?: unknown) => void; error: (m: string, d?: unknown) => void };
 };
 
+/**
+ * Is this complaint the templated-chain false positive?
+ *
+ * KeeperHub's validator reports `unknown-chain-id` when a workflow takes its
+ * chain from the caller, which is the pattern their own Marketplace docs
+ * instruct — the value is a template reference resolved at execution time, so
+ * there is no chain id to check statically. Reported and fixed upstream as
+ * KeeperHub#1995.
+ *
+ * Matched narrowly on purpose. Any other complaint, including a genuine
+ * unknown chain id on a literal value, is not covered by this and stays a real
+ * flag on the attempt.
+ */
+export function isTemplatedChainComplaint(detail: string): boolean {
+  const lower = detail.toLowerCase();
+  return lower.includes('unknown-chain-id') && /\{\{|template/.test(lower);
+}
+
 export class WorkflowExecutor implements RemediationExecutor {
   /** Workflow ids by name, so one process provisions each at most once. */
   private readonly known = new Map<string, string>();
@@ -203,7 +221,7 @@ export class WorkflowExecutor implements RemediationExecutor {
       nodes: [trigger, step],
     });
 
-    await this.validate(workflowId);
+    const validation = await this.validate(workflowId);
 
     const { executionId } = await this.client.executeWorkflow(workflowId, {
       incidentId: incident.id,
@@ -218,29 +236,51 @@ export class WorkflowExecutor implements RemediationExecutor {
           'cannot be verified and must not be reported as performed',
       );
     }
-    return { txHash, keeperHubActionId: executionId, executor: 'keeperhub-workflow' };
+    return {
+      txHash,
+      keeperHubActionId: executionId,
+      executor: 'keeperhub-workflow',
+      ...(validation ? { validation } : {}),
+    };
   }
 
   /**
    * Ask KeeperHub whether the workflow it holds is well-formed.
    *
    * Never throws and never blocks. A validator that is down, slow or wrong must
-   * not stop a remediation an incident is waiting on — and this one is wrong
-   * about template references today.
+   * not stop a remediation an incident is waiting on.
+   *
+   * The verdict is returned rather than logged, so it lands on the attempt and
+   * an operator can see that the check happened and what it said. A flag is not
+   * the same as a fault: their validator reports `unknown-chain-id` on a chain
+   * that arrives as a template reference, which is a false positive we reported
+   * and fixed upstream as KeeperHub#1995. That case is marked rather than
+   * hidden, because silently discounting a validator's complaint is how a real
+   * one gets missed later.
    */
-  private async validate(workflowId: string): Promise<void> {
+  private async validate(
+    workflowId: string,
+  ): Promise<{ valid: boolean; detail: string; knownFalsePositive: boolean } | null> {
     const validator = this.options.validator;
-    if (!validator) return;
+    if (!validator) return null;
     try {
       const verdict = await validator.validateWorkflow(workflowId);
+      const knownFalsePositive = !verdict.valid && isTemplatedChainComplaint(verdict.detail);
       if (!verdict.valid) {
         this.options.logger?.info('KeeperHub validation flagged this workflow', {
           workflowId,
           detail: verdict.detail,
+          knownFalsePositive,
         });
       }
+      return { valid: verdict.valid, detail: verdict.detail, knownFalsePositive };
     } catch (error) {
       this.options.logger?.error('KeeperHub validation unavailable', { workflowId, error });
+      return {
+        valid: false,
+        detail: `validator unavailable: ${String((error as Error)?.message ?? error)}`,
+        knownFalsePositive: false,
+      };
     }
   }
 

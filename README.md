@@ -86,11 +86,20 @@ KeeperHub is the execution engine, not a client library we call once.
   as chain observations, so KeeperHub's own history is evidence the rules
   reason over.
 - **Gas sponsorship.** Remediations execute through the sponsored relayer.
-- **MCP, both directions.** Blackbox exposes its own MCP server so other agents
-  can ask why a transaction failed, and consumes KeeperHub's — every workflow is
-  checked with `validate_workflow` before a remediation runs. Advisory, never
-  blocking: their validator currently rejects templated chain fields that
-  execute fine, which is [#1995](https://github.com/KeeperHub/keeperhub/pull/1995).
+- **MCP, both directions, and load-bearing.** Blackbox exposes its own MCP
+  server so other agents can ask why a transaction failed, and consumes
+  KeeperHub's: every workflow is checked with `validate_workflow` immediately
+  before a remediation runs, and **the verdict is recorded on the attempt and
+  shown in the console** rather than logged and discarded. "We asked their
+  validator" is a claim; the verdict is the evidence for it.
+
+  Advisory, never blocking — an incident does not wait on a validator being up,
+  and a validator that is unreachable is recorded as unreachable rather than
+  counted as a pass. Their validator also rejects templated chain fields that
+  execute fine; that specific complaint is marked as a known false positive,
+  citing [#1995](https://github.com/KeeperHub/keeperhub/pull/1995) — which we
+  found by using it, and fixed upstream. Marked rather than hidden, because
+  silently discounting a validator is how a real complaint gets missed.
 - **x402.** Blackbox publishes one of its own rules to the KeeperHub Marketplace
   as a paid workflow, so another agent can pay per call for it. Settlement is
   USDC on Base via EIP-3009, and the payer needs no ETH — a facilitator submits

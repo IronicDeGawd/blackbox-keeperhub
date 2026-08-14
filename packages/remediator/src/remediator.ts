@@ -26,6 +26,12 @@ export type RemediationExecutor = {
     keeperHubActionId?: string;
     /** Which path put it on chain, for the ledger and the console. */
     executor?: 'signer' | 'keeperhub' | 'keeperhub-workflow';
+    /**
+     * What KeeperHub's validator said about the workflow before it ran.
+     * Carried out of the executor so it lands on the attempt an operator
+     * reads, rather than in a log line nobody sees.
+     */
+    validation?: { valid: boolean; detail: string; knownFalsePositive: boolean };
   }>;
   /** Resolves once the submission is confirmed, or rejects on timeout. */
   verify(params: {
@@ -193,10 +199,8 @@ export class Remediator {
     this.inFlight.add(key);
     const startedAt = this.now();
     try {
-      const { txHash, keeperHubActionId, executor } = await this.options.executor.submit({
-        plan,
-        incident,
-      });
+      const { txHash, keeperHubActionId, executor, validation } =
+        await this.options.executor.submit({ plan, incident });
       let included = false;
       let gasUsed: bigint | undefined;
       let gasSpentWei: bigint | undefined;
@@ -254,6 +258,7 @@ export class Remediator {
               txHash,
               ...(keeperHubActionId ? { keeperHubActionId } : {}),
               ...(executor ? { executor } : {}),
+              ...(validation ? { validation } : {}),
               status: included ? 'succeeded' : 'failed',
               ...(failureReason ? { failureReason } : {}),
               ...(gasUsed !== undefined ? { gasUsed } : {}),

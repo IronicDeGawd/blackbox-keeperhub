@@ -554,14 +554,63 @@ describe('KeeperHub workflow validation', () => {
 
   const pausePlan = submitPlan({ call: { functionName: 'pause', args: [] } });
 
-  it('checks the workflow before running it', async () => {
-    const validator = { validateWorkflow: vi.fn(async () => ({ valid: true, detail: '' })) };
+  it('checks the workflow before running it, and records the verdict', async () => {
+    // Recorded rather than logged: "we asked their validator" is a claim an
+    // operator should be able to see on the attempt, not take on trust.
+    const validator = { validateWorkflow: vi.fn(async () => ({ valid: true, detail: 'ok' })) };
     const client = stub();
-    await new WorkflowExecutor(client, verifier(), { sleep: async () => {}, validator }).submit({
-      plan: pausePlan,
-      incident: incident(),
-    });
+    const result = await new WorkflowExecutor(client, verifier(), {
+      sleep: async () => {},
+      validator,
+    }).submit({ plan: pausePlan, incident: incident() });
     expect(validator.validateWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(result.validation).toEqual({ valid: true, detail: 'ok', knownFalsePositive: false });
+  });
+
+  it('marks the templated-chain complaint as the known false positive', async () => {
+    // KeeperHub#1995, found and fixed by us. Marked rather than hidden, because
+    // silently discounting a validator is how a real complaint gets missed.
+    const validator = {
+      validateWorkflow: vi.fn(async () => ({
+        valid: false,
+        detail: 'unknown-chain-id: nodes[1].config.network "{{@trigger-1:Manual.network}}"',
+      })),
+    };
+    const result = await new WorkflowExecutor(stub(), verifier(), {
+      sleep: async () => {},
+      validator,
+    }).submit({ plan: pausePlan, incident: incident() });
+    expect(result.validation).toMatchObject({ valid: false, knownFalsePositive: true });
+  });
+
+  it('does not excuse a genuine complaint as that false positive', async () => {
+    const validator = {
+      validateWorkflow: vi.fn(async () => ({
+        valid: false,
+        detail: 'unknown-chain-id: nodes[1].config.network "9999" is not enabled',
+      })),
+    };
+    const result = await new WorkflowExecutor(stub(), verifier(), {
+      sleep: async () => {},
+      validator,
+    }).submit({ plan: pausePlan, incident: incident() });
+    expect(result.validation).toMatchObject({ valid: false, knownFalsePositive: false });
+  });
+
+  it('records a validator that could not be reached, rather than pretending it passed', async () => {
+    const validator = {
+      validateWorkflow: vi.fn(async () => {
+        throw new Error('connect ECONNREFUSED');
+      }),
+    };
+    const result = await new WorkflowExecutor(stub(), verifier(), {
+      sleep: async () => {},
+      validator,
+    }).submit({ plan: pausePlan, incident: incident() });
+    expect(result.validation).toMatchObject({ valid: false, knownFalsePositive: false });
+    expect(result.validation?.detail).toMatch(/unavailable/);
+    // Still ran: an incident does not wait on a validator being up.
+    expect(result.txHash).toBe(TX);
   });
 
   it('still runs when validation says the workflow is invalid', async () => {

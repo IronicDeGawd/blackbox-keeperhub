@@ -148,6 +148,36 @@ export function Remediation({
               </div>
             </dl>
 
+            {/*
+              Blackbox checks the workflow with KeeperHub's own MCP validator
+              before running it. Showing the verdict is the point: "we asked"
+              is a claim, and this is the evidence for it. A flag is not a
+              fault — their validator reports a templated chain field as an
+              unknown chain id, which is a false positive we fixed upstream, so
+              that case is named rather than quietly discounted.
+            */}
+            {attempt.validation ? (
+              <p
+                className={
+                  attempt.validation.valid || attempt.validation.knownFalsePositive
+                    ? 'attempt__validation'
+                    : 'attempt__validation attempt__validation--flagged'
+                }
+              >
+                <span className="attempt__validation-label">KeeperHub validate_workflow</span>{' '}
+                {attempt.validation.valid ? (
+                  <>checked clean before running.</>
+                ) : attempt.validation.knownFalsePositive ? (
+                  <>
+                    flagged this, and the complaint is a known false positive on templated chain
+                    fields — reported and fixed upstream as KeeperHub#1995. Run anyway.
+                  </>
+                ) : (
+                  <>flagged this: {attempt.validation.detail}</>
+                )}
+              </p>
+            ) : null}
+
             {/* Every guard is listed, passed and failed. They are evaluated
                 independently, so several can fail at once and showing only the
                 first would misstate why nothing happened. */}
