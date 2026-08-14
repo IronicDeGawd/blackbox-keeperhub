@@ -2,17 +2,15 @@
 
 **Autonomous incident intelligence and remediation for onchain agent execution, built on KeeperHub.**
 
+- **Youtube:** [https://youtu.be/7dIDS5rjCb0](https://youtu.be/7dIDS5rjCb0)
 - **Live:** [https://blackbox-kh.parakramlabs.com](https://blackbox-kh.parakramlabs.com/)
-- **Demo:** [https://youtu.be/7dIDS5rjCb0](https://youtu.be/7dIDS5rjCb0)
 - **Code:** [https://github.com/IronicDeGawd/blackbox-keeperhub](https://github.com/IronicDeGawd/blackbox-keeperhub)
 
 ## The problem
 
-**Most tooling tells you an agent failed. Blackbox tells you why, with the
-numbers it measured.** Not "execution reverted" — *nonce 122 was never filled,
-one action is blocked behind it, and that held across five consecutive polls
-where two were required*. A dozen tools react to failure; diagnosing it is the
-rarer thing, and it is what the rest of the product is built on.
+**Most tooling tells you an agent failed. Blackbox tells you why, with the numbers it measured.**
+
+Not "execution reverted" — *nonce 122 was never filled, one action is blocked behind it, and that held across five consecutive polls where two were required*. A dozen tools react to failure; diagnosing it is the rarer thing, and it is what the rest of the product is built on.
 
 Agents are good at reasoning and bad at execution.
 
@@ -39,9 +37,11 @@ Watches execution, decides what went wrong, explains it with the numbers it meas
 | R7 | `ADVERSE_INCLUSION` | No — needs inclusion analysis |
 | R8 | `SPEND_CAP_EXHAUSTED` | Yes |
 | R9 | `EXECUTION_STALLED` | No |
-| R10 | `WORKFLOW_MISCONFIGURED` | Yes — public demo |
+| R10 | `WORKFLOW_MISCONFIGURED` | Yes — public demo, and on Base mainnet |
 
 R1–R7 read a signer's own transactions. R8–R10 read a KeeperHub organisation's execution history and catch failures no chain scan can see: a workflow that stalls before producing a transaction, one refused at the same step every time, and an organisation that has spent its daily budget.
+
+**Five of the six inducible failure modes are broken on a live chain, detected, and correctly classified.** The sixth needs control over block ordering that no wallet has, and says so rather than being counted.
 
 **Seven playbooks**, each recording which path executed it — `keeperhub-workflow`, `keeperhub`, `signer` or `user-signed`.
 
@@ -55,10 +55,11 @@ Blackbox does not only read KeeperHub's API. It **authors workflows there, enabl
 
 | Workflow | What it is |
 |---|---|
-| `blackbox/remediation/11155111/pause/0x69c744bb…` | Written by Blackbox at remediation time. The name is machine-generated and encodes chain, action and target contract. Webhook trigger → `web3/write-contract`. This is the workflow behind the transaction below. |
+| `blackbox/remediation/11155111/pause/0x69c744bb…` | Written by Blackbox at remediation time. The name is machine-generated and encodes chain, action and target contract. Webhook trigger → `web3/write-contract`. This is the workflow behind the first transaction below. |
 | `Blackbox Incident Responder` | Webhook trigger → `web3/write-contract`. The general execution path the detector fires. |
 | `Blackbox: signer gas runway` | R6 published to the KeeperHub Marketplace as a paid workflow, callable by any agent over x402. |
 | `blackbox/demo/refused-transfer` | Asks to spend beyond the daily cap. KeeperHub refuses it before any chain is touched, so it costs no gas — this is what the public demo button runs. |
+| `blackbox/demo/base-refused-transfer` | The same shape on **Base mainnet**. Its failed runs are what produced the mainnet incident below. |
 | `blackbox/demo/insufficient-funds` | A second inducible failure shape. |
 | `blackbox/audit-probe` | Used by the audit scripts to exercise the live integration. |
 
@@ -66,27 +67,29 @@ The division of labour is the one the hackathon prescribes: **the deciding is ou
 
 ## Proof
 
-Real transactions produced by the system end to end — five on Ethereum Sepolia,
-two on **Base mainnet**.
+Real transactions produced by the system end to end — five on Ethereum Sepolia, two on **Base mainnet**.
 
 | What happened | Transaction |
 |---|---|
 | **A KeeperHub workflow Blackbox wrote and ran** paused a failing agent's circuit breaker | [0x783823d5…](https://sepolia.etherscan.io/tx/0x783823d5ee3afa43222b7ff432faeb45e1e3285d54673ab5b6af5b907248c9a9) |
+| **A remediation on Base mainnet, gas sponsored by KeeperHub** — R10 detected on nine real failed runs, then P4 paused the agent's breaker | [0x1934f328…](https://basescan.org/tx/0x1934f328c7a32e1d037e992c667d208e80214bb24affd3de6b93c37b3dcf2b3b) |
 | Blackbox filled a nonce gap it detected, unwedging the signer | [0xb1982439…](https://sepolia.etherscan.io/tx/0xb198243930fc745817914dd6ff4fee5e57d4a357b7c632b55743dafd292a57ed) |
 | A user's wallet signed a fix Blackbox planned, which Blackbox then verified | [0x59563255…](https://sepolia.etherscan.io/tx/0x5956325573c201d473812a08d0b0aeb96d2c3bace24954835bfda62e0e08d22e) |
 | Chaos: a call that simulated clean and reverted one block later | [0xa0dbdb74…](https://sepolia.etherscan.io/tx/0xa0dbdb74dc0f19bdcfb6a8cc983b36a9fdbc548af0c716d363500befb45901c6) |
 | An agent paid Blackbox over x402 for a diagnosis — USDC settled on **Base mainnet** | [0x8cd8d6ac…](https://basescan.org/tx/0x8cd8d6ac5dae125e5f3cf039db1ffb7f6b7dafa44243396d00e30074a93a51f9) |
-| **A remediation on Base mainnet, gas sponsored by KeeperHub** — R10 detected on nine real failed runs, then P4 paused the agent's breaker | [0x1934f328…](https://basescan.org/tx/0x1934f328c7a32e1d037e992c667d208e80214bb24affd3de6b93c37b3dcf2b3b) |
 | A watched wallet ran itself down to no runway, and was told so | [0x5aa0a47c…](https://sepolia.etherscan.io/tx/0x5aa0a47c64c7030e3e72dbc5a114cd3ff3c2161c6042ac9aefbe573aa1852070) |
 
-The first one is the interesting one.
+**The Base one is the one to open.** Nine genuine failed runs of a KeeperHub workflow, ingested through the same source that watches a customer's organisation, detected as `WORKFLOW_MISCONFIGURED` at 0.9 confidence on chain 8453 — then P4 pausing the agent's circuit breaker. `isPaused` read back off mainnet went `false` → `true`.
 
-Blackbox detected a retry storm, decided to halt the agent, **created a KeeperHub workflow over the API, enabled it, and executed it** — so the remediation is a workflow run in the operator's own dashboard with per-node logs, not a side channel only Blackbox can see. That workflow is `blackbox/remediation/11155111/pause/0x69c744bb…`, still enabled in the org today.
+Look at the receipt's `from` address: it is **not** Blackbox and **not** the agent. It is KeeperHub's relayer, and the organisation's managed wallet holds **zero ETH on Base** both before and after. The halt executed anyway. That is gas sponsorship demonstrated rather than claimed — and it is the same structural fact that forces a nonce-filling fix down a different path, since a relayer can never occupy somebody else's nonce.
 
-**Contracts on Sepolia:**
+The first transaction is the other one worth reading. Blackbox detected a retry storm, decided to halt the agent, **created a KeeperHub workflow over the API, enabled it, and executed it** — so the remediation is a workflow run in the operator's own dashboard with per-node logs, not a side channel only Blackbox can see. That workflow is `blackbox/remediation/11155111/pause/0x69c744bb…`, still enabled in the org today.
 
-- [CircuitBreaker](https://sepolia.etherscan.io/address/0x69C744Bb9f953D822a52E88604D26C9a895ac0E0)
-- [ChaosTarget](https://sepolia.etherscan.io/address/0x5d3437a8b5C182B91dC72087f4049ac00b1C528A)
+**Contracts:**
+
+- [CircuitBreaker](https://sepolia.etherscan.io/address/0x69C744Bb9f953D822a52E88604D26C9a895ac0E0) — Sepolia
+- [ChaosTarget](https://sepolia.etherscan.io/address/0x5d3437a8b5C182B91dC72087f4049ac00b1C528A) — Sepolia
+- [CircuitBreaker](https://basescan.org/address/0x8ecbE030145794596A98167Fc4b56817CeA1E36c) — **Base mainnet**
 
 ## How KeeperHub is used
 
@@ -95,11 +98,27 @@ KeeperHub is the execution engine, not a client library called once.
 - **Workflows** — provisioned per remediation shape, reused across incidents, created, enabled and executed entirely over the API. See the table above for the ones live in the org today.
 - **Direct Execution** — the fallback, following the documented safe sequence: simulate, check `wouldRevert`, execute with a derived `Idempotency-Key`, poll on `X-Poll-Interval-Hint`, and trust the verified receipt over the self-reported hash.
 - **Audit trail** — execution records are normalised into the same event stream as chain observations, so KeeperHub's own history is evidence the rules reason over. Three of the ten rules exist only because of it.
-- **Gas sponsorship** — remediations execute through the sponsored relayer.
-- **MCP, both directions** — Blackbox exposes its own MCP server so other agents can ask why a transaction failed, and consumes KeeperHub's, checking every workflow with `validate_workflow` before a remediation runs.
-- **x402** — one rule is published to the KeeperHub Marketplace as a paid workflow. Settlement is USDC on Base via EIP-3009, and the paying wallet holds no ETH.
+- **Gas sponsorship** — remediations execute through the sponsored relayer, evidenced by the Base mainnet transaction above: submitted from KeeperHub's relayer, with the organisation's wallet holding nothing.
+- **MCP, both directions, and load-bearing** — Blackbox exposes its own MCP server so other agents can ask why a transaction failed, and consumes KeeperHub's: every workflow is checked with `validate_workflow` immediately before a remediation runs, and **the verdict is recorded on the attempt and shown in the console** rather than logged and discarded. "We asked their validator" is a claim; the verdict is the evidence for it.
+
+  Advisory, never blocking — an incident does not wait on a validator being up, and one that cannot be reached is recorded as unreachable rather than counted as a pass. Their validator also rejects templated chain fields that execute fine; that specific complaint is marked as a known false positive citing [#1995](https://github.com/KeeperHub/keeperhub/pull/1995), which we found by using it and fixed upstream. Marked rather than hidden, because silently discounting a validator is how a real complaint gets missed.
+- **x402** — one rule is published to the KeeperHub Marketplace as a paid workflow. Settlement is USDC on Base mainnet via EIP-3009, and the paying wallet holds no ETH.
 
 Execution routing prefers KeeperHub for every plan it can serve. A held key is the fallback for exactly one case, and that case is forced by what KeeperHub is: it executes through a sponsored relayer at the *sponsor's* nonce, so it can never occupy a specific nonce belonging to an agent's signer. Filling a nonce gap therefore routes to a held key or to the owner's own wallet. Everything that does not name a nonce goes through KeeperHub, because that keeps the remediation inside the customer's existing audit trail and spend controls.
+
+### Halting your own agent
+
+Detection needs nothing from you but a read-only connection. Remediation on a KeeperHub agent needs one more step, and it is worth understanding why.
+
+Blackbox can never act *as* your agent — the relayer point above. What it can do is call a contract you have authorised it to call. So halting a runaway agent means pausing a **circuit breaker you deploy and grant Blackbox the pauser role on**, registered per agent:
+
+```bash
+curl -XPOST $BLACKBOX/api/agents/<agentId>/breaker \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"address":"0x…","chainId":8453}'
+```
+
+The pauser role is checked **at registration**, not during the incident it was meant to stop — a breaker Blackbox cannot pause registers in amber with the reason rather than looking done. `CircuitBreaker` allows pausing and nothing else: it cannot unpause, change roles, or move funds. That asymmetry is the point, because granting halt authority has to be safe enough that an operator will actually do it.
 
 ## What we sent back upstream
 
@@ -114,6 +133,8 @@ Five fixes to KeeperHub, each found by building on it and each verified against 
 | [#1995](https://github.com/KeeperHub/keeperhub/pull/1995) | `validate_workflow` reported a workflow whose chain comes from the caller as having an unknown chain id, so a marketplace workflow following their own documented pattern validated as invalid while executing correctly. |
 
 Each merge took two review rounds. On #1990 the maintainer caught a docs paragraph promising a hash on the one response that cannot carry it; on #1992 they retracted one of their own earlier citations as wrong. Both were fixed before merge.
+
+A sixth was found while landing the Base mainnet remediation and is being written up: `/analytics/runs` reports `network: null` and `networks: []` for a run that fails *after* the chain was resolved, even when the error names that chain ("Insufficient **BASE** balance"). A consumer of the audit trail therefore cannot tell which chain a failed run was on.
 
 ## Build
 
@@ -139,7 +160,7 @@ Detection is a deterministic rule engine; the only LLM call is the written expla
 
 **Stack:** Fastify 5, Drizzle, Postgres 16, viem, zod, `@modelcontextprotocol/sdk`, `@x402/core`, React 19, Vite 6, Node 24.
 
-**900 TypeScript tests and 19 Foundry tests.**
+**921 TypeScript tests and 19 Foundry tests.**
 
 Deployed on GCP: one VM running Postgres, the API and Caddy, with the console served by the API itself so both share an origin — which is what makes the KeeperHub OAuth return work without a proxy.
 
@@ -147,4 +168,5 @@ Deployed on GCP: one VM running Postgres, the API and Caddy, with the console se
 
 - **Break something now** on the dashboard. Runs a workflow that asks to spend beyond the organisation's daily cap. KeeperHub refuses it before any chain is involved, so it costs no gas, and Blackbox reads the refusal out of the audit trail. The incident appears **without a reload**, about ten seconds later. One press per 30 minutes, shared by everyone watching.
 - **`GET /api/ledger/verify`** — every remediation entry carries the SHA-256 of the one before it, so an entry edited or a failed attempt quietly deleted breaks every hash after it. Public and read-only, because a check only its author can run is not evidence.
+- **The Base mainnet receipt** — check the `from` address against the organisation's wallet balance. They are different addresses and the second one is empty.
 - **It works on agents that integrated nothing** — give it a transaction hash and it explains what happened, or give it an address and it discovers the transactions by scanning blocks.
