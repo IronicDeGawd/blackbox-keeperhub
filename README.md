@@ -28,7 +28,7 @@ read-only, break something, and watch the incident arrive without a reload.
 ## Proof
 
 Real transactions produced by the system end to end — five on Ethereum Sepolia,
-one on **Base mainnet**.
+two on **Base mainnet**.
 
 | What happened | Transaction |
 | --- | --- |
@@ -37,6 +37,7 @@ one on **Base mainnet**.
 | A user's wallet signed a fix Blackbox planned, which Blackbox then verified | [`0x59563255…`](https://sepolia.etherscan.io/tx/0x5956325573c201d473812a08d0b0aeb96d2c3bace24954835bfda62e0e08d22e) |
 | Chaos: a call that simulated clean and reverted one block later | [`0xa0dbdb74…`](https://sepolia.etherscan.io/tx/0xa0dbdb74dc0f19bdcfb6a8cc983b36a9fdbc548af0c716d363500befb45901c6) |
 | An agent paid Blackbox over x402 for a diagnosis — USDC settled on **Base mainnet** | [`0x8cd8d6ac…`](https://basescan.org/tx/0x8cd8d6ac5dae125e5f3cf039db1ffb7f6b7dafa44243396d00e30074a93a51f9) |
+| **A remediation on Base mainnet, gas sponsored by KeeperHub** — R10 detected on nine real failed runs, then P4 paused the agent's breaker | [`0x1934f328…`](https://basescan.org/tx/0x1934f328c7a32e1d037e992c667d208e80214bb24affd3de6b93c37b3dcf2b3b) |
 | A watched wallet ran itself down to no runway, and was told so | [`0x5aa0a47c…`](https://sepolia.etherscan.io/tx/0x5aa0a47c64c7030e3e72dbc5a114cd3ff3c2161c6042ac9aefbe573aa1852070) |
 
 The first one is the interesting one. Blackbox detected a retry storm, decided
@@ -44,7 +45,13 @@ to halt the agent, **created a KeeperHub workflow over the API, enabled it, and
 executed it** — the remediation is a workflow run in the operator's own
 dashboard, with per-node logs, not a side channel only Blackbox can see.
 
-Deployed contracts (Sepolia): [`CircuitBreaker`](https://sepolia.etherscan.io/address/0x69C744Bb9f953D822a52E88604D26C9a895ac0E0) · [`ChaosTarget`](https://sepolia.etherscan.io/address/0x5d3437a8b5C182B91dC72087f4049ac00b1C528A)
+The Base one is worth opening. The `from` address on that receipt is **not**
+Blackbox and not the agent — it is KeeperHub's relayer, and the organisation's
+managed wallet holds **zero ETH on Base** both before and after. The halt still
+executed. That is gas sponsorship demonstrated rather than claimed, and it is
+the same structural fact that forces a nonce-filling fix down a different path.
+
+Deployed contracts: [`CircuitBreaker`](https://sepolia.etherscan.io/address/0x69C744Bb9f953D822a52E88604D26C9a895ac0E0) (Sepolia) · [`ChaosTarget`](https://sepolia.etherscan.io/address/0x5d3437a8b5C182B91dC72087f4049ac00b1C528A) (Sepolia) · [`CircuitBreaker`](https://basescan.org/address/0x8ecbE030145794596A98167Fc4b56817CeA1E36c) (**Base mainnet**)
 
 ---
 
@@ -325,6 +332,7 @@ node e2e/p4-keeperhub-breaker.mjs    # detect, then halt via a KeeperHub workflo
 node e2e/c5-gas-starved.mjs          # starve a throwaway wallet until R6 fires
 node e2e/zero-integration.mjs        # watch an address that registered nothing
 node e2e/x402-pay.mjs                # pay for a listed workflow over x402
+node e2e/p4-base-mainnet.mjs         # detect on Base mainnet, halt via KeeperHub
 ```
 
 See `packages/chaos/e2e/README.md` — one of them deliberately leaves the

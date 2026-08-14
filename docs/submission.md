@@ -67,7 +67,7 @@ The division of labour is the one the hackathon prescribes: **the deciding is ou
 ## Proof
 
 Real transactions produced by the system end to end — five on Ethereum Sepolia,
-one on **Base mainnet**.
+two on **Base mainnet**.
 
 | What happened | Transaction |
 |---|---|
@@ -76,6 +76,7 @@ one on **Base mainnet**.
 | A user's wallet signed a fix Blackbox planned, which Blackbox then verified | [0x59563255…](https://sepolia.etherscan.io/tx/0x5956325573c201d473812a08d0b0aeb96d2c3bace24954835bfda62e0e08d22e) |
 | Chaos: a call that simulated clean and reverted one block later | [0xa0dbdb74…](https://sepolia.etherscan.io/tx/0xa0dbdb74dc0f19bdcfb6a8cc983b36a9fdbc548af0c716d363500befb45901c6) |
 | An agent paid Blackbox over x402 for a diagnosis — USDC settled on **Base mainnet** | [0x8cd8d6ac…](https://basescan.org/tx/0x8cd8d6ac5dae125e5f3cf039db1ffb7f6b7dafa44243396d00e30074a93a51f9) |
+| **A remediation on Base mainnet, gas sponsored by KeeperHub** — R10 detected on nine real failed runs, then P4 paused the agent's breaker | [0x1934f328…](https://basescan.org/tx/0x1934f328c7a32e1d037e992c667d208e80214bb24affd3de6b93c37b3dcf2b3b) |
 | A watched wallet ran itself down to no runway, and was told so | [0x5aa0a47c…](https://sepolia.etherscan.io/tx/0x5aa0a47c64c7030e3e72dbc5a114cd3ff3c2161c6042ac9aefbe573aa1852070) |
 
 The first one is the interesting one.
