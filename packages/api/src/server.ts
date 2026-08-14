@@ -88,9 +88,24 @@ function loadEnv(): Record<string, string | undefined> {
 
 const env = loadEnv();
 const chainId = Number(env['CHAIN_ID'] ?? 11155111);
-const configuredChainId = chainId;
 const rpcUrl = env['ALCHEMY_RPC_URL'] ?? env['SEPOLIA_RPC_URL'];
 if (!rpcUrl) throw new Error('No RPC URL: set ALCHEMY_RPC_URL or SEPOLIA_RPC_URL');
+
+/**
+ * Read endpoints per chain, so a remediation on a second chain can be verified
+ * rather than merely submitted.
+ *
+ * `BLACKBOX_RPC_URLS` is `chainId=url` pairs, comma separated. The primary
+ * chain's URL is always included, so the existing single-chain deployment is
+ * unaffected by leaving it unset.
+ */
+const rpcByChain: Record<number, string> = { [chainId]: rpcUrl };
+for (const pair of env['BLACKBOX_RPC_URLS']?.split(',').filter(Boolean) ?? []) {
+  const at = pair.indexOf('=');
+  const id = Number(pair.slice(0, at));
+  const url = pair.slice(at + 1).trim();
+  if (Number.isInteger(id) && url) rpcByChain[id] = url;
+}
 // Every endpoint we know of, for finding a transaction a stranger's wallet
 // broadcast somewhere else. Queued transactions are not gossiped, so which
 // node holds one is a matter of which node their wallet talked to.
@@ -130,7 +145,15 @@ const config = blackboxConfigSchema.parse({
     // Live remediation stays an explicit opt-in, even here.
     dryRun: env['BLACKBOX_DRY_RUN'] !== 'false',
     ...(signerAccount ? { signerAllowlist: [signerAccount.address] } : {}),
-    chainAllowlist: [chainId],
+    /**
+     * Which chains a remediation may touch. Defaults to the primary chain
+     * alone; `BLACKBOX_CHAIN_ALLOWLIST` widens it deliberately, because
+     * allowing a chain is a decision about where this deployment may spend.
+     * The env var was already read by the config loader and then overwritten
+     * here, so setting it did nothing.
+     */
+    chainAllowlist:
+      env['BLACKBOX_CHAIN_ALLOWLIST']?.split(',').filter(Boolean).map(Number) ?? [chainId],
   },
 });
 
@@ -281,7 +304,7 @@ const runtime = new Runtime({
 // KeeperHub first, because a remediation that goes through it lands in the
 // customer's own audit trail and under its spend controls. A held key is the
 // fallback, and only it can serve a plan that names a nonce.
-const verifier = new ReceiptVerifier({ [chainId]: rpcUrl });
+const verifier = new ReceiptVerifier(rpcByChain);
 /**
  * The circuit breaker for an agent, read per agent at plan time.
  *
@@ -321,10 +344,11 @@ const pauserCandidate = (env['KH_MANAGED_WALLET_ADDRESS'] ?? signerAccount?.addr
 
 const verifyPauser = pauserCandidate
   ? async ({ address, chainId }: { address: `0x${string}`; chainId: number }): Promise<boolean> => {
-      // Only the chain this deployment has an RPC for can be checked; a
-      // breaker elsewhere registers unverified rather than falsely verified.
-      if (chainId !== configuredChainId) return false;
-      const client = createPublicClient({ transport: http(rpcUrl) });
+      // Only a chain this deployment has an RPC for can be checked; a breaker
+      // elsewhere registers unverified rather than falsely verified.
+      const url = rpcByChain[chainId];
+      if (!url) return false;
+      const client = createPublicClient({ transport: http(url) });
       const [allowed, owner] = await Promise.all([
         client
           .readContract({ address, abi: pauserAbi, functionName: 'isPauser', args: [pauserCandidate] })
