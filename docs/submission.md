@@ -151,20 +151,20 @@ The pauser role is checked **at registration**, not during the incident it was m
 
 ## What we sent back upstream
 
-Six fixes to KeeperHub, each found by building on it and each verified against their own test suite. **Three merged, one approved, two in review.**
+Six fixes to KeeperHub, each found by building on it and each verified against their own test suite. **Five merged, one in review.**
 
 | PR | Fix |
 |---|---|
 | [#1990](https://github.com/KeeperHub/keeperhub/pull/1990) **merged** | A completed `contract-call` returned no `transactionHash`, though the route had it in hand and the docs promise it. It cost us a remediation recorded as failed after it had actually succeeded. |
 | [#1991](https://github.com/KeeperHub/keeperhub/pull/1991) **merged** | `undici` is imported by `lib/safe-fetch.ts` but declared in no dependency block, so their test suite will not start on a fresh clone. |
 | [#1992](https://github.com/KeeperHub/keeperhub/pull/1992) **merged** | Four fields the status endpoint returns — including `retryCount` — were undocumented. |
-| [#1993](https://github.com/KeeperHub/keeperhub/pull/1993) | Sub-cent marketplace prices were rounded to whole cents at the payment gate while the 402 advertised full precision, so **every payment below $0.01 failed** — most of their documented pricing range. Found by paying for our own listing. |
-| [#1995](https://github.com/KeeperHub/keeperhub/pull/1995) **approved** | `validate_workflow` reported a workflow whose chain comes from the caller as having an unknown chain id, so a marketplace workflow following their own documented pattern validated as invalid while executing correctly. |
-| [#2081](https://github.com/KeeperHub/keeperhub/pull/2081) | `/analytics/runs` returned `network: null` for a run that failed before broadcast, even when its own error named the chain — the aggregate read the network only from a step that produced gas. A consumer of the audit trail could not tell which chain a failed run was on. |
+| [#1993](https://github.com/KeeperHub/keeperhub/pull/1993) **merged** | Sub-cent marketplace prices were rounded to whole cents at the payment gate while the 402 advertised full precision, so **every payment below $0.01 failed** — most of their documented pricing range. Found by paying for our own listing. |
+| [#1995](https://github.com/KeeperHub/keeperhub/pull/1995) **merged** | `validate_workflow` reported a workflow whose chain comes from the caller as having an unknown chain id, so a marketplace workflow following their own documented pattern validated as invalid while executing correctly. |
+| [#2081](https://github.com/KeeperHub/keeperhub/pull/2081) | `/analytics/runs` returned `network: null` for a run that failed before broadcast, even when its own error named the chain. The run's chain is recorded at step start, but the query filtered the step rows on gas before grouping them, so a run that never spent gas produced no row to read it from. A consumer of the audit trail could not tell which chain a failed run was on. |
 
-Each merge took two review rounds. On #1990 the maintainer caught a docs paragraph promising a hash on the one response that cannot carry it; on #1992 they retracted one of their own earlier citations as wrong. Both were fixed before merge.
+Most took two review rounds. On #1990 the maintainer caught a docs paragraph promising a hash on the one response that cannot carry it; on #1992 they retracted one of their own earlier citations as wrong. Both were fixed before merge. On #1995 they independently re-derived the predicate against live `staging` code before approving, rather than taking the PR's own account of it.
 
-The sixth was found while landing the Base mainnet remediation — building on the audit trail is what surfaced it. On #1995 the maintainer independently re-derived the predicate against live `staging` code before approving, rather than taking the PR's own account of it.
+The sixth was found while landing the Base mainnet remediation — building on the audit trail is what surfaced it. It also drew the sharpest review of the six: the maintainer showed our first attempt was inert, passing every test while changing nothing, because we had edited the aggregate when the filter one line below it was the actual cause. The resubmission drops that filter, reads the columns the value was already denormalised into, and ships a Postgres-backed test that fails on the previous commit.
 
 ## Build
 

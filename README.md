@@ -106,21 +106,23 @@ at 0.9 confidence, halted with a transaction anyone can look up.
 ## What we sent back upstream
 
 Six fixes to KeeperHub, each found by building on it and each verified against
-their own test suite. **Three are merged, one is approved**, two are in review.
+their own test suite. **Five are merged**, one is in review.
 
 | PR | Fix | |
 | --- | --- | --- |
 | [#1990](https://github.com/KeeperHub/keeperhub/pull/1990) | A completed `contract-call` returned no `transactionHash`, though the route had it in hand and the docs promise it. It cost us a remediation recorded as failed after it had actually succeeded. | **merged** |
 | [#1991](https://github.com/KeeperHub/keeperhub/pull/1991) | `undici` is imported by `lib/safe-fetch.ts` but declared in no dependency block, so their test suite will not start on a fresh clone with current pnpm. We hit this again ourselves a day later, on a branch cut before the merge. | **merged** |
 | [#1992](https://github.com/KeeperHub/keeperhub/pull/1992) | Four fields the status endpoint returns — including `retryCount` — were undocumented. | **merged** |
-| [#1993](https://github.com/KeeperHub/keeperhub/pull/1993) | Sub-cent marketplace prices were rounded to whole cents at the payment gate while the 402 advertised full precision, so **every payment below $0.01 failed** — most of their documented pricing range. Found by paying for our own listing. | in review |
-| [#1995](https://github.com/KeeperHub/keeperhub/pull/1995) | `validate_workflow` reported a workflow whose chain comes from the caller as having an unknown chain id, so a **marketplace workflow that follows their own documented pattern validates as invalid** while executing correctly. The address checks a few lines away already skip template references. | **approved** |
-| [#2081](https://github.com/KeeperHub/keeperhub/pull/2081) | `/analytics/runs` returned `network: null` for a run that failed before broadcast, even when its own error named the chain — the aggregate reads the network only from a step that produced gas. A consumer of the audit trail cannot tell which chain a failed run was on. | in review |
+| [#1993](https://github.com/KeeperHub/keeperhub/pull/1993) | Sub-cent marketplace prices were rounded to whole cents at the payment gate while the 402 advertised full precision, so **every payment below $0.01 failed** — most of their documented pricing range. Found by paying for our own listing. | **merged** |
+| [#1995](https://github.com/KeeperHub/keeperhub/pull/1995) | `validate_workflow` reported a workflow whose chain comes from the caller as having an unknown chain id, so a **marketplace workflow that follows their own documented pattern validates as invalid** while executing correctly. The address checks a few lines away already skip template references. | **merged** |
+| [#2081](https://github.com/KeeperHub/keeperhub/pull/2081) | `/analytics/runs` returned `network: null` for a run that failed before broadcast, even when its own error named the chain. The run's chain is recorded at step start, but the query filtered the step rows on gas before grouping them, so a run that never spent gas produced no row to read it from. A consumer of the audit trail cannot tell which chain a failed run was on. | in review |
 
-Each of the three that merged took two review rounds. The maintainer's second
-pass on #1990 caught the transfer paragraph promising a hash on the one response
-that cannot carry it, and on #1992 retracted one of their own earlier citations
-as wrong — both fixed before merge.
+Most took two review rounds. The maintainer's second pass on #1990 caught the
+transfer paragraph promising a hash on the one response that cannot carry it,
+and on #1992 retracted one of their own earlier citations as wrong — both fixed
+before merge. The open one is the sharpest review we got: it showed our first
+attempt was inert, passing every test while changing nothing, because we had
+edited the aggregate when the filter one line below it was the actual cause.
 
 `docs/friction-log.md` is the fuller teardown, including the entries we withdrew
 after finding they were documented all along and we simply had not looked.
